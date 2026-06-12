@@ -6,6 +6,7 @@
 - **`summaryModel` config field** ([#282](https://github.com/oguzbilgic/kern-ai/issues/282)) — override the model used for segment summarization, independent of the agent's main `model`. Routed through the agent's provider. Useful when the main model is a thinking model: thinking tokens consume the summary's `maxOutputTokens` budget before any visible text is emitted, and segments stay unsummarized. Set `summaryModel` to a non-thinking model (e.g. `"qwen3:4b-instruct"`, `"gemma4:e2b"`, `"openai/gpt-4.1-mini"`) to sidestep this. Defaults to provider-specific choices when empty.
 
 ### Improvements
+- **`OPENAI_BASE_URL` support for the openai provider** ([#289](https://github.com/oguzbilgic/kern-ai/issues/289)) — set `OPENAI_BASE_URL` in `.kern/.env` to route the `openai` provider to any OpenAI-compatible endpoint (Azure OpenAI, LiteLLM, local proxies). When set, requests use the Chat Completions API for broad gateway compatibility. Defaults unchanged when unset.
 - **Disable thinking on Ollama auxiliary calls** — `think: false` (already passed on the main chat call) now also applies to segment summarization and media digest on Ollama. Prevents empty summaries and missing image descriptions when the configured model happens to be a thinking model. LM Studio, llama.cpp, and vLLM silently ignore this flag — users on those backends should set `summaryModel` to a non-thinking model instead.
 
 ## v0.31.1
