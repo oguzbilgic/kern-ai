@@ -89,7 +89,7 @@ Secrets. Gitignored. Never committed.
 
 ```
 OPENROUTER_API_KEY=sk-or-...
-OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_BASE_URL=https://my-litellm-gateway.example.com/v1  # optional: route openai provider to a compatible endpoint
 OLLAMA_BASE_URL=http://localhost:11434
 SEARXNG_URL=http://searxng:8080
 JINA_API_KEY=jina_...

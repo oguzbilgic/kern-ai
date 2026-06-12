@@ -4,6 +4,12 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { embed } from "ai";
 import type { KernConfig } from "./config.js";
 
+/** Normalized OPENAI_BASE_URL — trimmed, trailing slashes stripped, undefined if unset/empty. */
+function openaiBaseURL(): string | undefined {
+  const raw = process.env.OPENAI_BASE_URL?.trim().replace(/\/+$/, "");
+  return raw || undefined;
+}
+
 const OPENROUTER_HEADERS = {
   "HTTP-Referer": "https://github.com/oguzbilgic/kern-ai",
   "X-Title": "Kern Agent",
@@ -18,9 +24,7 @@ const OPENROUTER_HEADERS = {
 function createOpenAIClient(provider: string) {
   switch (provider) {
     case "openai":
-      return createOpenAI({
-        baseURL: process.env.OPENAI_BASE_URL || undefined,
-      });
+      return createOpenAI({ baseURL: openaiBaseURL() });
     case "ollama": {
       const base = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/+$/, "");
       return createOpenAI({
@@ -130,13 +134,12 @@ export function createModel(config: KernConfig): any {
       return openai.chat(config.model);
     }
     case "openai": {
-      const openai = createOpenAI({
-        baseURL: process.env.OPENAI_BASE_URL || undefined,
-      });
+      const baseURL = openaiBaseURL();
+      const openai = createOpenAI({ baseURL });
       // Custom OpenAI-compatible endpoints (Azure, LiteLLM, local proxies)
       // typically only support the Chat Completions API, not the Responses API
       // that the default openai() factory picks for newer models
-      if (process.env.OPENAI_BASE_URL) return openai.chat(config.model);
+      if (baseURL) return openai.chat(config.model);
       return openai(config.model);
     }
     case "ollama": {
