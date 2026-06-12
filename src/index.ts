@@ -374,7 +374,7 @@ async function main() {
       const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
       await scaffoldAgent({
         name, dir: agentDir, provider, envVar, skipStart: true,
-        model: process.env.KERN_MODEL || "anthropic/claude-opus-4.7",
+        model: process.env.KERN_MODEL || "anthropic/claude-opus-4.8",
         apiKey: process.env[envVar] || "",
         telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",
         slackBotToken: process.env.SLACK_BOT_TOKEN || "",

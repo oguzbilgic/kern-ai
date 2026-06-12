@@ -3,13 +3,13 @@
 ## next
 
 ### Features
-- **`summaryModel` config field** ([#282](https://github.com/oguzbilgic/kern-ai/issues/282)) — override the model used for segment summarization, independent of the agent's main `model`. Routed through the agent's provider. Useful when the main model is a thinking model: thinking tokens consume the summary's `maxOutputTokens` budget before any visible text is emitted, and segments stay unsummarized. Set `summaryModel` to a non-thinking model (e.g. `"qwen3:4b-instruct"`, `"gemma4:e2b"`, `"openai/gpt-4.1-mini"`) to sidestep this. Defaults to provider-specific choices when empty.
-
-- **`subAgentModel` config field** ([#287](https://github.com/oguzbilgic/kern-ai/issues/287)) — run spawned sub-agents on a cheaper model than the parent. Sub-agents are read-only and bounded, so they rarely need frontier-tier reasoning; in research fan-out workflows they can account for most of the token volume. Empty = inherit the parent's `model`. The `spawn` tool also accepts a per-child `model` override for one-off cases.
+- **`summaryModel` config field** ([#282](https://github.com/oguzbilgic/kern-ai/issues/282)) — override the model used for segment summarization. Set a non-thinking model when the main `model` is a thinking one — thinking burns the summary token budget and leaves segments unsummarized.
+- **`subAgentModel` config field** ([#287](https://github.com/oguzbilgic/kern-ai/issues/287)) — run spawned sub-agents on a cheaper model than the parent. Empty = inherit. The `spawn` tool also accepts a per-child `model` override.
 
 ### Improvements
-- **`OPENAI_BASE_URL` support for the openai provider** ([#289](https://github.com/oguzbilgic/kern-ai/issues/289)) — set `OPENAI_BASE_URL` in `.kern/.env` to route the `openai` provider to any OpenAI-compatible endpoint (Azure OpenAI, LiteLLM, local proxies). When set, requests use the Chat Completions API for broad gateway compatibility. Defaults unchanged when unset.
-- **Disable thinking on Ollama auxiliary calls** — `think: false` (already passed on the main chat call) now also applies to segment summarization and media digest on Ollama. Prevents empty summaries and missing image descriptions when the configured model happens to be a thinking model. LM Studio, llama.cpp, and vLLM silently ignore this flag — users on those backends should set `summaryModel` to a non-thinking model instead.
+- **`OPENAI_BASE_URL` support** ([#289](https://github.com/oguzbilgic/kern-ai/issues/289)) — route the `openai` provider to any OpenAI-compatible endpoint (Azure, LiteLLM, local proxies) via `.kern/.env`.
+- **Refreshed model defaults** — default model is now `anthropic/claude-opus-4.8`; init fallback lists updated for all providers; Anthropic media vision fallback bumped to `claude-sonnet-4-6`.
+- **Disable thinking on Ollama auxiliary calls** — `think: false` now also applies to summarization and media digest, preventing empty summaries and missing image descriptions on thinking models.
 
 ### Fixes
 - **Pin `unpdf` to exact 1.6.2** ([#285](https://github.com/oguzbilgic/kern-ai/issues/285)) — unpdf 1.6.0 broke the `pdf` tool on Node 22; pinning prevents untested upstream releases from breaking fresh installs.
