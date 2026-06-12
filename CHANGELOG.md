@@ -8,6 +8,8 @@
 ### Improvements
 - **`OPENAI_BASE_URL` support for the openai provider** ([#289](https://github.com/oguzbilgic/kern-ai/issues/289)) — set `OPENAI_BASE_URL` in `.kern/.env` to route the `openai` provider to any OpenAI-compatible endpoint (Azure OpenAI, LiteLLM, local proxies). When set, requests use the Chat Completions API for broad gateway compatibility. Defaults unchanged when unset.
 - **Disable thinking on Ollama auxiliary calls** — `think: false` (already passed on the main chat call) now also applies to segment summarization and media digest on Ollama. Prevents empty summaries and missing image descriptions when the configured model happens to be a thinking model. LM Studio, llama.cpp, and vLLM silently ignore this flag — users on those backends should set `summaryModel` to a non-thinking model instead.
+
+### Fixes
 - **Pin `unpdf` to exact 1.6.2** ([#285](https://github.com/oguzbilgic/kern-ai/issues/285)) — unpdf 1.6.0 broke the `pdf` tool on Node 22; pinning prevents untested upstream releases from breaking fresh installs.
 
 ## v0.31.1
