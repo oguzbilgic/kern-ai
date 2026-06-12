@@ -18,7 +18,9 @@ const OPENROUTER_HEADERS = {
 function createOpenAIClient(provider: string) {
   switch (provider) {
     case "openai":
-      return createOpenAI();
+      return createOpenAI({
+        baseURL: process.env.OPENAI_BASE_URL || undefined,
+      });
     case "ollama": {
       const base = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/+$/, "");
       return createOpenAI({
@@ -128,7 +130,13 @@ export function createModel(config: KernConfig): any {
       return openai.chat(config.model);
     }
     case "openai": {
-      const openai = createOpenAI();
+      const openai = createOpenAI({
+        baseURL: process.env.OPENAI_BASE_URL || undefined,
+      });
+      // Custom OpenAI-compatible endpoints (Azure, LiteLLM, local proxies)
+      // typically only support the Chat Completions API, not the Responses API
+      // that the default openai() factory picks for newer models
+      if (process.env.OPENAI_BASE_URL) return openai.chat(config.model);
       return openai(config.model);
     }
     case "ollama": {
