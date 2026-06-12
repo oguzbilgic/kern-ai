@@ -12,7 +12,7 @@
 - **Disable thinking on Ollama auxiliary calls** — `think: false` now also applies to summarization and media digest, preventing empty summaries and missing image descriptions on thinking models.
 
 ### Fixes
-- **Prompt cache thrashing on long sessions** ([#295](https://github.com/oguzbilgic/kern-ai/issues/295)) — the trim boundary advanced every turn on tool-heavy sessions, rewriting the full ~100k+ token cache prefix at 1.25× input price per message. The boundary is now sticky (hysteresis): it holds until the message window exceeds the budget by 20%, then jumps forward in one step to 70% of budget. One cache write per jump instead of one per turn — roughly 10× cheaper per message on active large sessions.
+- **Prompt cache thrashing on long sessions** ([#295](https://github.com/oguzbilgic/kern-ai/issues/295)) — the trim boundary advanced every turn on tool-heavy sessions, rewriting the full ~100k+ token cache prefix at 1.25× input price per message. The boundary is now sticky (hysteresis): it holds until the message window reaches the configured budget, then jumps forward in one step to 60% of budget — the budget remains a hard ceiling. One cache write per jump instead of one per turn — roughly 10× cheaper per message on active large sessions.
 - **Pin `unpdf` to exact 1.6.2** ([#285](https://github.com/oguzbilgic/kern-ai/issues/285)) — unpdf 1.6.0 broke the `pdf` tool on Node 22; pinning prevents untested upstream releases from breaking fresh installs.
 
 ## v0.31.1

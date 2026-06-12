@@ -195,8 +195,10 @@ const TRIM_SNAP = 20;
 // budget × LOW. Between jumps the message prefix is byte-identical across
 // turns, so prompt caching gets near-100% hits instead of rewriting the full
 // prefix every turn as the boundary creeps forward.
-const TRIM_HIGH_WATERMARK = 1.2;
-const TRIM_LOW_WATERMARK = 0.7;
+// HIGH is 1.0 so the configured budget is a true ceiling — the hysteresis band
+// sits *below* the budget rather than overshooting it.
+const TRIM_HIGH_WATERMARK = 1.0;
+const TRIM_LOW_WATERMARK = 0.6;
 
 // sessionId → held cut index (absolute index into the session messages array).
 // In-memory only: after a restart the first turn pays one full cache write and
