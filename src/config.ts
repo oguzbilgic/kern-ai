@@ -21,6 +21,9 @@ export interface KernConfig {
   summaryBudget: number;
   summaryModel: string;
 
+  // Sub-agents
+  subAgentModel: string;
+
   // Memory
   recall: boolean;
   autoRecall: boolean;
@@ -77,6 +80,7 @@ export const configDefaults: KernConfig = {
   maxToolResultChars: 20000,
   summaryBudget: 0.75,
   summaryModel: "",
+  subAgentModel: "",
   recall: true,
   autoRecall: false,
   mediaDigest: true,
@@ -98,6 +102,7 @@ const FIELD_TYPES: Record<string, string> = {
   maxToolResultChars: "number",
   summaryBudget: "number",
   summaryModel: "string",
+  subAgentModel: "string",
   recall: "boolean",
   autoRecall: "boolean",
   mediaDigest: "boolean",

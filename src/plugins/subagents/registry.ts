@@ -8,6 +8,8 @@ export type SubAgentStatus = "running" | "done" | "failed" | "cancelled";
 export interface SubAgentRecord {
   id: string;
   prompt: string;
+  /** Model the child ran on. Optional — records from older versions lack it. */
+  model?: string;
   status: SubAgentStatus;
   startedAt: string;
   finishedAt?: string;
@@ -43,11 +45,14 @@ export class SubAgentRegistry {
     this.announceFn = fn;
   }
 
-  spawn(prompt: string, maxSteps = 20): SubAgentHandle {
+  spawn(prompt: string, maxSteps = 20, model?: string): SubAgentHandle {
     const id = "sa_" + randomUUID().slice(0, 8);
+    // Model resolution: per-spawn override > subAgentModel config > parent model
+    const effectiveModel = model || this.config.subAgentModel || this.config.model;
     const record: SubAgentRecord = {
       id,
       prompt,
+      model: effectiveModel,
       status: "running",
       startedAt: new Date().toISOString(),
       toolCalls: 0,
@@ -60,7 +65,7 @@ export class SubAgentRegistry {
     const promise = runSubAgent({
       id,
       prompt,
-      config: this.config,
+      config: { ...this.config, model: effectiveModel },
       agentDir: this.agentDir,
       maxSteps: Math.min(maxSteps, 50),
       signal: controller.signal,
