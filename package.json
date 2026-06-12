@@ -55,7 +55,7 @@
     "react": "^19.2.4",
     "sqlite-vec": "^0.1.8",
     "turndown": "^7.2.4",
-    "unpdf": "^1.4.0",
+    "unpdf": "1.6.2",
     "zod": "^3.24.0"
   },
   "devDependencies": {
