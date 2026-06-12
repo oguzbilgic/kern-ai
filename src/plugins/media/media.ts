@@ -262,6 +262,10 @@ export async function digestMediaAtIngest(
   const buf = readFileSync(fullPath);
   const chain = getDigestModelChain(config);
 
+  // Ollama thinking models blow the 300-token budget on reasoning before
+  // emitting any description. Disable thinking defensively.
+  const isOllama = config.provider === "ollama";
+
   for (const modelId of chain) {
     try {
       log("media", `digesting ${file} with ${modelId}...`);
@@ -279,6 +283,7 @@ export async function digestMediaAtIngest(
           },
         ],
         maxOutputTokens: 300,
+        ...(isOllama ? { providerOptions: { openai: { think: false } } } : {}),
       });
 
       const description = result.text.trim();

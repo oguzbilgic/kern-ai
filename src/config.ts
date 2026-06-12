@@ -19,6 +19,7 @@ export interface KernConfig {
   maxContextTokens: number;
   maxToolResultChars: number;
   summaryBudget: number;
+  summaryModel: string;
 
   // Memory
   recall: boolean;
@@ -75,6 +76,7 @@ export const configDefaults: KernConfig = {
   maxContextTokens: 100000,
   maxToolResultChars: 20000,
   summaryBudget: 0.75,
+  summaryModel: "",
   recall: true,
   autoRecall: false,
   mediaDigest: true,
@@ -95,6 +97,7 @@ const FIELD_TYPES: Record<string, string> = {
   maxContextTokens: "number",
   maxToolResultChars: "number",
   summaryBudget: "number",
+  summaryModel: "string",
   recall: "boolean",
   autoRecall: "boolean",
   mediaDigest: "boolean",
