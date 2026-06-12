@@ -26,7 +26,7 @@ spawn({
 
 - `prompt` — self-contained task. The child starts with no context about the parent's current work.
 - `maxSteps` — max reasoning steps (default 20, max 50)
-- `model` — optional model override for this child (same provider as the parent). Defaults to the `subAgentModel` config field, or the parent's model.
+- `model` — optional model override for this child. Runs on the parent's provider, so the ID must be valid there — same format as `config.model`. Defaults to the `subAgentModel` config field, or the parent's model.
 
 Returns a sub-agent ID like `sa_abc123`. The child runs in the background.
 

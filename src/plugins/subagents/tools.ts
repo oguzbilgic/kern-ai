@@ -37,7 +37,8 @@ export const spawnTool = tool({
       "Maximum reasoning steps for this child (default: 20, max: 50)."
     ),
     model: z.string().optional().describe(
-      "Model override for this child (same provider as the parent). " +
+      "Model override for this child. Runs on the parent's provider, so the " +
+      "ID must be valid there — same format as the main model config. " +
       "Defaults to the subAgentModel config field, or the parent's model."
     ),
   }),
