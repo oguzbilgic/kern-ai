@@ -2,6 +2,9 @@
 
 ## next
 
+### Improvements
+- **`OPENAI_BASE_URL` support for the openai provider** ([#289](https://github.com/oguzbilgic/kern-ai/issues/289)) — set `OPENAI_BASE_URL` in `.kern/.env` to route the `openai` provider to any OpenAI-compatible endpoint (Azure OpenAI, LiteLLM, local proxies). When set, requests use the Chat Completions API for broad gateway compatibility. Defaults unchanged when unset.
+
 ## v0.31.1
 
 ### Improvements

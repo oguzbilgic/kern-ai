@@ -45,7 +45,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 - **openrouter** — routes to cheapest provider. Model IDs like `anthropic/claude-opus-4.7`. Uses OpenAI-compatible chat completions API.
 - **anthropic** — direct Anthropic API. Model IDs like `claude-opus-4-7`.
-- **openai** — OpenAI or Azure. Model IDs like `gpt-4o`.
+- **openai** — OpenAI or any OpenAI-compatible endpoint. Model IDs like `gpt-4o`. Set `OPENAI_BASE_URL` in `.env` to route to Azure OpenAI, LiteLLM, or other compatible gateways (default: `https://api.openai.com/v1`). With a custom base URL, requests use the Chat Completions API.
 - **ollama** — local Ollama server. Model IDs match Ollama model names like `gemma4:31b`. Set `OLLAMA_BASE_URL` in `.env` for remote servers (default: `http://localhost:11434`).
 
 ### Summary model
@@ -89,6 +89,7 @@ Secrets. Gitignored. Never committed.
 
 ```
 OPENROUTER_API_KEY=sk-or-...
+# OPENAI_BASE_URL=https://my-litellm-gateway.example.com/v1  # optional: route openai provider to a compatible endpoint
 OLLAMA_BASE_URL=http://localhost:11434
 SEARXNG_URL=http://searxng:8080
 JINA_API_KEY=jina_...
