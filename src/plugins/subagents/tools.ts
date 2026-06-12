@@ -36,12 +36,16 @@ export const spawnTool = tool({
     maxSteps: z.number().optional().describe(
       "Maximum reasoning steps for this child (default: 20, max: 50)."
     ),
+    model: z.string().optional().describe(
+      "Model override for this child (same provider as the parent). " +
+      "Defaults to the subAgentModel config field, or the parent's model."
+    ),
   }),
-  execute: async ({ prompt, maxSteps }) => {
+  execute: async ({ prompt, maxSteps, model }) => {
     if (!_registry) return "Error: sub-agents not available.";
 
     try {
-      const handle = _registry.spawn(prompt, maxSteps ?? 20);
+      const handle = _registry.spawn(prompt, maxSteps ?? 20, model);
       return [
         `Sub-agent spawned: ${handle.id}`,
         `Status: running`,
@@ -119,6 +123,7 @@ export const subagentsTool = tool({
       `status:     ${record.status}`,
       `started:    ${record.startedAt}`,
     ];
+    if (record.model) lines.splice(2, 0, `model:      ${record.model}`);
     if (record.finishedAt) lines.push(`finished:   ${record.finishedAt}`);
     lines.push(`tool calls: ${record.toolCalls}`);
     if (record.inputTokens || record.outputTokens) {

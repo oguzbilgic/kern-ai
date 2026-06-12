@@ -26,6 +26,7 @@ spawn({
 
 - `prompt` — self-contained task. The child starts with no context about the parent's current work.
 - `maxSteps` — max reasoning steps (default 20, max 50)
+- `model` — optional model override for this child (same provider as the parent). Defaults to the `subAgentModel` config field, or the parent's model.
 
 Returns a sub-agent ID like `sa_abc123`. The child runs in the background.
 
@@ -48,7 +49,7 @@ Each sub-agent runs as its own in-process task, with:
 
 - A restricted tool set (read-only — see below)
 - Its own session file at `.kern/subagents/<id>/session.jsonl`
-- Its own LLM loop using the same model and provider as the parent
+- Its own LLM loop on the parent's provider. Model resolution: per-spawn `model` param > `subAgentModel` config > parent's `model`
 - An `AbortSignal` so `cancel` can interrupt mid-turn
 
 Sub-agents do **not** share the parent's plugin context — no notes, skills, recall, MCP. They're stateless workers, not full agents.
@@ -116,7 +117,7 @@ Lists all sub-agents with status, prompt preview, duration, and tool call count.
 - **Concurrency** — no hard cap. Each sub-agent is a real LLM loop, so spawning 20 at once costs 20 model calls in flight.
 - **Tokens** — each sub-agent has its own context. A sub-agent with `maxSteps: 20` can easily burn 20k–100k tokens depending on the task.
 - **Cache** — sub-agents don't share prompt cache with the parent or each other (different prompts, different sessions).
-- **Model** — inherited from the parent's config. There's no per-sub-agent model override yet.
+- **Model** — defaults to the parent's model. Set `subAgentModel` in config to run all children on a cheaper model (they're read-only and bounded — they rarely need frontier-tier reasoning), or pass `model` on an individual `spawn` call.
 
 ## Disabling
 
