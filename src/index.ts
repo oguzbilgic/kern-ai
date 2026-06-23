@@ -41,6 +41,7 @@ async function showHelp() {
   w(`    ${cyan("kern backup")} ${dim("<name>")}          backup agent to .tar.gz`);
   w(`    ${cyan("kern import")} ${dim("opencode <name>")}         import session from OpenCode`);
   w(`    ${cyan("kern import")} ${dim("openclaw-lcm <lcm.db>")}   import session from OpenClaw LCM`);
+  w(`    ${cyan("kern scripts")} ${dim("recover-session <recall.db>")}  rebuild a session from recall.db`);
   w(`    ${cyan("kern restore")} ${dim("<file>")}         restore agent from backup`);
   w(`    ${cyan("kern logs")} ${dim("[name] [-f] [-n 50] [--level warn]")}  show agent logs`);
   w(`    ${cyan("kern install")} ${dim("[name|--web|--proxy]")} install systemd services`);
@@ -272,6 +273,19 @@ async function main() {
       console.error("Usage:");
       console.error("  kern import opencode [--project <path>] [--session <title|latest>]");
       console.error("  kern import openclaw-lcm <lcm.db> [--conversation <id>] [--list]");
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === "scripts") {
+    const name = args[1]; // "recover-session"
+    if (name === "recover-session") {
+      const { recoverSession } = await import("./scripts/recover-session.js");
+      await recoverSession(args.slice(2));
+    } else {
+      console.error("Usage:");
+      console.error("  kern scripts recover-session <recall.db> [--list] [--session <id>]");
       process.exit(1);
     }
     return;
