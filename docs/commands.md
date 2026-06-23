@@ -228,6 +228,26 @@ scp /tmp/<uuid>.jsonl dockerhost:~/agent/.kern/sessions/       # install remotel
 
 Tested against lossless-claw v0.9.1. Older LCM DBs may fall through to flat message content or error on missing columns.
 
+## kern scripts recover-session
+
+Rebuild a session `.jsonl` from `recall.db` when the session file is lost or truncated (e.g. a process killed mid-write leaves a 0-byte file, crash-looping the agent on startup). recall.db stores every message losslessly, so the conversation is recoverable.
+
+- Reads any `recall.db` path you give it (read-only — never writes to the DB)
+- `--list` prints all sessions in the DB with message counts and date ranges
+- Recovers the session with the most messages by default; pass `--session <id>` to target another
+- Reuses the original session ID, so the output is a drop-in replacement
+- Writes `<session-id>.jsonl` to the current working directory
+
+```bash
+cd /tmp
+kern scripts recover-session /path/to/recall.db --list             # list sessions
+kern scripts recover-session /path/to/recall.db                    # largest session
+kern scripts recover-session /path/to/recall.db --session <id>     # specific session
+mv /tmp/<session-id>.jsonl <agent>/.kern/sessions/                 # install, then restart kern
+```
+
+recall.db only holds messages indexed at turn-finish, so the final turn or two before a crash may be missing — everything indexed is exact. The command warns if message indexes have gaps.
+
 ## Slash commands
 
 Type these in any channel (TUI, Web, Telegram, Slack). Handled by the runtime at the queue level — never sent to the LLM. Instant, zero tokens. Results are broadcast to all connected clients via SSE.
