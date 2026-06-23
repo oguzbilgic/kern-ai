@@ -7,7 +7,7 @@
 - **`subAgentModel` config field** ([#287](https://github.com/oguzbilgic/kern-ai/issues/287)) — run spawned sub-agents on a cheaper model than the parent. Empty = inherit. The `spawn` tool also accepts a per-child `model` override.
 
 ### Improvements
-- **`kern scripts recover-session`** ([#301](https://github.com/oguzbilgic/kern-ai/issues/301)) — rebuild a session `.jsonl` from `recall.db` when the session file is lost or truncated (e.g. a crash mid-write). recall.db stores every message losslessly, so the conversation is recoverable. Reuses the original session ID and writes to the current directory. New `kern scripts <name>` command group for recovery/utility tooling.
+- **`kern scripts recover-session`** ([#301](https://github.com/oguzbilgic/kern-ai/issues/301)) — rebuild a lost or truncated session `.jsonl` from `recall.db`. New `kern scripts <name>` command group.
 - **`OPENAI_BASE_URL` support** ([#289](https://github.com/oguzbilgic/kern-ai/issues/289)) — route the `openai` provider to any OpenAI-compatible endpoint (Azure, LiteLLM, local proxies) via `.kern/.env`.
 - **Refreshed model defaults** — default model is now `anthropic/claude-opus-4.8`; init fallback lists updated for all providers; Anthropic media vision fallback bumped to `claude-sonnet-4-6`.
 - **Disable thinking on Ollama auxiliary calls** — `think: false` now also applies to summarization and media digest, preventing empty summaries and missing image descriptions on thinking models.
