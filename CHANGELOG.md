@@ -1,6 +1,6 @@
 # Changelog
 
-## next
+## 0.32.0 (2026-06-24)
 
 ### Features
 - **`summaryModel` config field** ([#282](https://github.com/oguzbilgic/kern-ai/issues/282)) — override the model used for segment summarization. Set a non-thinking model when the main `model` is a thinking one — thinking burns the summary token budget and leaves segments unsummarized.
