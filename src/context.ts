@@ -190,14 +190,38 @@ interface TrimOptions {
 
 const TRIM_SNAP = 20;
 
+// Trim hysteresis watermarks (#295). The boundary is held until the window
+// after it exceeds budget × HIGH, then jumps forward so the window shrinks to
+// budget × LOW. Between jumps the message prefix is byte-identical across
+// turns, so prompt caching gets near-100% hits instead of rewriting the full
+// prefix every turn as the boundary creeps forward.
+// HIGH is 1.0 so the configured budget is a true ceiling — the hysteresis band
+// sits *below* the budget rather than overshooting it.
+const TRIM_HIGH_WATERMARK = 1.0;
+const TRIM_LOW_WATERMARK = 0.6;
+
+// sessionId → held cut index (absolute index into the session messages array).
+// In-memory only: after a restart the first turn pays one full cache write and
+// re-establishes the boundary.
+const heldTrimBoundaries = new Map<string, number>();
+
+/** Test-only: reset hysteresis state between test cases. */
+export function clearTrimBoundaries(): void {
+  heldTrimBoundaries.clear();
+}
+
 /**
  * Trim oldest messages to fit within a token budget.
  *
  * The cut point is always a user message (turn boundary) to avoid orphaning
  * tool_result blocks. When segment data is available, the cut point is snapped
- * to a stable position (L0 segment edge or round-20 boundary) so the message
- * window prefix stays byte-identical across consecutive turns — critical for
- * prompt caching.
+ * to a stable position (L0 segment edge or round-20 boundary).
+ *
+ * The cut point is sticky (hysteresis): once chosen it is reused verbatim on
+ * subsequent calls until the resulting window exceeds the high watermark, at
+ * which point it jumps forward to bring the window down to the low watermark.
+ * This keeps the message window prefix byte-identical across many consecutive
+ * turns — critical for prompt caching (#295).
  */
 function trimToTokenBudget({ messages, maxTokens, segmentIndex, sessionId }: TrimOptions): { messages: ModelMessage[]; trimmedCount: number } {
   if (maxTokens <= 0) return { messages, trimmedCount: 0 };
@@ -209,10 +233,25 @@ function trimToTokenBudget({ messages, maxTokens, segmentIndex, sessionId }: Tri
   }
   if (total <= maxTokens) return { messages, trimmedCount: 0 };
 
-  // Find initial cut point from the front
+  // Hysteresis hold: reuse the previous boundary while the window after it
+  // still fits under the high watermark. Prefix stays stable → cache hits.
+  const held = sessionId ? heldTrimBoundaries.get(sessionId) : undefined;
+  if (held !== undefined && held > 0 && held < messages.length - 1 && messages[held]?.role === "user") {
+    let windowTotal = 0;
+    for (let i = held; i < messages.length; i++) {
+      windowTotal += getMsgSize(messages[i]);
+    }
+    if (windowTotal <= maxTokens * TRIM_HIGH_WATERMARK) {
+      return { messages: messages.slice(held), trimmedCount: held };
+    }
+  }
+
+  // Jump: find a fresh cut point targeting the low watermark so the boundary
+  // stays put for many turns before the next jump.
+  const targetTokens = Math.max(1, Math.round(maxTokens * TRIM_LOW_WATERMARK));
   let cutTotal = total;
   let cutIndex = 0;
-  while (cutIndex < messages.length - 1 && cutTotal > maxTokens) {
+  while (cutIndex < messages.length - 1 && cutTotal > targetTokens) {
     cutTotal -= getMsgSize(messages[cutIndex]);
     cutIndex++;
   }
@@ -256,6 +295,14 @@ function trimToTokenBudget({ messages, maxTokens, segmentIndex, sessionId }: Tri
         cutIndex = safeSnap;
       }
     }
+  }
+
+  if (sessionId && cutIndex > 0) {
+    const prev = heldTrimBoundaries.get(sessionId);
+    if (prev !== cutIndex) {
+      log("context", `trim boundary jump: ${prev ?? "none"} → ${cutIndex} (${messages.length - cutIndex} msgs in window, budget ${maxTokens})`);
+    }
+    heldTrimBoundaries.set(sessionId, cutIndex);
   }
 
   return { messages: messages.slice(cutIndex), trimmedCount: cutIndex };
