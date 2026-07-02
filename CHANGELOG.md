@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- **Audio support** ([#297](https://github.com/oguzbilgic/kern-ai/issues/297)) — voice messages and audio files are now first-class media, parallel to images. A new `audio(file, prompt?)` tool transcribes or answers questions about any audio file, and voice messages are auto-transcribed at ingest (cached like image descriptions), so the agent understands a Telegram voice note without any tool call. New `audioModel` config field with fallback chain `audioModel` → agent model → provider default (`google/gemini-3.1-flash-lite` on OpenRouter — accepts ogg/opus natively, no transcoding). Sub-agents get the `audio` tool too. Audio over 20 MB is skipped.
+
 ## 0.32.0 (2026-06-24)
 
 ### Features

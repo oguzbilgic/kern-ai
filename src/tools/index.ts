@@ -9,6 +9,7 @@ import { webfetchTool } from "./webfetch.js";
 import { websearchTool } from "./websearch.js";
 import { pdfTool } from "./pdf.js";
 import { imageTool } from "./image.js";
+import { audioTool } from "./audio.js";
 import { kernTool } from "./kern.js";
 import { messageTool } from "./message.js";
 
@@ -26,6 +27,7 @@ export const allTools = {
   websearch: websearchTool,
   pdf: pdfTool,
   image: imageTool,
+  audio: audioTool,
   kern: kernTool,
   message: messageTool,
 };

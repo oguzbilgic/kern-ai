@@ -77,6 +77,7 @@ Sub-agents run with a strict read-only toolset:
 | `websearch` | Search the web |
 | `pdf` | Read or analyze PDF files |
 | `image` | Analyze an image with the AI model |
+| `audio` | Transcribe or analyze an audio file |
 
 Sub-agents **cannot**:
 

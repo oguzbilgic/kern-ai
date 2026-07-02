@@ -121,6 +121,27 @@ export function createSummaryModel(config: KernConfig): any {
 }
 
 /**
+ * Create a model instance for audio input (transcription / analysis).
+ *
+ * Audio needs special provider routing on OpenRouter: the generic
+ * OpenAI-compatible shim only maps `audio/wav` and `audio/mpeg` file parts
+ * to `input_audio` and rejects everything else (including ogg/opus, the
+ * Telegram voice format). The OpenRouter-native provider forwards all audio
+ * media types, so audio calls always use it on the openrouter provider.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createAudioModel(config: KernConfig, modelId: string): any {
+  if (config.provider === "openrouter") {
+    const openrouter = createOpenRouter({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      headers: OPENROUTER_HEADERS,
+    });
+    return openrouter.chat(modelId);
+  }
+  return createModel({ ...config, model: modelId });
+}
+
+/**
  * Create an AI SDK model instance from kern config.
  * Shared across runtime (chat) and notes (summary generation).
  */

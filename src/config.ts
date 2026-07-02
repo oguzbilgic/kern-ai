@@ -31,6 +31,7 @@ export interface KernConfig {
   // Media
   mediaDigest: boolean;
   mediaModel: string;
+  audioModel: string;
   mediaContext: number;
 
   // Interface
@@ -64,9 +65,9 @@ export type McpServerConfig =
 const shell = process.platform === "win32" ? "pwsh" : "bash";
 
 const TOOL_SCOPES: Record<ToolScope, string[]> = {
-  full: [shell, "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "pdf", "image", "kern", "message"],
-  write: ["read", "write", "edit", "glob", "grep", "webfetch", "websearch", "pdf", "image", "kern", "message"],
-  read: ["read", "glob", "grep", "webfetch", "websearch", "pdf", "image", "kern"],
+  full: [shell, "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "pdf", "image", "audio", "kern", "message"],
+  write: ["read", "write", "edit", "glob", "grep", "webfetch", "websearch", "pdf", "image", "audio", "kern", "message"],
+  read: ["read", "glob", "grep", "webfetch", "websearch", "pdf", "image", "audio", "kern"],
 };
 
 export const configDefaults: KernConfig = {
@@ -85,6 +86,7 @@ export const configDefaults: KernConfig = {
   autoRecall: false,
   mediaDigest: true,
   mediaModel: "",
+  audioModel: "",
   mediaContext: 0,
   telegramTools: false,
   heartbeatInterval: 60,
@@ -107,6 +109,7 @@ const FIELD_TYPES: Record<string, string> = {
   autoRecall: "boolean",
   mediaDigest: "boolean",
   mediaModel: "string",
+  audioModel: "string",
   mediaContext: "number",
   telegramTools: "boolean",
   heartbeatInterval: "number",

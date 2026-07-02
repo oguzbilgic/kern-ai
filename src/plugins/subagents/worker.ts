@@ -35,12 +35,13 @@ const SUBAGENT_TOOLS: ToolName[] = [
   "websearch",
   "pdf",
   "image",
+  "audio",
 ];
 
 const SUBAGENT_SYSTEM_PROMPT = [
   "You are a sub-agent spawned by a parent kern agent to complete a focused task.",
   "",
-  "You have access to read-only tools: read, glob, grep, webfetch, websearch, pdf, image.",
+  "You have access to read-only tools: read, glob, grep, webfetch, websearch, pdf, image, audio.",
   "You cannot execute shell commands, edit files, or spawn further sub-agents.",
   "",
   "Complete the task given to you, then reply with a concise result.",
