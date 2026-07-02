@@ -444,15 +444,21 @@ export async function resolveMediaInMessages(
           if (resolveSet.has(msgIdx)) {
             const fullPath = join(mediaDir, filename);
             if (existsSync(fullPath)) {
-              resolved++;
-              const buf = new Uint8Array(readFileSync(fullPath));
-              if (part.type === "image") {
-                return { ...part, image: buf };
+              // Same size cap as digest — don't ship huge raw audio to the model
+              if (isAudio && statSync(fullPath).size > MAX_AUDIO_BYTES) {
+                log.warn("media", `audio too large to resolve raw: ${filename}`);
               } else {
-                return { ...part, data: buf };
+                resolved++;
+                const buf = new Uint8Array(readFileSync(fullPath));
+                if (part.type === "image") {
+                  return { ...part, image: buf };
+                } else {
+                  return { ...part, data: buf };
+                }
               }
+            } else {
+              log.warn("media", `file not found: ${filename}`);
             }
-            log.warn("media", `file not found: ${filename}`);
           }
 
           // 3. Text placeholder

@@ -8,7 +8,7 @@ import { loadConfig } from "../config.js";
 import type { KernConfig } from "../config.js";
 
 export const AUDIO_EXT_TO_MIME: Record<string, string> = {
-  ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg",
+  ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/opus",
   ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
   ".aac": "audio/aac", ".flac": "audio/flac", ".mp4": "audio/mp4",
   ".webm": "audio/webm", ".aiff": "audio/aiff",

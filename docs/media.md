@@ -8,7 +8,7 @@ kern supports images, audio, and files in conversations across all interfaces.
 2. **Store** — file saved to `.kern/media/` with a SHA-256 content-addressed filename (deduped)
 3. **Digest** — images are described by a vision model and audio is transcribed by an audio-capable model at ingest time, cached permanently
 4. **Message** — SDK-native content array stored in session with `kern-media://` URI references
-5. **Resolve** — before model call, all `kern-media://` refs are resolved: digested images become text descriptions, recent files become raw Buffers (per `mediaContext`), older files become text placeholders
+5. **Resolve** — before model call, all `kern-media://` refs are resolved: digested images become text descriptions and digested audio becomes transcripts, recent files become raw Buffers (per `mediaContext`), older files become text placeholders
 6. **Serve** — `GET /media/:filename` serves stored files with immutable caching
 
 ## Storage
@@ -24,7 +24,7 @@ When `mediaDigest` is enabled (default), kern digests images and audio once at i
 - When a user sends an image, it's saved to disk and immediately described by a vision model (~300 tokens)
 - The description is cached permanently in the media sidecar — never regenerated
 - Before model call, image references are replaced with cached text: `[Image: photo.jpg (a1b2c3d4.jpg) — A terminal showing npm install output...]`
-- Voice messages and audio files are transcribed the same way: an audio-capable model (fallback chain: `audioModel` → agent model → `google/gemini-3.1-flash-lite` on OpenRouter) produces a transcript, cached in the same `description` field. Telegram voice notes (`.oga`, ogg/opus) are sent as-is — Gemini accepts them natively, no transcoding. Audio over 20 MB is skipped (logged).
+- Voice messages and audio files are transcribed the same way: an audio-capable model (fallback chain: `audioModel` → agent model → provider default — `google/gemini-3.1-flash-lite` on OpenRouter, `gpt-audio-mini` on OpenAI) produces a transcript, cached in the same `description` field. Telegram voice notes (`.oga`, ogg/opus) are sent as-is — Gemini accepts them natively, no transcoding. Audio over 20 MB is skipped (logged).
 - On cache miss (e.g. old images from before digest was enabled), digest is triggered on the fly
 
 This means:
@@ -34,7 +34,7 @@ This means:
 
 ### Disabling pre-digest
 
-Set `mediaDigest: false` to skip image digestion. Raw images are then controlled by `mediaContext`.
+Set `mediaDigest: false` to skip both image description and audio transcription at ingest. Raw media is then controlled by `mediaContext`.
 
 ### mediaContext
 
