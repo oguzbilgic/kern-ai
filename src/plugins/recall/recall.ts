@@ -1,6 +1,6 @@
 import { join } from "path";
 import { embed, embedMany } from "ai";
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { log } from "../../log.js";
 import { extractText } from "../../util.js";
@@ -53,7 +53,16 @@ export class RecallIndex {
     if (!existsSync(jsonlPath)) return 0;
 
     const content = await readFile(jsonlPath, "utf-8");
-    const lines = content.trim().split("\n").filter(Boolean);
+    let lines = content.trim().split("\n").filter(Boolean);
+    // The runtime may be appending while we read — a torn trailing line is
+    // possible. Exclude it; it gets indexed once complete.
+    if (lines.length > 1) {
+      try {
+        JSON.parse(lines[lines.length - 1]);
+      } catch {
+        lines = lines.slice(0, -1);
+      }
+    }
     if (lines.length <= 1) return 0; // only metadata line
 
     const totalMessages = lines.length - 1; // exclude metadata line
@@ -71,7 +80,9 @@ export class RecallIndex {
     // Parse session metadata for timestamp interpolation
     const meta = JSON.parse(lines[0]);
     const sessionCreated = new Date(meta.createdAt).getTime();
-    const sessionUpdated = new Date(meta.updatedAt).getTime();
+    // Sessions are append-only: the header's updatedAt is only written at
+    // creation. File mtime reflects the latest append, so use that.
+    const sessionUpdated = Math.max(sessionCreated, (await stat(jsonlPath)).mtimeMs);
 
     // Store raw messages in sqlite
     const insertMsg = this.db.prepare(

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Session write amplification** — `SessionManager.append()` rewrote the entire session `.jsonl` on every step (each tool call and assistant message), so per-turn persistence cost grew linearly with session size: a 15-step turn on a 20 MB session rewrote ~300 MB and took seconds of pure file I/O, plus matching GC pressure from re-stringifying the whole history. Appends now write only the new records (`appendFile`), making persistence O(new messages) — single-digit milliseconds regardless of session size. Same on-disk format; existing sessions load unchanged. The meta header's `updatedAt` is now only written at creation; "last updated" comes from file mtime (as `findLatest()` already did). `load()` also now tolerates and repairs a torn trailing line left by a crash mid-append, and the interrupted-turn marker is persisted at load instead of relying on the next full rewrite.
+
 ## 0.32.0 (2026-06-24)
 
 ### Features

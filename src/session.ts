@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, appendFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import type { ModelMessage } from "ai";
+import { log } from "./log.js";
 
 export interface Session {
   id: string;
@@ -33,7 +34,7 @@ export class SessionManager {
       return this.create();
     }
 
-    const path = join(this.dir, `${id}.jsonl`);
+    const path = this.pathFor(id);
     if (!existsSync(path)) {
       return this.create(id);
     }
@@ -43,7 +44,30 @@ export class SessionManager {
 
     // First line is metadata, rest are messages
     const meta = JSON.parse(lines[0]);
-    const messages: ModelMessage[] = lines.slice(1).map((l) => JSON.parse(l));
+    const messages: ModelMessage[] = [];
+    let torn = false;
+    for (let i = 1; i < lines.length; i++) {
+      try {
+        messages.push(JSON.parse(lines[i]));
+      } catch (err) {
+        // A crash mid-append can leave a torn final line. Drop it — the
+        // interrupted-turn handling below covers the lost message. Anything
+        // unparseable earlier in the file is real corruption: rethrow.
+        if (i === lines.length - 1) {
+          log.warn("session", `dropping torn trailing line in ${id}.jsonl`);
+          torn = true;
+          break;
+        }
+        throw err;
+      }
+    }
+
+    if (torn) {
+      // Rewrite without the fragment. It has no trailing newline, so a later
+      // append would otherwise glue onto it and corrupt the next record too.
+      const repaired = [lines[0], ...messages.map((m) => JSON.stringify(m))];
+      await writeFile(path, repaired.join("\n") + "\n", "utf-8");
+    }
 
     // Detect incomplete turn — if session ends with assistant tool-call
     // without a matching tool result, the previous process died mid-turn.
@@ -54,10 +78,14 @@ export class SessionManager {
         const hasToolCall = (last.content as any[]).some((p) => p.type === "tool-call");
         const nextIsTool = false; // it's the last message, no tool result follows
         if (hasToolCall) {
-          messages.push({
+          const synthetic = {
             role: "user",
             content: "[system] Previous turn was interrupted. Tool results were lost. Continue normally.",
-          } as ModelMessage);
+          } as ModelMessage;
+          messages.push(synthetic);
+          // Persist it now. Appends no longer rewrite the whole file, so an
+          // in-memory-only message would never reach disk otherwise.
+          await appendFile(path, JSON.stringify(synthetic) + "\n", "utf-8");
         }
       }
     }
@@ -66,7 +94,7 @@ export class SessionManager {
       id: meta.id,
       messages,
       createdAt: meta.createdAt,
-      updatedAt: meta.updatedAt,
+      updatedAt: meta.updatedAt ?? meta.createdAt,
     };
 
     return this.session;
@@ -88,7 +116,20 @@ export class SessionManager {
     if (!this.session) throw new Error("No active session");
     this.session.messages.push(...messages);
     this.session.updatedAt = new Date().toISOString();
-    await this.save();
+
+    // Append only the new records. Rewriting the whole file here made every
+    // step O(session size), so turns slowed down as the session grew.
+    // Consequence: the meta header's updatedAt stays as written at create();
+    // use file mtime for "last updated" (findLatest already does).
+    const path = this.pathFor(this.session.id);
+    if (!existsSync(path)) {
+      // File vanished mid-session (deleted or moved) — a bare append would
+      // create it without the meta header. Restore everything instead.
+      await this.save();
+      return;
+    }
+    const chunk = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+    await appendFile(path, chunk, "utf-8");
   }
 
   getMessages(): ModelMessage[] {
@@ -99,9 +140,15 @@ export class SessionManager {
     return this.session?.id || null;
   }
 
+  private pathFor(id: string): string {
+    return join(this.dir, `${id}.jsonl`);
+  }
+
+  // Full rewrite of the session file. Only used to create the file (meta
+  // header + any messages) — steady-state persistence goes through append().
   private async save(): Promise<void> {
     if (!this.session) return;
-    const path = join(this.dir, `${this.session.id}.jsonl`);
+    const path = this.pathFor(this.session.id);
     const meta = JSON.stringify({
       id: this.session.id,
       createdAt: this.session.createdAt,
