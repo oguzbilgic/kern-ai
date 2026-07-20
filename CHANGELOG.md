@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Fixes
-- **`kern-media://` URIs leaking to the provider** — when media resolution failed (media file deleted or unreadable, sidecar never initialized), the raw `kern-media://` URI was sent to the model provider, which rejects the scheme (`URL scheme must be http, https, or data`). Because the session history never changes, one leaked URI locked the agent into that fatal error on every turn. Resolution failures now degrade to text placeholders (`[attached image: <file>]`), the media sidecar is created lazily instead of skipping resolution when missing, and a final strip pass guarantees no raw media URI ever reaches the provider.
+- **`kern-media://` URIs leaking to the provider** ([#307](https://github.com/oguzbilgic/kern-ai/pull/307)) — when media resolution failed (media file deleted or unreadable, sidecar never initialized), the raw `kern-media://` URI was sent to the model provider, which rejects the scheme (`URL scheme must be http, https, or data`). Because the session history never changes, one leaked URI locked the agent into that fatal error on every turn. Resolution failures now degrade to text placeholders (`[attached image: <file>]`), the media sidecar is created lazily instead of skipping resolution when missing, and a final strip pass guarantees no raw media URI ever reaches the provider.
 
 ## 0.32.0 (2026-06-24)
 
