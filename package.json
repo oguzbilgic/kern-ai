@@ -21,7 +21,7 @@
     "prepublishOnly": "npm run build",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "tsx --test test/media.test.ts"
+    "test": "tsx --test test/*.test.ts"
   },
   "keywords": [
     "ai",
