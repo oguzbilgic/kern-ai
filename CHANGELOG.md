@@ -1,6 +1,6 @@
 # Changelog
 
-## next
+## 0.32.1 (2026-07-28)
 
 ### Fixes
 - **`.kern/.env` overrides inherited environment variables** ([#306](https://github.com/oguzbilgic/kern-ai/pull/306)) — an agent spawned from a shell (or another agent) with provider keys exported silently inherited them instead of using its own `.env`. The agent's `.kern/.env` is now authoritative — don't set the same variable in both.
