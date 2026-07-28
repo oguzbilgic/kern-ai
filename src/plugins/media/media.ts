@@ -259,7 +259,15 @@ export async function digestMediaAtIngest(
   const fullPath = join(mediaDir, file);
   if (!existsSync(fullPath)) return null;
 
-  const buf = readFileSync(fullPath);
+  let buf: Buffer;
+  try {
+    buf = readFileSync(fullPath);
+  } catch (err) {
+    // existsSync passed but the read failed (deleted in between, permissions).
+    // A digest miss must never take the turn down.
+    log.warn("media", `cannot read ${file} for digest: ${err}`);
+    return null;
+  }
   const chain = getDigestModelChain(config);
 
   // Ollama thinking models blow the 300-token budget on reasoning before
@@ -412,7 +420,14 @@ export async function resolveMediaInMessages(
             let description = sidecar.getDescription(filename);
             if (!description) {
               const mimeType = part.mediaType || "image/unknown";
-              description = await digestMediaAtIngest(sidecar, agentDir, filename, mimeType, config);
+              try {
+                description = await digestMediaAtIngest(sidecar, agentDir, filename, mimeType, config);
+              } catch (err) {
+                // A raw kern-media:// URI reaching the provider is a fatal,
+                // self-repeating error — fall through to the placeholder.
+                log.warn("media", `digest failed for ${filename}: ${err}`);
+                description = null;
+              }
             }
             if (description) {
               digested++;
@@ -423,16 +438,22 @@ export async function resolveMediaInMessages(
           // 2. Within mediaContext limit — resolve to raw Buffer
           if (resolveSet.has(msgIdx)) {
             const fullPath = join(mediaDir, filename);
-            if (existsSync(fullPath)) {
-              resolved++;
-              const buf = new Uint8Array(readFileSync(fullPath));
-              if (part.type === "image") {
-                return { ...part, image: buf };
-              } else {
-                return { ...part, data: buf };
+            try {
+              if (existsSync(fullPath)) {
+                const buf = new Uint8Array(readFileSync(fullPath));
+                resolved++;
+                if (part.type === "image") {
+                  return { ...part, image: buf };
+                } else {
+                  return { ...part, data: buf };
+                }
               }
+              log.warn("media", `file not found: ${filename}`);
+            } catch (err) {
+              // Read can fail even after existsSync (deleted in between,
+              // permissions, path is a directory). Placeholder, not a throw.
+              log.warn("media", `failed to read ${filename}: ${err}`);
             }
-            log.warn("media", `file not found: ${filename}`);
           }
 
           // 3. Text placeholder
@@ -452,4 +473,33 @@ export async function resolveMediaInMessages(
   if (placeholders > 0) log.debug("media", `${placeholders} media placeholder(s)`);
 
   return result;
+}
+
+/**
+ * Last-resort guard: replace any kern-media:// part still present with a text
+ * placeholder. Providers reject the scheme outright ("URL scheme must be
+ * http, https, or data"), and because the session history never changes, one
+ * leaked URI locks the agent into a fatal error on every subsequent turn.
+ * Covers what resolveMediaInMessages doesn't: non-user roles, and anything
+ * left behind if resolution itself failed. Pure transformation, no I/O.
+ */
+export function stripUnresolvedMedia(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg;
+    let changed = false;
+    const parts = (msg.content as any[]).map((p) => {
+      const uri =
+        p.type === "image" && typeof p.image === "string" && p.image.startsWith(MEDIA_SCHEME)
+          ? p.image
+          : p.type === "file" && typeof p.data === "string" && p.data.startsWith(MEDIA_SCHEME)
+            ? p.data
+            : null;
+      if (!uri) return p;
+      changed = true;
+      const filename = uri.slice(MEDIA_SCHEME.length);
+      const isImage = p.type === "image" || p.mediaType?.startsWith("image/");
+      return { type: "text" as const, text: `[${isImage ? "attached image" : "attached file"}: ${filename} (unavailable)]` };
+    });
+    return changed ? ({ ...msg, content: parts } as ModelMessage) : msg;
+  });
 }
