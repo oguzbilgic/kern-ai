@@ -3,7 +3,7 @@ import type { KernPlugin, PluginContext, RouteHandler } from "../types.js";
 import type { Attachment } from "../../interfaces/types.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { saveMedia, buildUserContent, MediaSidecar, resolveMediaInMessages, digestMediaAtIngest } from "./media.js";
+import { saveMedia, buildUserContent, MediaSidecar, resolveMediaInMessages, digestMediaAtIngest, stripUnresolvedMedia } from "./media.js";
 import { log } from "../../log.js";
 
 const MIME_MAP: Record<string, string> = {
@@ -14,6 +14,25 @@ const MIME_MAP: Record<string, string> = {
 };
 
 let mediaSidecar: MediaSidecar | null = null;
+
+/**
+ * Get the sidecar, creating it lazily if the session wasn't loaded yet when
+ * onStartup ran. Resolution must never be skipped for lack of a sidecar — it
+ * only needs it for labels and the digest cache.
+ */
+function ensureSidecar(ctx: PluginContext): MediaSidecar {
+  if (mediaSidecar) return mediaSidecar;
+  const sessionsDir = join(ctx.agentDir, ".kern", "sessions");
+  const sessionId = ctx.sessionId();
+  if (sessionId) {
+    mediaSidecar = new MediaSidecar(sessionsDir, sessionId, ctx.db);
+    mediaSidecar.load();
+    return mediaSidecar;
+  }
+  // No session yet — ephemeral, not cached, so the real one is picked up
+  // as soon as a session exists.
+  return new MediaSidecar(sessionsDir, "unknown-session", null);
+}
 
 export const mediaPlugin: KernPlugin = {
   name: "media",
@@ -79,20 +98,19 @@ export const mediaPlugin: KernPlugin = {
       if (attachments.length === 0) return null;
 
       const mediaRefs: Awaited<ReturnType<typeof saveMedia>>[] = [];
+      const sidecar = ensureSidecar(ctx);
       for (const att of attachments) {
         const ref = saveMedia(ctx.agentDir, att.data, att.mimeType, att.filename);
         log("runtime", `saved media: ${ref.uri} (${ref.size} bytes)`);
-        if (mediaSidecar) {
-          mediaSidecar.append({
-            file: ref.file,
-            originalName: att.filename,
-            mimeType: ref.mimeType,
-            size: ref.size,
-            timestamp: new Date().toISOString(),
-          });
-          if (ctx.config.mediaDigest) {
-            await digestMediaAtIngest(mediaSidecar, ctx.agentDir, ref.file, ref.mimeType, ctx.config);
-          }
+        sidecar.append({
+          file: ref.file,
+          originalName: att.filename,
+          mimeType: ref.mimeType,
+          size: ref.size,
+          timestamp: new Date().toISOString(),
+        });
+        if (ctx.config.mediaDigest) {
+          await digestMediaAtIngest(sidecar, ctx.agentDir, ref.file, ref.mimeType, ctx.config);
         }
         mediaRefs.push(ref);
       }
@@ -100,8 +118,16 @@ export const mediaPlugin: KernPlugin = {
     },
 
     async resolveMessages(messages: ModelMessage[], ctx: PluginContext): Promise<ModelMessage[]> {
-      if (!mediaSidecar) return messages;
-      return resolveMediaInMessages(messages, mediaSidecar, ctx.agentDir, ctx.config);
+      // Providers reject the kern-media: scheme as a fatal error, and the
+      // dispatcher fails open on plugin errors — so resolution must neither
+      // be skipped nor allowed to leak a raw URI, no matter what fails here.
+      let resolved = messages;
+      try {
+        resolved = await resolveMediaInMessages(messages, ensureSidecar(ctx), ctx.agentDir, ctx.config);
+      } catch (err) {
+        log.warn("media", `resolveMediaInMessages failed, stripping raw refs: ${err}`);
+      }
+      return stripUnresolvedMedia(resolved);
     },
   },
 
