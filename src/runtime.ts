@@ -407,7 +407,8 @@ export class Runtime {
       // turn and reported the timeout. Steps completed before the abort were
       // persisted by onStepFinish; exit quietly instead of double-reporting.
       if (abortSignal?.aborted) {
-        log("runtime", "turn aborted (idle timeout) — stream stopped");
+        const { message: msg, category } = parseProviderError(streamError, error);
+        log("runtime", `turn aborted (idle timeout) — stream stopped [${category}: ${msg}]`);
         throw error;
       }
       const { message: msg, category } = parseProviderError(streamError, error);
