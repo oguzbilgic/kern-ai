@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.32.3 (2026-08-11)
 
 ### Fixes
 - **Turns that hit the step limit now end with a message instead of silence** ([#310](https://github.com/oguzbilgic/kern-ai/issues/310)) — when a turn reaches `maxSteps`, the final step is forced to be text-only (`prepareStep` disables tools and nudges the model to wrap up), so the user always gets a closing message instead of the turn dying on a tool result with nothing sent.
