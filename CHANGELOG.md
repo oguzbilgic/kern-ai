@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Turns that hit the step limit now end with a message instead of silence** ([#310](https://github.com/oguzbilgic/kern-ai/issues/310)) — when a turn reaches `maxSteps`, the final step is forced to be text-only (`prepareStep` disables tools and nudges the model to wrap up), so the user always gets a closing message instead of the turn dying on a tool result with nothing sent.
+- **Context trimming can no longer drop messages before they're summarized** ([#311](https://github.com/oguzbilgic/kern-ai/issues/311)) — the trim boundary is clamped to summarizer coverage (last L0 segment end). Previously a heavy turn could be trimmed out of the raw window before its summary existed, making the agent forget work it finished seconds earlier; now unsummarized messages stay in the raw window even if the token budget is temporarily overshot.
+
 ## 0.32.2 (2026-08-11)
 
 ### Fixes

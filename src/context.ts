@@ -297,6 +297,28 @@ function trimToTokenBudget({ messages, maxTokens, segmentIndex, sessionId }: Tri
     }
   }
 
+
+  // Coverage guard: never trim messages the summarizer hasn't reached yet.
+  // Summaries are built asynchronously after turns finish, so the freshest
+  // messages may exist in neither the raw window nor any summary — trimming
+  // past them makes the agent forget work it just completed (#311). Clamp the
+  // boundary to the end of the last L0 segment; anything beyond stays raw
+  // even if the window overshoots the budget for a turn.
+  if (segmentIndex && sessionId) {
+    const l0Ends = segmentIndex.getL0Boundaries(sessionId);
+    const covered = l0Ends.length > 0 ? l0Ends[l0Ends.length - 1] : 0;
+    if (cutIndex > covered) {
+      // Walk backward to the nearest user message so the clamped boundary
+      // stays turn-safe (never cuts inside a tool-call/tool-result pair).
+      let clamped = covered;
+      while (clamped > 0 && messages[clamped]?.role !== "user") {
+        clamped--;
+      }
+      log("context", `trim clamped to summary coverage: ${cutIndex} → ${clamped} (last L0 end ${covered}); window may exceed budget until summaries catch up`);
+      cutIndex = clamped;
+    }
+  }
+
   if (sessionId && cutIndex > 0) {
     const prev = heldTrimBoundaries.get(sessionId);
     if (prev !== cutIndex) {

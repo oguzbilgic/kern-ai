@@ -303,7 +303,25 @@ export class Runtime {
           }
         },
         prepareStep: ({ messages, stepNumber }) => {
-          if (stepNumber === 0 || !pendingInjections) return {};
+          // Final-step tool lockout (#310): when the next step is the last one
+          // allowed by maxSteps, disable tools and tell the model to wrap up.
+          // Without this, a turn that hits the cap ends on a tool result with
+          // no final text — the user gets silence and the session ends without
+          // a conclusion. Forcing the last step to be text-only guarantees
+          // every capped turn closes with an assistant message.
+          const finalStep = stepNumber >= this.config.maxSteps - 1
+            ? {
+                toolChoice: "none" as const,
+                system: systemWithInjections +
+                  "\n\n[System: step limit reached — this is the final step of this turn. " +
+                  "Tools are disabled. Summarize what you accomplished, what remains, and reply to the user now.]",
+              }
+            : {};
+          if (stepNumber >= this.config.maxSteps - 1) {
+            log("runtime", `prepareStep: step limit reached at step ${stepNumber} — forcing text-only final step`);
+          }
+
+          if (stepNumber === 0 || !pendingInjections) return finalStep;
 
           // Collect any new injections; record the chronological position
           // (current messages length) at which each arrived.
@@ -322,7 +340,7 @@ export class Runtime {
             });
           }
 
-          if (midTurnMessages.length === 0) return {};
+          if (midTurnMessages.length === 0) return finalStep;
 
           log("runtime", `prepareStep: splicing ${midTurnMessages.length} mid-turn message(s) at step ${stepNumber}`);
 
@@ -342,7 +360,7 @@ export class Runtime {
             out.splice(insertAt, 0, msg);
           }
 
-          return { messages: out };
+          return { ...finalStep, messages: out };
         },
       });
 
