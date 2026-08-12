@@ -718,13 +718,17 @@ export class SegmentIndex {
   }
 
   /**
-   * Return sorted L0 segment msg_start values for a session.
+   * Return sorted L0 segment msg_end values (exclusive) for a session.
    * Used to snap trim boundaries to stable segment edges for cache stability.
+   *
+   * With summarizedOnly, only segments whose summary has been generated are
+   * returned — composeHistory() can only inject summarized=1 segments, so
+   * coverage checks must not count segments that are merely segmented (#311).
    */
-  getL0Boundaries(sessionId: string): number[] {
+  getL0Boundaries(sessionId: string, summarizedOnly = false): number[] {
     const rows = this.db.prepare(
       `SELECT msg_end FROM semantic_segments
-       WHERE session_id = ? AND level = 0
+       WHERE session_id = ? AND level = 0${summarizedOnly ? " AND summarized = 1" : ""}
        ORDER BY msg_end ASC`
     ).all(sessionId) as Array<{ msg_end: number }>;
     return rows.map(r => r.msg_end);

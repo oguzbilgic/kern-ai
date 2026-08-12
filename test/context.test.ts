@@ -23,9 +23,12 @@ function makeMessages(count: number): ModelMessage[] {
 }
 
 // Fake SegmentIndex: only the two methods prepareContext/trim use.
-function fakeSegmentIndex(l0Ends: number[]) {
+// summarizedEnds defaults to l0Ends (all segments summarized); pass a shorter
+// list to simulate segments that exist but haven't been summarized yet.
+function fakeSegmentIndex(l0Ends: number[], summarizedEnds: number[] = l0Ends) {
   return {
-    getL0Boundaries: () => l0Ends,
+    getL0Boundaries: (_sessionId: string, summarizedOnly = false) =>
+      summarizedOnly ? summarizedEnds : l0Ends,
     composeHistory: () => null,
   } as any;
 }
@@ -83,4 +86,18 @@ test("clamped boundary is turn-safe (walks back to a user message)", () => {
     segmentIndex: fakeSegmentIndex([41]),
   });
   assert.strictEqual(result.messages[0].role, "user");
+});
+
+test("segmented-but-unsummarized regions do not count as coverage", () => {
+  const messages = makeMessages(100);
+  // Segments exist up to msg 80, but the summarizer has only reached msg 40.
+  // composeHistory() can only inject summarized segments, so the boundary
+  // must clamp to 40 — not 80.
+  const result = prepareContext({
+    messages,
+    config: makeConfig(2000),
+    sessionId: "s5",
+    segmentIndex: fakeSegmentIndex([20, 40, 60, 80], [20, 40]),
+  });
+  assert.ok(result.messages.length >= 60, `expected >= 60 raw messages, got ${result.messages.length}`);
 });

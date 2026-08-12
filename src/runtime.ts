@@ -309,12 +309,18 @@ export class Runtime {
           // no final text — the user gets silence and the session ends without
           // a conclusion. Forcing the last step to be text-only guarantees
           // every capped turn closes with an assistant message.
+          const wrapUpNudge =
+            "\n\n[System: step limit reached — this is the final step of this turn. " +
+            "Tools are disabled. Summarize what you accomplished, what remains, and reply to the user now.]";
+          // systemWithInjections may be a SystemModelMessage object (Anthropic
+          // prompt caching) — append to its content and preserve providerOptions
+          // rather than string-concatenating, which would yield "[object Object]".
           const finalStep = stepNumber >= this.config.maxSteps - 1
             ? {
                 toolChoice: "none" as const,
-                system: systemWithInjections +
-                  "\n\n[System: step limit reached — this is the final step of this turn. " +
-                  "Tools are disabled. Summarize what you accomplished, what remains, and reply to the user now.]",
+                system: typeof systemWithInjections === "string"
+                  ? systemWithInjections + wrapUpNudge
+                  : { ...systemWithInjections, content: systemWithInjections.content + wrapUpNudge },
               }
             : {};
           if (stepNumber >= this.config.maxSteps - 1) {

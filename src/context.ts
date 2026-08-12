@@ -305,7 +305,9 @@ function trimToTokenBudget({ messages, maxTokens, segmentIndex, sessionId }: Tri
   // boundary to the end of the last L0 segment; anything beyond stays raw
   // even if the window overshoots the budget for a turn.
   if (segmentIndex && sessionId) {
-    const l0Ends = segmentIndex.getL0Boundaries(sessionId);
+    // summarizedOnly: composeHistory() only injects summarized segments, so a
+    // segment that exists but hasn't been summarized yet is NOT coverage.
+    const l0Ends = segmentIndex.getL0Boundaries(sessionId, true);
     const covered = l0Ends.length > 0 ? l0Ends[l0Ends.length - 1] : 0;
     if (cutIndex > covered) {
       // Walk backward to the nearest user message so the clamped boundary
