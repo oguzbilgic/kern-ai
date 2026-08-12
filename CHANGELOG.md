@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Turn timeout is now idle-based and actually aborts the stream** — the 5-minute turn timeout was wall-clock: long productive turns (many tool calls) died mid-work while the abandoned LLM stream kept running as a zombie, burning tokens on work that was thrown away. The timer now resets on every stream event, so only turns with no activity for 5 minutes are killed — and the kill aborts the underlying stream via `AbortSignal` instead of leaving it running.
+
 ## 0.32.1 (2026-07-28)
 
 ### Fixes

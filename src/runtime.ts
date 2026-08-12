@@ -194,6 +194,7 @@ export class Runtime {
     userMessage: string,
     onEvent: StreamHandler,
     attachments?: Attachment[],
+    abortSignal?: AbortSignal,
   ): Promise<string> {
     // Signal that we're processing
     onEvent({ type: "thinking" });
@@ -275,6 +276,7 @@ export class Runtime {
         system: systemWithInjections,
         messages: resolvedMessages,
         tools,
+        abortSignal,
         ...ollamaOptions,
         stopWhen: stepCountIs(this.config.maxSteps),
         onError: ({ error }) => {
@@ -401,6 +403,13 @@ export class Runtime {
 
       return fullText || "(no text response)";
     } catch (error: any) {
+      // Aborted by the queue's idle timeout — the queue already rejected the
+      // turn and reported the timeout. Steps completed before the abort were
+      // persisted by onStepFinish; exit quietly instead of double-reporting.
+      if (abortSignal?.aborted) {
+        log("runtime", "turn aborted (idle timeout) — stream stopped");
+        throw error;
+      }
       const { message: msg, category } = parseProviderError(streamError, error);
       log.error("runtime", `[${category}] ${msg}`);
       onEvent({ type: "error", error: msg });
