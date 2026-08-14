@@ -11,6 +11,28 @@ import type { KernConfig } from "../../config.js";
 
 const MAX_CHUNK_TOKENS = 1000; // rough token limit per chunk
 
+// Max characters sent to the embedding model per chunk. Embedding APIs reject
+// inputs over their token limit (8192 for text-embedding-3-small and
+// nomic-embed-text) with HTTP 400 — and one oversized chunk fails the whole
+// embedMany batch, permanently: the indexer retries the same chunks forever,
+// so every chunk batched with it stays unindexed too. chunkMessages() caps
+// chunk *growth*, but a single oversized message bypasses the cap, and the
+// chars/4 token estimate undercounts dense text. 16k chars stays safely under
+// 8192 tokens even at ~2 chars/token. Only the embedded representation is
+// truncated — the full chunk text is still stored and returned by search.
+const EMBED_MAX_CHARS = 16000;
+
+/** Truncate text for embedding without splitting a surrogate pair at the cut. */
+export function capForEmbedding(text: string, max: number = EMBED_MAX_CHARS): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max);
+  // A cut mid-emoji leaves a lone high surrogate — ill-formed UTF-16
+  // serializes to invalid JSON, which providers reject.
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut;
+}
+
 // Normalize an ISO8601 string (UTC `Z` or `±HH:MM` offset) to canonical UTC
 // `Z` form for storage. Ensures `recall.db` timestamp column is UTC-normalized
 // regardless of the envelope format the model saw.
@@ -119,7 +141,7 @@ export class RecallIndex {
 
     // Embed chunks in batches (API limits)
     const BATCH_SIZE = 100;
-    const texts = chunks.map((c) => c.text);
+    const texts = chunks.map((c) => capForEmbedding(c.text));
     log.debug("recall", `embedding ${texts.length} chunks (${texts.reduce((a, t) => a + t.length, 0)} chars)`);
 
     const embeddings: number[][] = [];
