@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Truncation no longer breaks summary/embedding API calls** ([#313](https://github.com/oguzbilgic/kern-ai/issues/313)) — truncating tool output with `.slice()` could split a surrogate pair (e.g. an emoji), leaving ill-formed UTF-16 that providers reject as invalid JSON. The affected segment could then never be summarized, retrying (and failing) every hour. Inputs to summary and embedding calls are now normalized with `toWellFormed()`.
+
 ## 0.32.3 (2026-08-11)
 
 ### Fixes
