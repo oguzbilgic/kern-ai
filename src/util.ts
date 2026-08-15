@@ -164,7 +164,13 @@ export function substituteEnvDeep<T>(
  * with "Invalid body: failed to parse JSON". Lone surrogates are replaced
  * with U+FFFD.
  */
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 export function wellFormed(s: string): string {
-  // String.prototype.toWellFormed requires Node 20+; kern requires Node 22.
-  return (s as any).toWellFormed?.() ?? s;
+  // String.prototype.toWellFormed requires Node 20+; fall back to a regex
+  // replacement on older runtimes (engines allows >=18).
+  return typeof (s as any).toWellFormed === "function"
+    ? (s as any).toWellFormed()
+    : s.replace(LONE_SURROGATE, "\uFFFD");
 }
