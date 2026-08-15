@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Oversized recall chunks no longer break embedding batches** — a chunk over the embedding model's token limit (8192 for `text-embedding-3-small`/`nomic-embed-text`) got HTTP 400, failing the whole `embedMany` batch — permanently, since the indexer retries the same chunks forever, leaving every chunk in the batch unindexed. Chunk text sent to the embedder is now capped (full text is still stored and returned by search).
+
 ## 0.32.3 (2026-08-11)
 
 ### Fixes
