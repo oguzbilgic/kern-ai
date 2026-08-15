@@ -3,7 +3,7 @@ import { embed, embedMany } from "ai";
 import { readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { log } from "../../log.js";
-import { extractText } from "../../util.js";
+import { extractText, wellFormed } from "../../util.js";
 import { createEmbeddingModel } from "../../model.js";
 import type { ModelMessage } from "ai";
 import type { MemoryDB } from "../../memory.js";
@@ -309,7 +309,9 @@ export class RecallIndex {
       }
 
       const turnEnd = i;
-      const chunkText = parts.join("\n");
+      // wellFormed(): tool-output truncation can split surrogate pairs (e.g.
+      // emoji), producing ill-formed UTF-16 that embedding APIs reject.
+      const chunkText = wellFormed(parts.join("\n"));
 
       // Absolute indices
       const absTurnStart = absoluteOffset + turnStart;

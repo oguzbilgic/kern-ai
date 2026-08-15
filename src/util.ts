@@ -155,3 +155,22 @@ export function substituteEnvDeep<T>(
   }
   return value;
 }
+
+/**
+ * Ensure a string is well-formed UTF-16 (no lone surrogates).
+ * Truncating strings with .slice() can split surrogate pairs (e.g. emoji),
+ * producing ill-formed UTF-16 that serializes to invalid JSON bytes —
+ * upstream APIs (OpenAI, Azure, embedding endpoints) reject such requests
+ * with "Invalid body: failed to parse JSON". Lone surrogates are replaced
+ * with U+FFFD.
+ */
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+export function wellFormed(s: string): string {
+  // String.prototype.toWellFormed requires Node 20+; fall back to a regex
+  // replacement on older runtimes (engines allows >=18).
+  return typeof (s as any).toWellFormed === "function"
+    ? (s as any).toWellFormed()
+    : s.replace(LONE_SURROGATE, "\uFFFD");
+}

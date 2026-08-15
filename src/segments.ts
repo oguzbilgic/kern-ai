@@ -1,6 +1,6 @@
 import { embed, embedMany, generateText } from "ai";
 import { log } from "./log.js";
-import { extractText } from "./util.js";
+import { extractText, wellFormed } from "./util.js";
 import { createEmbeddingModel, createSummaryModel } from "./model.js";
 import type { KernConfig } from "./config.js";
 import type { MemoryDB } from "./memory.js";
@@ -291,7 +291,9 @@ export class SegmentIndex {
     return messages.map((_, i) => {
       const start = Math.max(0, i - half);
       const end = Math.min(messages.length, i + half + 1);
-      return messages.slice(start, end).map(m => `${m.role}: ${this.messageText(m)}`).join("\n");
+      // wellFormed(): messageText truncation can split surrogate pairs (e.g.
+      // emoji), producing ill-formed UTF-16 that embedding APIs reject.
+      return wellFormed(messages.slice(start, end).map(m => `${m.role}: ${this.messageText(m)}`).join("\n"));
     });
   }
 
@@ -324,7 +326,9 @@ export class SegmentIndex {
       ).all(seg.session_id, seg.msg_start, seg.msg_end) as Array<{ role: string; content: string }>;
 
       inputText = rows.map((m) => `${m.role}: ${extractText(m.content)}`).join("\n");
-      inputText = inputText.replace(/^tool: .{500,}$/gm, (m) => m.slice(0, 300) + '... [truncated]').slice(0, 60000);
+      // wellFormed(): slicing can split surrogate pairs (e.g. emoji), producing
+      // ill-formed UTF-16 that upstream providers reject as invalid JSON.
+      inputText = wellFormed(inputText.replace(/^tool: .{500,}$/gm, (m) => m.slice(0, 300) + '... [truncated]').slice(0, 60000));
       targetTokens = Math.max(200, Math.min(1500, Math.round(seg.token_count / 10)));
       prompt = segmentSummaryPrompt(inputText, targetTokens);
     } else {
@@ -384,7 +388,9 @@ export class SegmentIndex {
       if (this.abortController?.signal.aborted) return;
       try {
         const summaryInput = row.summary.replace(/^tool: .{500,}$/gm, (m) => m.slice(0, 300) + '... [truncated]');
-        const inputText = summaryInput.slice(0, 60000);
+        // wellFormed(): slicing can split surrogate pairs (e.g. emoji), producing
+        // ill-formed UTF-16 that upstream providers reject as invalid JSON.
+        const inputText = wellFormed(summaryInput.slice(0, 60000));
         const targetTokens = Math.max(200, Math.min(1500, Math.round(row.token_count / 10)));
 
         const result = await generateText({
