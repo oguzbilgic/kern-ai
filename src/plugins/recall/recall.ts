@@ -17,9 +17,11 @@ const MAX_CHUNK_TOKENS = 1000; // rough token limit per chunk
 // embedMany batch, permanently: the indexer retries the same chunks forever,
 // so every chunk batched with it stays unindexed too. chunkMessages() caps
 // chunk *growth*, but a single oversized message bypasses the cap, and the
-// chars/4 token estimate undercounts dense text. 16k chars stays safely under
-// 8192 tokens even at ~2 chars/token. Only the embedded representation is
-// truncated — the full chunk text is still stored and returned by search.
+// chars/4 token estimate undercounts dense text. 16k chars is a heuristic
+// that stays under 8192 tokens for typical text (~2-4 chars/token); extreme
+// cases (e.g. CJK-heavy text at ~1 char/token) could still exceed it. Only
+// the embedded representation is truncated — the full chunk text is still
+// stored and returned by search.
 const EMBED_MAX_CHARS = 16000;
 
 /** Truncate text for embedding without splitting a surrogate pair at the cut. */
