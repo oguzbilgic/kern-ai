@@ -29,19 +29,63 @@ function getPackageRoot(): string {
 
 /**
  * Parse YAML frontmatter from SKILL.md content.
- * Returns { meta, body } where meta has name/description extracted from simple key: value lines.
+ * Returns { meta, body } where meta has name/description extracted from
+ * `key: value` lines and block scalars (`>`, `>-`, `|`, `|-`).
+ *
+ * Block scalars matter: writing a multi-line description is the natural way to
+ * document when a skill applies, and without this the catalog would show the
+ * literal indicator (`>-`) as the description, leaving the model no basis to
+ * pick the skill. Values are trimmed, so chomping indicators are accepted and
+ * ignored.
  */
-function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
+export function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
   const meta: Record<string, string> = {};
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!match) return { meta, body: content };
 
-  const yamlBlock = match[1];
+  const lines = match[1].split("\n");
   const body = match[2];
 
-  for (const line of yamlBlock.split("\n")) {
-    const kv = line.match(/^(\w[\w_-]*):\s*(.+)$/);
-    if (kv) meta[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, "");
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^(\w[\w_-]*):\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1].trim();
+    const raw = kv[2].trim();
+    if (!raw) continue;
+
+    // Block scalar header: `|`, `>`, optional indentation digit and chomping indicator.
+    const block = raw.match(/^([|>])(?:\d*[-+]?|[-+]?\d*)$/);
+    if (!block) {
+      meta[key] = raw.replace(/^["']|["']$/g, "");
+      continue;
+    }
+
+    // Consume the following more-indented (or blank) lines as the value.
+    const collected: string[] = [];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const line = lines[j];
+      if (line.trim() === "") { collected.push(""); continue; }
+      if (!/^\s/.test(line)) break;
+      collected.push(line);
+    }
+    i = j - 1;
+    while (collected.length && collected[collected.length - 1] === "") collected.pop();
+
+    const indent = Math.min(
+      ...collected.filter(l => l !== "").map(l => l.match(/^\s*/)![0].length),
+      Infinity,
+    );
+    const text = collected.map(l => (l === "" ? "" : l.slice(indent === Infinity ? 0 : indent)));
+
+    // `|` keeps newlines; `>` folds lines with spaces, blank line = paragraph break.
+    meta[key] = block[1] === "|"
+      ? text.join("\n").trim()
+      : text.reduce((acc, line, idx) => {
+          if (idx === 0) return line;
+          if (line === "") return `${acc}\n`;
+          return acc.endsWith("\n") ? acc + line : `${acc} ${line}`;
+        }, "").trim();
   }
 
   return { meta, body };
