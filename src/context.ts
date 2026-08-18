@@ -435,6 +435,23 @@ const CACHE_CONTROL = {
 const BP_SNAP_INTERVAL = 20;
 
 /**
+ * How many `cache_control` blocks a provider emits for one message.
+ *
+ * Anthropic allows at most 4 blocks per request; kern places 3 markers
+ * (system + stable + turn), leaving one spare. A message-level cache marker
+ * normally produces a single block — except on `tool` messages, where the
+ * OpenRouter/Anthropic mapping copies it onto *every* tool result. A turn with
+ * parallel tool calls therefore blows the budget and Anthropic rejects the
+ * whole request with "A maximum of 4 blocks with cache_control may be
+ * provided", surfaced by OpenRouter as an opaque "Provider returned error".
+ */
+function cacheBlockCount(msg: ModelMessage | undefined): number {
+  if (!msg) return 0;
+  if (msg.role === "tool" && Array.isArray(msg.content)) return msg.content.length;
+  return 1;
+}
+
+/**
  * Check if a model config supports Anthropic-style explicit prompt caching.
  */
 export function supportsPromptCaching(config: KernConfig): boolean {
@@ -478,12 +495,17 @@ export function addCacheBreakpoints(messages: ModelMessage[], config: KernConfig
   }
   if (turnBpIdx < 0) return messages;
 
-  // BP2: snap to stable interval before the turn breakpoint
-  const stableBpIdx = Math.floor(turnBpIdx / BP_SNAP_INTERVAL) * BP_SNAP_INTERVAL;
-  const useStableBp = stableBpIdx >= 0 && stableBpIdx < turnBpIdx - 4;
+  // BP2: snap to stable interval before the turn breakpoint, then shift down to
+  // the nearest single-block message (see cacheBlockCount).
+  const snappedIdx = Math.floor(turnBpIdx / BP_SNAP_INTERVAL) * BP_SNAP_INTERVAL;
+  let stableBpIdx = snappedIdx;
+  while (stableBpIdx > 0 && cacheBlockCount(messages[stableBpIdx]) !== 1) stableBpIdx--;
+  const useStableBp =
+    cacheBlockCount(messages[stableBpIdx]) === 1 && stableBpIdx < turnBpIdx - 4;
 
   if (useStableBp) {
-    log("context", `cache breakpoints: stable=${stableBpIdx} turn=${turnBpIdx} (${messages.length} msgs)`);
+    const shifted = stableBpIdx === snappedIdx ? "" : ` (snapped ${snappedIdx}, shifted off multi-block msg)`;
+    log("context", `cache breakpoints: stable=${stableBpIdx} turn=${turnBpIdx} (${messages.length} msgs)${shifted}`);
   } else {
     log("context", `cache breakpoint: turn=${turnBpIdx} (${messages.length} msgs)`);
   }
