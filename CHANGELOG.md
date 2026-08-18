@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.32.4 (2026-08-18)
 
 ### Fixes
 - **Multi-line skill descriptions showed up as `>-`** ([#318](https://github.com/oguzbilgic/kern-ai/issues/318)) — skill frontmatter written with a YAML block scalar (`>`, `>-`, `|`, `|-`) parsed the indicator as the description and dropped the text, leaving the catalog with no trigger info for the model. Block scalars are now parsed properly.
