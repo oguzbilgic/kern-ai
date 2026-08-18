@@ -437,8 +437,8 @@ const BP_SNAP_INTERVAL = 20;
 /**
  * How many `cache_control` blocks a provider emits for one message.
  *
- * Anthropic allows at most 4 blocks per request and kern's budget is exactly
- * 4 (system + stable + turn, leaving one spare). A message-level cache marker
+ * Anthropic allows at most 4 blocks per request; kern places 3 markers
+ * (system + stable + turn), leaving one spare. A message-level cache marker
  * normally produces a single block — except on `tool` messages, where the
  * OpenRouter/Anthropic mapping copies it onto *every* tool result. A turn with
  * parallel tool calls therefore blows the budget and Anthropic rejects the
