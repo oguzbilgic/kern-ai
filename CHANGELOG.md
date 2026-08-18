@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Agent bricked by a cache breakpoint on a parallel tool call** ([#316](https://github.com/oguzbilgic/kern-ai/issues/316)) — on Anthropic models a `tool` message is expanded into one API message per tool result, each carrying a copy of the message's `cache_control`. A stable breakpoint landing on a parallel tool call therefore blew Anthropic's 4-block limit and every turn failed instantly with an opaque `Provider returned error` — permanently, since the breakpoint index is deliberately sticky. Breakpoints are now only placed on messages that map to a single block.
+
 ## 0.32.3 (2026-08-11)
 
 ### Fixes
