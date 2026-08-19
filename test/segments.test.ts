@@ -62,26 +62,13 @@ test("messageText: existing tool and string caps unchanged", () => {
   assert.equal(str.length, 503);
 });
 
-test("embed input is bounded for any script, not just typical text", () => {
+test("embedTexts input is capped: per-message caps alone don't bound a window", () => {
   // 5 worst-case messages joined — the actual unit embedTexts sends.
   const window = Array.from({ length: 5 }, () =>
     "assistant: " + messageText("assistant", partsMsg("y".repeat(50000)))
   ).join("\n");
-  // Per-message caps alone don't bound the window (5 x 2000 > EMBED_MAX_CHARS),
-  // so the ceiling in embedTexts is what makes the guarantee.
-  const sent = capForEmbedding(window);
-  // Worst-case tokenization is ~1 char/token (CJK); the hard limit is 8192.
-  assert.ok(sent.length <= 8192, `${sent.length} chars could exceed 8192 tokens`);
-  assert.equal(sent.length, EMBED_MAX_CHARS);
-});
-
-test("CJK text is bounded below the token limit too", () => {
-  // 5 messages of dense CJK — ~1 char/token, the case a char-count cap
-  // calibrated for English would miss.
-  const window = Array.from({ length: 5 }, () =>
-    "user: " + messageText("user", partsMsg("経済".repeat(10000)))
-  ).join("\n");
-  assert.ok(capForEmbedding(window).length <= 8192);
+  assert.ok(window.length > EMBED_MAX_CHARS, "window exceeds the cap on its own");
+  assert.equal(capForEmbedding(window).length, EMBED_MAX_CHARS);
 });
 
 test("messageText: tool and parse-failure truncation is surrogate-safe", () => {
@@ -92,4 +79,52 @@ test("messageText: tool and parse-failure truncation is surrogate-safe", () => {
   // "[" prefix takes the array branch, then JSON.parse throws -> 500 cap.
   const broken = messageText("assistant", "[" + "💰".repeat(500));
   assert.equal(/[\uD800-\uDBFF]$/.test(broken.slice(0, -3)), false);
+});
+
+// --- embedTexts / embedOne ---------------------------------------------------
+
+// A fake EmbeddingModelV2 that rejects any value over `limit` code units,
+// the way a provider rejects input over its token limit.
+const fakeModel = (limit: number, seen: string[] = []) => ({
+  specificationVersion: "v2" as const,
+  provider: "test",
+  modelId: "fake",
+  maxEmbeddingsPerCall: 100,
+  supportsParallelCalls: false,
+  async doEmbed({ values }: { values: string[] }) {
+    for (const v of values) {
+      seen.push(v);
+      if (v.length > limit) throw new Error("maximum context length is 8192 tokens");
+    }
+    return { embeddings: values.map(() => [1, 0, 0]), usage: { tokens: 1 }, warnings: [] };
+  },
+});
+
+const embedTexts = (embeddingModel: unknown, texts: string[]): Promise<number[][]> =>
+  (SegmentIndex.prototype as any).embedTexts.call(
+    Object.assign(Object.create(SegmentIndex.prototype), { embeddingModel }),
+    texts
+  );
+
+test("embedTexts: one rejected window doesn't fail the whole batch", async () => {
+  // Before: the batch 400s, indexSession throws, segment_state never advances
+  // and the same messages are retried forever.
+  const out = await embedTexts(fakeModel(1000), ["short", "x".repeat(5000), "short too"]);
+  assert.equal(out.length, 3, "every window still gets an embedding");
+});
+
+test("embedTexts: shrinks a rejected window until the provider accepts it", async () => {
+  const seen: string[] = [];
+  const out = await embedTexts(fakeModel(1000, seen), ["x".repeat(5000)]);
+  assert.equal(out.length, 1);
+  // Halved from the 5000-char value down to something the model took.
+  const accepted = seen[seen.length - 1];
+  assert.ok(accepted.length <= 1000, `accepted ${accepted.length} chars`);
+  assert.ok(seen.length > 1, "retried at smaller sizes");
+});
+
+test("embedTexts: rethrows when shrinking can't be the problem", async () => {
+  // A model that rejects everything: not a length issue, so failing the run
+  // (and retrying later) beats advancing state past unindexed messages.
+  await assert.rejects(() => embedTexts(fakeModel(0), ["anything"]), /maximum context length/);
 });

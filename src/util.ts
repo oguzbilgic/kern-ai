@@ -94,13 +94,18 @@ export function extractText(content: string | any[] | any): string {
 }
 
 /**
- * Max characters sent to an embedding model in a single value.
+ * First-pass character cap for embedding inputs.
  *
- * Embedding APIs reject inputs over their token limit (8192 for
- * text-embedding-3-small and nomic-embed-text) with HTTP 400 — and one
- * oversized value fails the *whole* embedMany batch. 8000 chars is safe for
- * *any* script: worst-case tokenization is ~1 char/token (CJK), so this can't
- * exceed 8192 tokens. Typical text runs 2-4 chars/token, well under.
+ * Deliberately *not* a token guarantee — a character count can't be one.
+ * Measured tokens per UTF-16 code unit against text-embedding-3-small
+ * (8192-token limit): ASCII 0.13, Thai 1.0, CJK 2.0, emoji 2.0, rare kanji
+ * (e.g. U+20BB7) 4.0. So a cap that always held would have to be ~2k chars,
+ * which would clip ordinary English windows for no reason.
+ *
+ * This cap trims the obvious outliers cheaply; callers must still handle a
+ * provider rejection, because one oversized value fails the whole embedMany
+ * batch. See SegmentIndex.embedTexts for the shrink-and-retry that makes
+ * progress guaranteed rather than likely.
  */
 export const EMBED_MAX_CHARS = 8000;
 

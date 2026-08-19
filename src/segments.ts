@@ -1,6 +1,6 @@
 import { embed, embedMany, generateText } from "ai";
 import { log } from "./log.js";
-import { extractText, capForEmbedding } from "./util.js";
+import { extractText, capForEmbedding, EMBED_MAX_CHARS } from "./util.js";
 import { createEmbeddingModel, createSummaryModel } from "./model.js";
 import type { KernConfig } from "./config.js";
 import type { MemoryDB } from "./memory.js";
@@ -20,8 +20,13 @@ const MIN_MESSAGES = 10;        // minimum messages per segment — merge if few
 const MIN_TAIL_MESSAGES = 10;  // minimum unsegmented messages before creating new segments
 const MIN_TAIL_TOKENS = 10000; // minimum unsegmented tokens before creating new segments
 const EMBED_BATCH_SIZE = 100;
+// Floor for the shrink-and-retry in embedOne: 500 code units is ~2000 tokens
+// even at the worst measured 4 tokens/code unit, so it fits any 8192-token
+// model. Below this a rejection isn't about length, and rethrowing is right.
+const EMBED_MIN_CHARS = 500;
 
-// Max characters of a single message's text used to build embedding windows.
+// Max characters of text extracted from a multi-part message when building
+// embedding windows (plain strings cap at 500, tool output at 300).
 // A window joins WINDOW_SIZE messages, so one unbounded message can push the
 // window past the embedding model's token limit and 400 the whole batch.
 // Only affects boundary detection input — stored content is untouched.
@@ -697,20 +702,51 @@ export class SegmentIndex {
   private async embedTexts(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
     for (let b = 0; b < texts.length; b += EMBED_BATCH_SIZE) {
-      // Hard ceiling per value. The unit here is a joined window of
-      // WINDOW_SIZE messages, so per-message caps alone don't bound it —
-      // EMBED_MAX_CHARS does, for any script. One oversized input 400s the
-      // entire batch, and indexSession then throws without advancing
-      // segment_state: the same messages get retried forever, freezing
-      // segmentation for good.
       const batch = texts.slice(b, b + EMBED_BATCH_SIZE).map((t) => capForEmbedding(t));
-      const result = await embedMany({ model: this.embeddingModel, values: batch });
-      embeddings.push(...result.embeddings);
+      try {
+        const result = await embedMany({ model: this.embeddingModel, values: batch });
+        embeddings.push(...result.embeddings);
+      } catch (err) {
+        // One rejected value fails the whole batch, and indexSession then
+        // throws without advancing segment_state — the same messages get
+        // retried forever, freezing segmentation for good. Fall back to
+        // one-at-a-time so a single bad window can't take out 99 good ones.
+        log.warn("segments", `embed batch failed (${err instanceof Error ? err.message : String(err)}) — retrying values individually`);
+        for (const value of batch) {
+          embeddings.push(await this.embedOne(value));
+        }
+      }
       if (texts.length > EMBED_BATCH_SIZE) {
         log.debug("segments", `embedded batch ${Math.floor(b / EMBED_BATCH_SIZE) + 1}/${Math.ceil(texts.length / EMBED_BATCH_SIZE)}`);
       }
     }
     return embeddings;
+  }
+
+  /**
+   * Embed a single value, halving it until the provider accepts it.
+   *
+   * Character caps can't guarantee a token limit (rare glyphs run up to 4
+   * tokens per UTF-16 code unit), so the only reliable way to stay under it
+   * is to let the provider tell us. Boundary detection only needs the window
+   * to be representative, so trimming a pathological one is a fair trade for
+   * segmentation continuing to advance.
+   */
+  private async embedOne(value: string): Promise<number[]> {
+    let chars = Math.min(value.length, EMBED_MAX_CHARS);
+    for (;;) {
+      try {
+        const { embedding } = await embed({
+          model: this.embeddingModel,
+          value: capForEmbedding(value, chars),
+        });
+        return embedding;
+      } catch (err) {
+        if (chars <= EMBED_MIN_CHARS) throw err;
+        chars = Math.max(EMBED_MIN_CHARS, Math.floor(chars / 2));
+        log.warn("segments", `embed value rejected — retrying at ${chars} chars`);
+      }
+    }
   }
 
   /**
