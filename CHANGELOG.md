@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.32.5 (2026-08-19)
 
 ### Fixes
 - **One long message could freeze segmentation permanently** ([#320](https://github.com/oguzbilgic/kern-ai/issues/320)) — text from multi-part messages (any tool call, any attachment) was never length-capped, so one long message pushed its embedding window past the 8192-token limit, 400ing the whole batch before `segment_state` advanced — the same messages retried forever, no new summaries, and no trimming either under the 0.32.3 clamp. Boundary-detection text is now capped, and a rejected batch is retried value-by-value with shrinking input, so a pathological window degrades instead of stalling the index.
