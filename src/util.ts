@@ -93,6 +93,31 @@ export function extractText(content: string | any[] | any): string {
   return String(content ?? "");
 }
 
+/**
+ * Max characters sent to an embedding model in a single value.
+ *
+ * Embedding APIs reject inputs over their token limit (8192 for
+ * text-embedding-3-small and nomic-embed-text) with HTTP 400 — and one
+ * oversized value fails the *whole* embedMany batch. 16k chars stays under
+ * 8192 tokens for typical text (~2-4 chars/token); pathological input
+ * (CJK-heavy, ~1 char/token) could still exceed it, so callers should also
+ * bound their per-item input.
+ */
+export const EMBED_MAX_CHARS = 16000;
+
+/**
+ * Truncate text for embedding without splitting a surrogate pair at the cut.
+ * A cut mid-emoji leaves a lone high surrogate — ill-formed UTF-16 serializes
+ * to invalid JSON, which providers reject.
+ */
+export function capForEmbedding(text: string, max: number = EMBED_MAX_CHARS): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut;
+}
+
 const turndown = new TurndownService({
   headingStyle: "atx",
   codeBlockStyle: "fenced",

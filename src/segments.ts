@@ -1,6 +1,6 @@
 import { embed, embedMany, generateText } from "ai";
 import { log } from "./log.js";
-import { extractText } from "./util.js";
+import { extractText, capForEmbedding } from "./util.js";
 import { createEmbeddingModel, createSummaryModel } from "./model.js";
 import type { KernConfig } from "./config.js";
 import type { MemoryDB } from "./memory.js";
@@ -20,6 +20,12 @@ const MIN_MESSAGES = 10;        // minimum messages per segment — merge if few
 const MIN_TAIL_MESSAGES = 10;  // minimum unsegmented messages before creating new segments
 const MIN_TAIL_TOKENS = 10000; // minimum unsegmented tokens before creating new segments
 const EMBED_BATCH_SIZE = 100;
+
+// Max characters of a single message's text used to build embedding windows.
+// A window joins WINDOW_SIZE messages, so one unbounded message can push the
+// window past the embedding model's token limit and 400 the whole batch.
+// Only affects boundary detection input — stored content is untouched.
+const MAX_MESSAGE_CHARS = 2000;
 
 // Max messages to process per indexSession call (prevents OOM on large backfills)
 const MAX_CHUNK_SIZE = 500;
@@ -665,13 +671,18 @@ export class SegmentIndex {
       try {
         const parts = JSON.parse(content);
         if (Array.isArray(parts)) {
-          return parts.map((p: any) => {
+          const text = parts.map((p: any) => {
             if (p.type === "text") return p.text;
             if (p.type === "tool-call") return `[tool: ${p.toolName}]`;
             if (p.type === "image") return `[image]`;
             if (p.type === "file") return `[file: ${p.filename || p.mediaType || "file"}]`;
             return "";
           }).filter(Boolean).join(" ");
+          // Cap like the other branches — an assistant reply or user paste of
+          // any length lands here, and uncapped it can break the batch.
+          return text.length > MAX_MESSAGE_CHARS
+            ? capForEmbedding(text, MAX_MESSAGE_CHARS) + "..."
+            : text;
         }
       } catch {
         return content.length > 500 ? content.slice(0, 500) + "..." : content;
@@ -686,7 +697,10 @@ export class SegmentIndex {
   private async embedTexts(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
     for (let b = 0; b < texts.length; b += EMBED_BATCH_SIZE) {
-      const batch = texts.slice(b, b + EMBED_BATCH_SIZE);
+      // Hard ceiling per value: one oversized input 400s the entire batch,
+      // and indexSession then throws without advancing segment_state — the
+      // same messages get retried forever, freezing segmentation for good.
+      const batch = texts.slice(b, b + EMBED_BATCH_SIZE).map((t) => capForEmbedding(t));
       const result = await embedMany({ model: this.embeddingModel, values: batch });
       embeddings.push(...result.embeddings);
       if (texts.length > EMBED_BATCH_SIZE) {
