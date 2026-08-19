@@ -98,12 +98,11 @@ export function extractText(content: string | any[] | any): string {
  *
  * Embedding APIs reject inputs over their token limit (8192 for
  * text-embedding-3-small and nomic-embed-text) with HTTP 400 — and one
- * oversized value fails the *whole* embedMany batch. 16k chars stays under
- * 8192 tokens for typical text (~2-4 chars/token); pathological input
- * (CJK-heavy, ~1 char/token) could still exceed it, so callers should also
- * bound their per-item input.
+ * oversized value fails the *whole* embedMany batch. 8000 chars is safe for
+ * *any* script: worst-case tokenization is ~1 char/token (CJK), so this can't
+ * exceed 8192 tokens. Typical text runs 2-4 chars/token, well under.
  */
-export const EMBED_MAX_CHARS = 16000;
+export const EMBED_MAX_CHARS = 8000;
 
 /**
  * Truncate text for embedding without splitting a surrogate pair at the cut.

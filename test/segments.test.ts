@@ -62,12 +62,34 @@ test("messageText: existing tool and string caps unchanged", () => {
   assert.equal(str.length, 503);
 });
 
-test("messageText: window of WINDOW_SIZE capped messages stays well under the embed limit", () => {
-  // 5 worst-case messages joined — the actual unit sent to embedMany.
+test("embed input is bounded for any script, not just typical text", () => {
+  // 5 worst-case messages joined — the actual unit embedTexts sends.
   const window = Array.from({ length: 5 }, () =>
     "assistant: " + messageText("assistant", partsMsg("y".repeat(50000)))
   ).join("\n");
-  // ~4 chars/token, hard limit 8192 tokens. Leave real headroom for dense text.
-  assert.ok(window.length / 4 < 4000, `window ~${Math.ceil(window.length / 4)} tokens`);
-  assert.ok(window.length <= EMBED_MAX_CHARS);
+  // Per-message caps alone don't bound the window (5 x 2000 > EMBED_MAX_CHARS),
+  // so the ceiling in embedTexts is what makes the guarantee.
+  const sent = capForEmbedding(window);
+  // Worst-case tokenization is ~1 char/token (CJK); the hard limit is 8192.
+  assert.ok(sent.length <= 8192, `${sent.length} chars could exceed 8192 tokens`);
+  assert.equal(sent.length, EMBED_MAX_CHARS);
+});
+
+test("CJK text is bounded below the token limit too", () => {
+  // 5 messages of dense CJK — ~1 char/token, the case a char-count cap
+  // calibrated for English would miss.
+  const window = Array.from({ length: 5 }, () =>
+    "user: " + messageText("user", partsMsg("経済".repeat(10000)))
+  ).join("\n");
+  assert.ok(capForEmbedding(window).length <= 8192);
+});
+
+test("messageText: tool and parse-failure truncation is surrogate-safe", () => {
+  // Both branches used raw .slice() before — a cut mid-emoji leaves a lone
+  // high surrogate, the #313 failure mode.
+  const tool = messageText("tool", "💰".repeat(500));
+  assert.equal(/[\uD800-\uDBFF]$/.test(tool.slice(0, -3)), false);
+  // "[" prefix takes the array branch, then JSON.parse throws -> 500 cap.
+  const broken = messageText("assistant", "[" + "💰".repeat(500));
+  assert.equal(/[\uD800-\uDBFF]$/.test(broken.slice(0, -3)), false);
 });

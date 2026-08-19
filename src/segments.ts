@@ -664,7 +664,7 @@ export class SegmentIndex {
     const content = msg.content;
     // Tool results: truncate for embedding
     if (msg.role === "tool") {
-      return content.length > 300 ? content.slice(0, 300) + "..." : content;
+      return content.length > 300 ? capForEmbedding(content, 300) + "..." : content;
     }
     // Assistant tool calls or user messages with array content: parse and extract text
     if (content.startsWith("[")) {
@@ -685,10 +685,10 @@ export class SegmentIndex {
             : text;
         }
       } catch {
-        return content.length > 500 ? content.slice(0, 500) + "..." : content;
+        return content.length > 500 ? capForEmbedding(content, 500) + "..." : content;
       }
     }
-    return content.length > 500 ? content.slice(0, 500) + "..." : content;
+    return content.length > 500 ? capForEmbedding(content, 500) + "..." : content;
   }
 
   /**
@@ -697,9 +697,12 @@ export class SegmentIndex {
   private async embedTexts(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
     for (let b = 0; b < texts.length; b += EMBED_BATCH_SIZE) {
-      // Hard ceiling per value: one oversized input 400s the entire batch,
-      // and indexSession then throws without advancing segment_state — the
-      // same messages get retried forever, freezing segmentation for good.
+      // Hard ceiling per value. The unit here is a joined window of
+      // WINDOW_SIZE messages, so per-message caps alone don't bound it —
+      // EMBED_MAX_CHARS does, for any script. One oversized input 400s the
+      // entire batch, and indexSession then throws without advancing
+      // segment_state: the same messages get retried forever, freezing
+      // segmentation for good.
       const batch = texts.slice(b, b + EMBED_BATCH_SIZE).map((t) => capForEmbedding(t));
       const result = await embedMany({ model: this.embeddingModel, values: batch });
       embeddings.push(...result.embeddings);
