@@ -389,7 +389,7 @@ export class TelegramInterface implements Interface {
     await ctx.replyWithChatAction("record_voice").catch(() => {});
     const audio = await synthesizeSpeech(stripMarkdown(text));
     if (!audio) return;
-    await ctx.replyWithVoice(new InputFile(audio, "reply.ogg"));
+    await ctx.replyWithVoice(new InputFile(audio.data, audio.filename));
   }
 
   private async editMessage(
