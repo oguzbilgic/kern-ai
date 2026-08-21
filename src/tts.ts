@@ -54,7 +54,11 @@ export function stripForSpeech(text: string): string {
  * Returns null when no TTS provider is available.
  */
 export async function synthesizeSpeech(text: string): Promise<SynthesizedAudio | null> {
-  const input = text.length > MAX_TTS_CHARS ? text.slice(0, MAX_TTS_CHARS) : text;
+  // Don't truncate: callers delete the text reply once voice is sent, so a
+  // capped voice note would silently lose the remainder. Oversized replies
+  // fall back to text instead.
+  if (text.length > MAX_TTS_CHARS) return null;
+  const input = text;
 
   if (process.env.OPENROUTER_API_KEY) {
     try {

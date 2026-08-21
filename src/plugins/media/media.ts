@@ -116,6 +116,13 @@ export class MediaSidecar {
 
   /** Append a media entry to the sidecar file and SQLite. */
   append(entry: MediaEntry): void {
+    // Re-ingesting identical content (same content-addressed file) must not
+    // clobber an existing digest — otherwise the cache check misses and the
+    // same media is re-described/re-transcribed and billed again.
+    const existing = this.map.get(entry.file);
+    if (existing?.description && !entry.description) {
+      entry = { ...entry, description: existing.description, describedBy: existing.describedBy };
+    }
     this.map.set(entry.file, entry);
     try {
       appendFileSync(this.sidecarPath, JSON.stringify(entry) + "\n");
