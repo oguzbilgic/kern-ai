@@ -324,15 +324,19 @@ export class TelegramInterface implements Interface {
           if (activeMessageId !== reply.message_id) {
             try { await ctx.api.deleteMessage(ctx.chat.id, reply.message_id); } catch {}
           }
+        } else if (ctx.message.voice && ttsAvailable()) {
+          // Voice in → voice out: reply with a voice note only. The streamed
+          // text placeholder is deleted once the voice note is sent. Falls
+          // back to the text reply if synthesis fails.
+          try {
+            await this.sendVoiceReply(ctx, lastText);
+            try { await ctx.api.deleteMessage(ctx.chat.id, activeMessageId); } catch {}
+          } catch (err: any) {
+            log.warn("telegram", `voice reply failed, falling back to text: ${err.message}`);
+            await this.editMessage(ctx, activeMessageId, lastText);
+          }
         } else {
           await this.editMessage(ctx, activeMessageId, lastText);
-          // Voice in → voice out: if the user sent a voice note, also reply
-          // with a spoken version of the answer (skipped when no TTS provider).
-          if (ctx.message.voice && ttsAvailable()) {
-            this.sendVoiceReply(ctx, lastText).catch((err: any) =>
-              log.warn("telegram", `voice reply failed: ${err.message}`),
-            );
-          }
         }
       } catch (error: any) {
         clearInterval(typingInterval);
