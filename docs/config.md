@@ -32,16 +32,17 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `summaryModel` | `""` | Model for segment summarization. Empty = provider default (OpenAI: `gpt-4.1-mini`, Anthropic: `anthropic/claude-haiku-4.5` via OpenRouter, OpenRouter: `openai/gpt-4.1-mini`, Ollama: reuses `model`). Summary calls always use an OpenAI-compatible client: `openai` and `ollama` route directly, **all other providers (including `anthropic`) route via OpenRouter** — so on an Anthropic agent `summaryModel` needs an OpenRouter-style ID like `"anthropic/claude-haiku-4.5"`, not a bare Anthropic model ID. Useful when the main `model` is a thinking model — thinking burns the summary token budget on reasoning and returns empty text. Set this to a non-thinking model (e.g. `"openai/gpt-4.1-mini"` on OpenRouter/Anthropic, `"qwen3:4b-instruct"` on Ollama). |
 | `subAgentModel` | `""` | Model for spawned sub-agents, on the parent's provider. The model ID must be valid for that provider — same format as `model` (e.g. `claude-haiku-4-5` on `anthropic`, `anthropic/claude-haiku-4.5` on `openrouter`). Empty = inherit the parent's `model`. Sub-agents are read-only and bounded, so a cheaper model usually suffices — in heavy research fan-out they can account for most of the token volume. Individual `spawn` calls can override per-child. |
 | `autoRecall` | `false` | Automatically inject relevant old context before each turn. Requires recall enabled. |
-| `mediaDigest` | `true` | Enable image pre-digest: describes images via vision model on arrival, caches descriptions, and replaces raw images with text in context. Set to `false` to disable the entire digest pipeline. |
+| `mediaDigest` | `true` | Enable media pre-digest: describes images (vision model) and transcribes audio (audio model) on arrival, caches results, and replaces raw media with text in context. Set to `false` to disable the entire digest pipeline. |
 | `mediaModel` | `""` | Vision model for media descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default. Example: `"openai/gpt-4.1-mini"`. |
+| `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.7-flash` via OpenRouter for anthropic/ollama/openai agents with `OPENROUTER_API_KEY` set. Setting this field skips the (usually failing) attempt on the text-only chat model. |
 | `mediaContext` | `0` | How many recent turns resolve raw media Buffers to the model. `0` = never send raw binary (text descriptions or placeholders only). Applies to all media types — useful for non-image files like PDFs on models with native support. |
 | `mcpServers` | `{}` | Model Context Protocol servers. Tools namespaced as `<server>__<tool>`. See [MCP](mcp.md). |
 
 ### Tool scopes
 
-- **full** — bash, read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image
-- **write** — read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image
-- **read** — read, glob, grep, webfetch, websearch, kern, recall, pdf, image
+- **full** — bash, read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, audio
+- **write** — read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, audio
+- **read** — read, glob, grep, webfetch, websearch, kern, recall, pdf, image, audio
 
 ### Providers
 

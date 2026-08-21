@@ -131,6 +131,20 @@ image({ file: "screenshot.png", prompt: "What error is shown?" })
 - `file` — path to image file, or filename from `.kern/media/`
 - `prompt` — what to analyze (default: "Describe this image.")
 
+## audio
+
+Transcribe or analyze an audio file (voice messages, recordings) using an audio-capable AI model.
+
+```
+audio({ file: "voice.oga" })
+audio({ file: "meeting.mp3", prompt: "Summarize the key decisions" })
+```
+
+- `file` — path to audio file, or filename from `.kern/media/`
+- `prompt` — question about the audio (default: transcribe verbatim)
+
+Most chat models can't hear audio, so the tool uses a fallback chain: `audioModel` config → agent model → provider default (`google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.7-flash` routed via OpenRouter for any provider when `OPENROUTER_API_KEY` is set. Gemini models accept ogg/opus natively, so Telegram voice notes need no transcoding. The OpenAI default only handles wav/mp3 — ogg voice notes on non-OpenRouter providers use the cross-provider OpenRouter fallback. Set `audioModel` explicitly to skip the doomed attempt on a text-only chat model. Files over 20 MB are rejected.
+
 ## spawn
 
 Spawn a sub-agent to work on a focused task in parallel. Returns immediately with a sub-agent ID — the child runs in the background with its own LLM loop.
@@ -144,7 +158,7 @@ spawn({ prompt: "Research Node.js 22 crypto changes and summarize breaking chang
 
 When the child finishes, its result arrives as a new turn with metadata like `[via subagent, subagent:<id>, user: subagent, time: <iso8601>]`. The envelope identifies the source; the body is the child's final answer (no extra header on success). Failed sub-agents prefix the body with a `[subagent:<id> failed, 12s]` style line so the outcome is visible; cancelled sub-agents emit only the header line with no body. You can spawn multiple sub-agents in parallel and synthesize their results as they arrive.
 
-Sub-agents run with a read-only toolset: `read`, `glob`, `grep`, `webfetch`, `websearch`, `pdf`, `image`. They cannot run shell commands, edit files, call plugin tools, or spawn further sub-agents.
+Sub-agents run with a read-only toolset: `read`, `glob`, `grep`, `webfetch`, `websearch`, `pdf`, `image`, `audio`. They cannot run shell commands, edit files, call plugin tools, or spawn further sub-agents.
 
 Use sub-agents for research fan-out, parallel documentation lookups, evaluating multiple candidates, or any read-only task you can delegate while you keep working. Don't use them for trivial one-off reads — just call `read` directly.
 

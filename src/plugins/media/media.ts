@@ -1,11 +1,12 @@
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, statSync } from "fs";
 import { join, extname } from "path";
 import { generateText, type ModelMessage, type UserContent } from "ai";
 import { log } from "../../log.js";
-import { createModel } from "../../model.js";
+import { createModel, createAudioModel, type AudioModelRef } from "../../model.js";
 import type { KernConfig } from "../../config.js";
 import type { MemoryDB } from "../../memory.js";
+import { getAudioModelChain, MAX_AUDIO_BYTES } from "../../tools/audio.js";
 
 /** URI scheme for media references stored on disk */
 export const MEDIA_SCHEME = "kern-media://";
@@ -115,6 +116,13 @@ export class MediaSidecar {
 
   /** Append a media entry to the sidecar file and SQLite. */
   append(entry: MediaEntry): void {
+    // Re-ingesting identical content (same content-addressed file) must not
+    // clobber an existing digest — otherwise the cache check misses and the
+    // same media is re-described/re-transcribed and billed again.
+    const existing = this.map.get(entry.file);
+    if (existing?.description && !entry.description) {
+      entry = { ...entry, description: existing.description, describedBy: existing.describedBy };
+    }
     this.map.set(entry.file, entry);
     try {
       appendFileSync(this.sidecarPath, JSON.stringify(entry) + "\n");
@@ -236,6 +244,7 @@ function getDigestModelChain(config: KernConfig): string[] {
 /**
  * Digest media at ingest time — runs once when media first arrives.
  * For images: calls vision model to get text description.
+ * For audio: calls an audio-capable model to get a transcript.
  * For other types: could extract text locally (PDF, etc.) in future.
  * Results are cached in the sidecar.
  *
@@ -248,8 +257,9 @@ export async function digestMediaAtIngest(
   mimeType: string,
   config: KernConfig,
 ): Promise<string | null> {
-  // Only digest images for now
-  if (!mimeType.startsWith("image/")) return null;
+  const isImage = mimeType.startsWith("image/");
+  const isAudio = mimeType.startsWith("audio/");
+  if (!isImage && !isAudio) return null;
 
   // Already digested?
   const cached = sidecar.getDescription(file);
@@ -261,36 +271,55 @@ export async function digestMediaAtIngest(
 
   let buf: Buffer;
   try {
+    // Cap before reading — don't pull a huge file into memory just to reject it.
+    if (isAudio) {
+      const size = statSync(fullPath).size;
+      if (size > MAX_AUDIO_BYTES) {
+        log.warn("media", `skipping audio digest for ${file}: ${(size / 1024 / 1024).toFixed(1)} MB exceeds ${MAX_AUDIO_BYTES / 1024 / 1024} MB limit`);
+        return null;
+      }
+    }
     buf = readFileSync(fullPath);
   } catch (err) {
-    // existsSync passed but the read failed (deleted in between, permissions).
+    // existsSync passed but stat/read failed (deleted in between, permissions).
     // A digest miss must never take the turn down.
     log.warn("media", `cannot read ${file} for digest: ${err}`);
     return null;
   }
-  const chain = getDigestModelChain(config);
+  // Audio chain entries carry explicit routing (AudioModelRef); the image
+  // chain is plain model IDs on the agent's own provider.
+  const chain: (string | AudioModelRef)[] = isAudio
+    ? getAudioModelChain(config)
+    : getDigestModelChain(config);
+  const contentPart = isAudio
+    ? ({ type: "file", data: buf, mediaType: mimeType } as const)
+    : ({ type: "image", image: buf, mediaType: mimeType } as const);
+  const digestPrompt = isAudio
+    ? "Transcribe this audio verbatim. If it is not speech, briefly describe what you hear."
+    : "Describe this image.";
+  const maxTokens = isAudio ? 4000 : 300;
 
   // Ollama thinking models blow the 300-token budget on reasoning before
   // emitting any description. Disable thinking defensively.
   const isOllama = config.provider === "ollama";
 
-  for (const modelId of chain) {
+  for (const entry of chain) {
+    const modelId = typeof entry === "string" ? entry : entry.modelId;
     try {
       log("media", `digesting ${file} with ${modelId}...`);
-      const digestModel = createModel({ ...config, model: modelId });
+      const digestModel = typeof entry === "string"
+        ? createModel({ ...config, model: modelId })
+        : createAudioModel(config, entry);
 
       const result = await generateText({
         model: digestModel,
         messages: [
           {
             role: "user",
-            content: [
-              { type: "image", image: buf, mediaType: mimeType },
-              { type: "text", text: "Describe this image." },
-            ],
+            content: [contentPart, { type: "text", text: digestPrompt }],
           },
         ],
-        maxOutputTokens: 300,
+        maxOutputTokens: maxTokens,
         ...(isOllama ? { providerOptions: { openai: { think: false } } } : {}),
       });
 
@@ -404,6 +433,7 @@ export async function resolveMediaInMessages(
         msg.content.map(async (part: any) => {
           let filename: string | null = null;
           let isImage = false;
+          let isAudio = false;
 
           if (part.type === "image" && typeof part.image === "string" && part.image.startsWith(MEDIA_SCHEME)) {
             filename = part.image.slice(MEDIA_SCHEME.length);
@@ -411,12 +441,13 @@ export async function resolveMediaInMessages(
           } else if (part.type === "file" && typeof part.data === "string" && part.data.startsWith(MEDIA_SCHEME)) {
             filename = part.data.slice(MEDIA_SCHEME.length);
             isImage = part.mediaType?.startsWith("image/") || false;
+            isAudio = part.mediaType?.startsWith("audio/") || false;
           }
 
           if (!filename) return part;
 
-          // 1. Try digest replacement (images only)
-          if (digestEnabled && isImage) {
+          // 1. Try digest replacement (images: description, audio: transcript)
+          if (digestEnabled && (isImage || isAudio)) {
             let description = sidecar.getDescription(filename);
             if (!description) {
               const mimeType = part.mediaType || "image/unknown";
@@ -431,7 +462,8 @@ export async function resolveMediaInMessages(
             }
             if (description) {
               digested++;
-              return { type: "text" as const, text: `[Image: ${makeLabel(filename)} — ${description}]` };
+              const kind = isAudio ? "Audio transcript" : "Image";
+              return { type: "text" as const, text: `[${kind}: ${makeLabel(filename)} — ${description}]` };
             }
           }
 
@@ -440,15 +472,21 @@ export async function resolveMediaInMessages(
             const fullPath = join(mediaDir, filename);
             try {
               if (existsSync(fullPath)) {
-                const buf = new Uint8Array(readFileSync(fullPath));
-                resolved++;
-                if (part.type === "image") {
-                  return { ...part, image: buf };
+                // Same cap as digest — don't ship huge raw audio to the model.
+                if (isAudio && statSync(fullPath).size > MAX_AUDIO_BYTES) {
+                  log.warn("media", `audio too large to resolve raw: ${filename}`);
                 } else {
-                  return { ...part, data: buf };
+                  const buf = new Uint8Array(readFileSync(fullPath));
+                  resolved++;
+                  if (part.type === "image") {
+                    return { ...part, image: buf };
+                  } else {
+                    return { ...part, data: buf };
+                  }
                 }
+              } else {
+                log.warn("media", `file not found: ${filename}`);
               }
-              log.warn("media", `file not found: ${filename}`);
             } catch (err) {
               // Read can fail even after existsSync (deleted in between,
               // permissions, path is a directory). Placeholder, not a throw.
@@ -459,7 +497,7 @@ export async function resolveMediaInMessages(
           // 3. Text placeholder
           placeholders++;
           const label = makeLabel(filename);
-          const prefix = isImage ? "attached image" : "attached file";
+          const prefix = isImage ? "attached image" : isAudio ? "attached audio" : "attached file";
           return { type: "text" as const, text: `[${prefix}: ${label}]` };
         }),
       );
@@ -468,7 +506,7 @@ export async function resolveMediaInMessages(
     }),
   );
 
-  if (digested > 0) log("media", `digested ${digested} image(s)`);
+  if (digested > 0) log("media", `digested ${digested} media item(s)`);
   if (resolved > 0) log("media", `resolved ${resolved} file(s) to Buffer`);
   if (placeholders > 0) log.debug("media", `${placeholders} media placeholder(s)`);
 

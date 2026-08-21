@@ -4,6 +4,7 @@ import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -178,7 +179,28 @@ export class SlackInterface implements Interface {
         // NO_REPLY suppression — matches empty, "(no text response)", or any
         // reply ending with NO_REPLY (model explaining then suppressing).
         if (!isNoReply(response)) {
-          await say(mdToSlack(response));
+          // Voice in → voice out: if the user sent an audio clip, reply with
+          // synthesized audio instead of text. Falls back to text on failure
+          // (e.g. missing files:write scope or no TTS provider).
+          const voiceIn = attachments.some((a) => a.type === "audio");
+          if (voiceIn && ttsAvailable()) {
+            try {
+              const audio = await synthesizeSpeech(stripForSpeech(response));
+              if (!audio) throw new Error("synthesis unavailable");
+              await client.files.uploadV2({
+                channel_id: channelId,
+                thread_ts: threadTs,
+                file: audio.data,
+                filename: audio.filename,
+                title: "Voice reply",
+              });
+            } catch (err: any) {
+              log.warn("slack", `voice reply failed, falling back to text: ${err.message}`);
+              await say(mdToSlack(response));
+            }
+          } else {
+            await say(mdToSlack(response));
+          }
         }
       } catch (error: any) {
         if (isDM) {

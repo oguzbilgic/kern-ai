@@ -121,6 +121,36 @@ export function createSummaryModel(config: KernConfig): any {
 }
 
 /**
+ * A single entry in the audio model fallback chain.
+ * `viaOpenRouter` routes the call through the OpenRouter-native provider
+ * regardless of the agent's own provider — used both for openrouter agents
+ * (the generic OpenAI-compatible shim only maps `audio/wav` and `audio/mpeg`
+ * file parts to `input_audio` and rejects ogg/opus, the Telegram voice
+ * format) and as a cross-provider fallback for agents whose provider has no
+ * audio-capable models at all (anthropic, ollama).
+ */
+export interface AudioModelRef {
+  modelId: string;
+  viaOpenRouter: boolean;
+}
+
+/**
+ * Create a model instance for audio input (transcription / analysis).
+ * See {@link AudioModelRef} for why routing is explicit per entry.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createAudioModel(config: KernConfig, ref: AudioModelRef): any {
+  if (ref.viaOpenRouter) {
+    const openrouter = createOpenRouter({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      headers: OPENROUTER_HEADERS,
+    });
+    return openrouter.chat(ref.modelId);
+  }
+  return createModel({ ...config, model: ref.modelId });
+}
+
+/**
  * Create an AI SDK model instance from kern config.
  * Shared across runtime (chat) and notes (summary generation).
  */
