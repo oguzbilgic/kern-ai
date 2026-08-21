@@ -1,8 +1,9 @@
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -323,6 +324,17 @@ export class TelegramInterface implements Interface {
           if (activeMessageId !== reply.message_id) {
             try { await ctx.api.deleteMessage(ctx.chat.id, reply.message_id); } catch {}
           }
+        } else if (ctx.message.voice && ttsAvailable()) {
+          // Voice in → voice out: reply with a voice note only. The streamed
+          // text placeholder is deleted once the voice note is sent. Falls
+          // back to the text reply if synthesis fails.
+          try {
+            await this.sendVoiceReply(ctx, lastText);
+            try { await ctx.api.deleteMessage(ctx.chat.id, activeMessageId); } catch {}
+          } catch (err: any) {
+            log.warn("telegram", `voice reply failed, falling back to text: ${err.message}`);
+            await this.editMessage(ctx, activeMessageId, lastText);
+          }
         } else {
           await this.editMessage(ctx, activeMessageId, lastText);
         }
@@ -374,6 +386,14 @@ export class TelegramInterface implements Interface {
     } catch {
       return false;
     }
+  }
+
+  /** Synthesize the reply text and send it as a Telegram voice note. */
+  private async sendVoiceReply(ctx: any, text: string): Promise<void> {
+    await ctx.replyWithChatAction("record_voice").catch(() => {});
+    const audio = await synthesizeSpeech(stripForSpeech(text));
+    if (!audio) throw new Error("speech synthesis unavailable");
+    await ctx.replyWithVoice(new InputFile(audio.data, audio.filename));
   }
 
   private async editMessage(
