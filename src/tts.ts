@@ -34,6 +34,21 @@ export function ttsAvailable(): boolean {
   return !!(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY);
 }
 
+/** Strip markdown syntax so it isn't read aloud (code fences, bold, lists, etc.). */
+export function stripForSpeech(text: string): string {
+  let plain = text;
+  plain = plain.replace(/```\w*\n([\s\S]*?)```/g, "$1");
+  plain = plain.replace(/`([^`]+)`/g, "$1");
+  plain = plain.replace(/\*\*(.+?)\*\*/g, "$1");
+  plain = plain.replace(/(?<![*])(\*)(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$2");
+  plain = plain.replace(/~~(.+?)~~/g, "$1");
+  plain = plain.replace(/^[-*] /gm, "");
+  plain = plain.replace(/^#+ /gm, "");
+  plain = plain.replace(/^> /gm, "");
+  plain = plain.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  return plain;
+}
+
 /**
  * Synthesize speech from text using the first available provider.
  * Returns null when no TTS provider is available.

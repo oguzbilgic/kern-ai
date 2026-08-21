@@ -3,7 +3,7 @@ import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
-import { synthesizeSpeech, ttsAvailable } from "../tts.js";
+import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -391,7 +391,7 @@ export class TelegramInterface implements Interface {
   /** Synthesize the reply text and send it as a Telegram voice note. */
   private async sendVoiceReply(ctx: any, text: string): Promise<void> {
     await ctx.replyWithChatAction("record_voice").catch(() => {});
-    const audio = await synthesizeSpeech(stripMarkdown(text));
+    const audio = await synthesizeSpeech(stripForSpeech(text));
     if (!audio) return;
     await ctx.replyWithVoice(new InputFile(audio.data, audio.filename));
   }
