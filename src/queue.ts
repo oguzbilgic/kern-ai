@@ -30,11 +30,22 @@ export class MessageQueue {
   // so we can resolve their Promises with NO_REPLY when the turn finishes —
   // otherwise the interface handlers that awaited onMessage() would hang.
   private drainedSameChannel: QueuedMessage[] = [];
-  private handler: ((msg: QueuedMessage, pendingMessages: () => QueuedMessage[]) => Promise<string>) | null = null;
-  private timeoutMs = 5 * 60 * 1000; // 5 minute timeout per message
+  private handler: ((msg: QueuedMessage, pendingMessages: () => QueuedMessage[], signal: AbortSignal) => Promise<string>) | null = null;
+  // Idle timeout: a turn is killed only after this long with NO activity
+  // (no stream events). Every token/tool event resets the timer via touch(),
+  // so long productive turns never time out — only genuinely hung ones.
+  private idleTimeoutMs = 5 * 60 * 1000;
+  // Resets the current turn's idle timer. Null when no turn is active.
+  private touchFn: (() => void) | null = null;
 
-  setHandler(fn: (msg: QueuedMessage, pendingMessages: () => QueuedMessage[]) => Promise<string>) {
+  setHandler(fn: (msg: QueuedMessage, pendingMessages: () => QueuedMessage[], signal: AbortSignal) => Promise<string>) {
     this.handler = fn;
+  }
+
+  // Called on every stream event to signal the active turn is making progress.
+  // No-op when no turn is active.
+  touch() {
+    this.touchFn?.();
   }
 
   getActiveChannel(): string | null {
@@ -106,18 +117,33 @@ export class MessageQueue {
 
     log("queue", `processing (${msg.interface}:${msg.channel || "?"}) remaining=${this.queue.length}`);
 
+    // Abort controller for this turn. On idle timeout we abort so the
+    // handler's LLM stream actually stops instead of running on as a zombie.
+    const controller = new AbortController();
+    let idleTimer: NodeJS.Timeout | null = null;
+
     try {
-      // Race handler against timeout. Promise.race doesn't cancel the loser,
-      // so a timed-out handler keeps running; the turnId guard below makes
-      // any late drain calls a no-op instead of corrupting the next turn.
+      // Race handler against an idle timeout. The timer resets on every
+      // stream event (via touch()), so only turns with no activity die.
+      const idleTimeout = new Promise<string>((_, reject) => {
+        const fire = () => {
+          controller.abort();
+          reject(new Error(`Message processing timed out (no activity for ${this.idleTimeoutMs / 1000}s)`));
+        };
+        idleTimer = setTimeout(fire, this.idleTimeoutMs);
+        this.touchFn = () => {
+          if (turnId !== this.turnId) return;
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(fire, this.idleTimeoutMs);
+        };
+      });
+
       const response = await Promise.race([
         this.handler!(msg, () => {
           if (turnId !== this.turnId) return [];
           return this.drainPendingSameChannel();
-        }),
-        new Promise<string>((_, reject) =>
-          setTimeout(() => reject(new Error("Message processing timed out")), this.timeoutMs)
-        ),
+        }, controller.signal),
+        idleTimeout,
       ]);
 
       msg.resolve(response);
@@ -130,6 +156,8 @@ export class MessageQueue {
       // messages were never touched — requeue them for their own turn.
       this.finalizePendingSameChannel();
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      this.touchFn = null;
       this.processing = false;
       this.activeChannel = null;
       log("queue", `done, remaining=${this.queue.length}`);

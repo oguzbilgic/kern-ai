@@ -217,7 +217,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }).catch((e) => log.error("subagent", `announce enqueue failed for ${id}: ${e.message}`));
   });
 
-  queue.setHandler(async (msg, getPendingMessages) => {
+  queue.setHandler(async (msg, getPendingMessages, signal) => {
 
     const time = formatLocalISO(new Date(), envelopeTimezone);
     const context = `[via ${msg.interface}${msg.channel ? `, ${msg.channel}` : ""}, user: ${msg.userId}, time: ${time}]\n${msg.text}`;
@@ -247,9 +247,10 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     });
 
     const result = await runtime.handleMessage(context, (event: StreamEvent) => {
+      queue.touch(); // stream activity — reset the idle timeout
       server.broadcast(event);
       msg.onEvent?.(event);
-    }, msg.attachments);
+    }, msg.attachments, signal);
 
     // Post-turn: let plugins index new messages (async, non-blocking)
     const sessionId = runtime.getSessionId();

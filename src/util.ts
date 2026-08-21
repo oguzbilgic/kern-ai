@@ -93,6 +93,35 @@ export function extractText(content: string | any[] | any): string {
   return String(content ?? "");
 }
 
+/**
+ * First-pass character cap for embedding inputs.
+ *
+ * Deliberately *not* a token guarantee — a character count can't be one.
+ * Measured tokens per UTF-16 code unit against text-embedding-3-small
+ * (8192-token limit): ASCII 0.13, Thai 1.0, CJK 2.0, emoji 2.0, rare kanji
+ * (e.g. U+20BB7) 4.0. So a cap that always held would have to be ~2k chars,
+ * which would clip ordinary English windows for no reason.
+ *
+ * This cap trims the obvious outliers cheaply; callers must still handle a
+ * provider rejection, because one oversized value fails the whole embedMany
+ * batch. See SegmentIndex.embedTexts for the shrink-and-retry that makes
+ * progress guaranteed rather than likely.
+ */
+export const EMBED_MAX_CHARS = 8000;
+
+/**
+ * Truncate text for embedding without splitting a surrogate pair at the cut.
+ * A cut mid-emoji leaves a lone high surrogate — ill-formed UTF-16 serializes
+ * to invalid JSON, which providers reject.
+ */
+export function capForEmbedding(text: string, max: number = EMBED_MAX_CHARS): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut;
+}
+
 const turndown = new TurndownService({
   headingStyle: "atx",
   codeBlockStyle: "fenced",

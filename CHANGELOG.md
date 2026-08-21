@@ -5,6 +5,34 @@
 ### Features
 - **Audio support** ([#297](https://github.com/oguzbilgic/kern-ai/issues/297)) — voice messages and audio files are now first-class media, parallel to images. A new `audio(file, prompt?)` tool transcribes or answers questions about any audio file, and voice messages are auto-transcribed at ingest (cached like image descriptions), so the agent understands a Telegram voice note without any tool call. New `audioModel` config field with fallback chain `audioModel` → agent model → provider default (`google/gemini-3.1-flash-lite` on OpenRouter — accepts ogg/opus natively, no transcoding). Sub-agents get the `audio` tool too. Audio over 20 MB is skipped.
 
+## 0.32.5 (2026-08-19)
+
+### Fixes
+- **One long message could freeze segmentation permanently** ([#320](https://github.com/oguzbilgic/kern-ai/issues/320)) — text from multi-part messages (any tool call, any attachment) was never length-capped, so one long message pushed its embedding window past the 8192-token limit, 400ing the whole batch before `segment_state` advanced — the same messages retried forever, no new summaries, and no trimming either under the 0.32.3 clamp. Boundary-detection text is now capped, and a rejected batch is retried value-by-value with shrinking input, so a pathological window degrades instead of stalling the index.
+
+## 0.32.4 (2026-08-18)
+
+### Fixes
+- **Multi-line skill descriptions showed up as `>-`** ([#318](https://github.com/oguzbilgic/kern-ai/issues/318)) — skill frontmatter written with a YAML block scalar (`>`, `>-`, `|`, `|-`) parsed the indicator as the description and dropped the text, leaving the catalog with no trigger info for the model. Block scalars are now parsed properly.
+
+## 0.32.3 (2026-08-11)
+
+### Fixes
+- **Turns that hit the step limit now end with a message instead of silence** ([#310](https://github.com/oguzbilgic/kern-ai/issues/310)) — when a turn reaches `maxSteps`, the final step is forced to be text-only (`prepareStep` disables tools and nudges the model to wrap up), so the user always gets a closing message instead of the turn dying on a tool result with nothing sent.
+- **Context trimming can no longer drop messages before they're summarized** ([#311](https://github.com/oguzbilgic/kern-ai/issues/311)) — the trim boundary is clamped to summarizer coverage (last L0 segment end). Previously a heavy turn could be trimmed out of the raw window before its summary existed, making the agent forget work it finished seconds earlier; now unsummarized messages stay in the raw window even if the token budget is temporarily overshot.
+
+## 0.32.2 (2026-08-11)
+
+### Fixes
+- **Turn timeout is now idle-based and actually aborts the stream** — the 5-minute turn timeout was wall-clock: long productive turns (many tool calls) died mid-work while the abandoned LLM stream kept running as a zombie, burning tokens on work that was thrown away. The timer now resets on every stream event, so only turns with no activity for 5 minutes are killed — and the kill aborts the underlying stream via `AbortSignal` instead of leaving it running.
+
+## 0.32.1 (2026-07-28)
+
+### Fixes
+- **`.kern/.env` overrides inherited environment variables** ([#306](https://github.com/oguzbilgic/kern-ai/pull/306)) — an agent spawned from a shell (or another agent) with provider keys exported silently inherited them instead of using its own `.env`. The agent's `.kern/.env` is now authoritative — don't set the same variable in both.
+- **`kern-media://` URIs leaking to the provider** ([#307](https://github.com/oguzbilgic/kern-ai/pull/307)) — a failed media resolution sent the raw URI to the provider, which rejects the scheme — permanently, since session history never changes. Failures now degrade to text placeholders, and a final strip pass guarantees no raw URI reaches the provider.
+- **Session write amplification** ([#305](https://github.com/oguzbilgic/kern-ai/pull/305)) — every step rewrote the entire session `.jsonl`, so persistence cost grew with session size (a 15-step turn on a 20 MB session rewrote ~300 MB). Appends now write only the new records — O(new messages), same on-disk format. `load()` also repairs a torn trailing line left by a crash mid-append.
+
 ## 0.32.0 (2026-06-24)
 
 ### Features

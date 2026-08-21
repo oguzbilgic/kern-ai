@@ -1,6 +1,6 @@
 import { embed, embedMany, generateText } from "ai";
 import { log } from "./log.js";
-import { extractText } from "./util.js";
+import { extractText, capForEmbedding, EMBED_MAX_CHARS } from "./util.js";
 import { createEmbeddingModel, createSummaryModel } from "./model.js";
 import type { KernConfig } from "./config.js";
 import type { MemoryDB } from "./memory.js";
@@ -20,6 +20,17 @@ const MIN_MESSAGES = 10;        // minimum messages per segment — merge if few
 const MIN_TAIL_MESSAGES = 10;  // minimum unsegmented messages before creating new segments
 const MIN_TAIL_TOKENS = 10000; // minimum unsegmented tokens before creating new segments
 const EMBED_BATCH_SIZE = 100;
+// Floor for the shrink-and-retry in embedOne: 500 code units is ~2000 tokens
+// even at the worst measured 4 tokens/code unit, so it fits any 8192-token
+// model. Below this a rejection isn't about length, and rethrowing is right.
+const EMBED_MIN_CHARS = 500;
+
+// Max characters of text extracted from a multi-part message when building
+// embedding windows (plain strings cap at 500, tool output at 300).
+// A window joins WINDOW_SIZE messages, so one unbounded message can push the
+// window past the embedding model's token limit and 400 the whole batch.
+// Only affects boundary detection input — stored content is untouched.
+const MAX_MESSAGE_CHARS = 2000;
 
 // Max messages to process per indexSession call (prevents OOM on large backfills)
 const MAX_CHUNK_SIZE = 500;
@@ -658,26 +669,31 @@ export class SegmentIndex {
     const content = msg.content;
     // Tool results: truncate for embedding
     if (msg.role === "tool") {
-      return content.length > 300 ? content.slice(0, 300) + "..." : content;
+      return content.length > 300 ? capForEmbedding(content, 300) + "..." : content;
     }
     // Assistant tool calls or user messages with array content: parse and extract text
     if (content.startsWith("[")) {
       try {
         const parts = JSON.parse(content);
         if (Array.isArray(parts)) {
-          return parts.map((p: any) => {
+          const text = parts.map((p: any) => {
             if (p.type === "text") return p.text;
             if (p.type === "tool-call") return `[tool: ${p.toolName}]`;
             if (p.type === "image") return `[image]`;
             if (p.type === "file") return `[file: ${p.filename || p.mediaType || "file"}]`;
             return "";
           }).filter(Boolean).join(" ");
+          // Cap like the other branches — an assistant reply or user paste of
+          // any length lands here, and uncapped it can break the batch.
+          return text.length > MAX_MESSAGE_CHARS
+            ? capForEmbedding(text, MAX_MESSAGE_CHARS) + "..."
+            : text;
         }
       } catch {
-        return content.length > 500 ? content.slice(0, 500) + "..." : content;
+        return content.length > 500 ? capForEmbedding(content, 500) + "..." : content;
       }
     }
-    return content.length > 500 ? content.slice(0, 500) + "..." : content;
+    return content.length > 500 ? capForEmbedding(content, 500) + "..." : content;
   }
 
   /**
@@ -686,14 +702,51 @@ export class SegmentIndex {
   private async embedTexts(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
     for (let b = 0; b < texts.length; b += EMBED_BATCH_SIZE) {
-      const batch = texts.slice(b, b + EMBED_BATCH_SIZE);
-      const result = await embedMany({ model: this.embeddingModel, values: batch });
-      embeddings.push(...result.embeddings);
+      const batch = texts.slice(b, b + EMBED_BATCH_SIZE).map((t) => capForEmbedding(t));
+      try {
+        const result = await embedMany({ model: this.embeddingModel, values: batch });
+        embeddings.push(...result.embeddings);
+      } catch (err) {
+        // One rejected value fails the whole batch, and indexSession then
+        // throws without advancing segment_state — the same messages get
+        // retried forever, freezing segmentation for good. Fall back to
+        // one-at-a-time so a single bad window can't take out 99 good ones.
+        log.warn("segments", `embed batch failed (${err instanceof Error ? err.message : String(err)}) — retrying values individually`);
+        for (const value of batch) {
+          embeddings.push(await this.embedOne(value));
+        }
+      }
       if (texts.length > EMBED_BATCH_SIZE) {
         log.debug("segments", `embedded batch ${Math.floor(b / EMBED_BATCH_SIZE) + 1}/${Math.ceil(texts.length / EMBED_BATCH_SIZE)}`);
       }
     }
     return embeddings;
+  }
+
+  /**
+   * Embed a single value, halving it until the provider accepts it.
+   *
+   * Character caps can't guarantee a token limit (rare glyphs run up to 4
+   * tokens per UTF-16 code unit), so the only reliable way to stay under it
+   * is to let the provider tell us. Boundary detection only needs the window
+   * to be representative, so trimming a pathological one is a fair trade for
+   * segmentation continuing to advance.
+   */
+  private async embedOne(value: string): Promise<number[]> {
+    let chars = Math.min(value.length, EMBED_MAX_CHARS);
+    for (;;) {
+      try {
+        const { embedding } = await embed({
+          model: this.embeddingModel,
+          value: capForEmbedding(value, chars),
+        });
+        return embedding;
+      } catch (err) {
+        if (chars <= EMBED_MIN_CHARS) throw err;
+        chars = Math.max(EMBED_MIN_CHARS, Math.floor(chars / 2));
+        log.warn("segments", `embed value rejected — retrying at ${chars} chars`);
+      }
+    }
   }
 
   /**
@@ -718,13 +771,17 @@ export class SegmentIndex {
   }
 
   /**
-   * Return sorted L0 segment msg_start values for a session.
+   * Return sorted L0 segment msg_end values (exclusive) for a session.
    * Used to snap trim boundaries to stable segment edges for cache stability.
+   *
+   * With summarizedOnly, only segments whose summary has been generated are
+   * returned — composeHistory() can only inject summarized=1 segments, so
+   * coverage checks must not count segments that are merely segmented (#311).
    */
-  getL0Boundaries(sessionId: string): number[] {
+  getL0Boundaries(sessionId: string, summarizedOnly = false): number[] {
     const rows = this.db.prepare(
       `SELECT msg_end FROM semantic_segments
-       WHERE session_id = ? AND level = 0
+       WHERE session_id = ? AND level = 0${summarizedOnly ? " AND summarized = 1" : ""}
        ORDER BY msg_end ASC`
     ).all(sessionId) as Array<{ msg_end: number }>;
     return rows.map(r => r.msg_end);

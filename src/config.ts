@@ -152,7 +152,7 @@ export async function loadConfig(agentDir: string): Promise<KernConfig> {
   // Load .kern/.env
   const envPath = join(agentDir, ".kern", ".env");
   if (existsSync(envPath)) {
-    loadDotenv({ path: envPath });
+    loadDotenv({ path: envPath, override: true });
   }
 
   // Load .kern/config.json

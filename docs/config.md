@@ -88,7 +88,7 @@ Env vars take priority over `config.json`. Overrides are logged on startup.
 
 ## Per-agent: .kern/.env
 
-Secrets. Gitignored. Never committed.
+Secrets. Gitignored. Never committed. Values here override inherited environment variables — the agent's own `.env` is authoritative, so don't set the same variable in both.
 
 ```
 OPENROUTER_API_KEY=sk-or-...

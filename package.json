@@ -1,6 +1,6 @@
 {
   "name": "kern-ai",
-  "version": "0.32.0-next",
+  "version": "0.32.5",
   "description": "Simple agent runtime. Persistent memory, tools, Telegram.",
   "type": "module",
   "bin": {
@@ -20,7 +20,8 @@
     "build:web": "cd web && npm run build",
     "prepublishOnly": "npm run build",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "tsx --test test/*.test.ts"
   },
   "keywords": [
     "ai",
