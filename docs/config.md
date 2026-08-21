@@ -34,7 +34,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `autoRecall` | `false` | Automatically inject relevant old context before each turn. Requires recall enabled. |
 | `mediaDigest` | `true` | Enable media pre-digest: describes images (vision model) and transcribes audio (audio model) on arrival, caches results, and replaces raw media with text in context. Set to `false` to disable the entire digest pipeline. |
 | `mediaModel` | `""` | Vision model for media descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default. Example: `"openai/gpt-4.1-mini"`. |
-| `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.1-flash-lite` on OpenRouter, `gpt-audio-mini` on OpenAI; none for anthropic/ollama — set this field explicitly). |
+| `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.7-flash` via OpenRouter for anthropic/ollama/openai agents with `OPENROUTER_API_KEY` set. Setting this field skips the (usually failing) attempt on the text-only chat model. |
 | `mediaContext` | `0` | How many recent turns resolve raw media Buffers to the model. `0` = never send raw binary (text descriptions or placeholders only). Applies to all media types — useful for non-image files like PDFs on models with native support. |
 | `mcpServers` | `{}` | Model Context Protocol servers. Tools namespaced as `<server>__<tool>`. See [MCP](mcp.md). |
 

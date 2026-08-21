@@ -3,14 +3,14 @@ import { z } from "zod";
 import { readFile } from "fs/promises";
 import { join, extname } from "path";
 import { existsSync, statSync } from "fs";
-import { createAudioModel } from "../model.js";
+import { createAudioModel, type AudioModelRef } from "../model.js";
 import { loadConfig } from "../config.js";
 import type { KernConfig } from "../config.js";
 
 export const AUDIO_EXT_TO_MIME: Record<string, string> = {
   ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/opus",
   ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
-  ".aac": "audio/aac", ".flac": "audio/flac", ".mp4": "audio/mp4",
+  ".aac": "audio/aac", ".flac": "audio/flac",
   ".webm": "audio/webm", ".aiff": "audio/aiff",
 };
 
@@ -19,9 +19,13 @@ export const AUDIO_EXT_TO_MIME: Record<string, string> = {
  * The main chat model usually can't hear audio (Claude/GPT-5.x text models
  * reject audio parts), so this fallback matters more than it does for vision.
  * Gemini accepts ogg/opus natively — no transcoding needed for Telegram voice.
+ *
+ * Note: the openai entry only works for wav/mp3 — the generic OpenAI shim
+ * doesn't map ogg/opus file parts. Telegram voice notes on an openai agent
+ * rely on the cross-provider OpenRouter fallback below.
  */
 export const AUDIO_FALLBACKS: Record<string, string> = {
-  openrouter: "google/gemini-3.1-flash-lite",
+  openrouter: "google/gemini-3.7-flash",
   openai: "gpt-audio-mini",
 };
 
@@ -30,16 +34,32 @@ export const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // 20 MB
 
 /**
  * Build the model fallback chain for audio.
- * Order: audioModel (if set) → agent model → hardcoded provider fallback.
+ * Order: audioModel (if set) → agent model → provider fallback →
+ * cross-provider OpenRouter fallback (when OPENROUTER_API_KEY is set).
+ *
+ * The cross-provider entry is what gives anthropic/ollama/openai agents a
+ * working audio path: their own providers either have no audio-capable
+ * models (Anthropic) or reject ogg/opus (generic OpenAI shim), so the last
+ * resort is Gemini routed through the OpenRouter-native provider.
  * Deduplicates while preserving order.
  */
-export function getAudioModelChain(config: KernConfig): string[] {
-  const chain: string[] = [];
-  if (config.audioModel) chain.push(config.audioModel);
-  chain.push(config.model);
+export function getAudioModelChain(config: KernConfig): AudioModelRef[] {
+  const isOpenRouter = config.provider === "openrouter";
+  const chain: AudioModelRef[] = [];
+  if (config.audioModel) chain.push({ modelId: config.audioModel, viaOpenRouter: isOpenRouter });
+  chain.push({ modelId: config.model, viaOpenRouter: isOpenRouter });
   const fallback = AUDIO_FALLBACKS[config.provider];
-  if (fallback) chain.push(fallback);
-  return [...new Set(chain)];
+  if (fallback) chain.push({ modelId: fallback, viaOpenRouter: isOpenRouter });
+  if (!isOpenRouter && process.env.OPENROUTER_API_KEY) {
+    chain.push({ modelId: AUDIO_FALLBACKS.openrouter, viaOpenRouter: true });
+  }
+  const seen = new Set<string>();
+  return chain.filter((ref) => {
+    const key = `${ref.viaOpenRouter}:${ref.modelId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export const audioTool = tool({
@@ -82,9 +102,9 @@ export const audioTool = tool({
       const chain = getAudioModelChain(config);
 
       let lastError = "";
-      for (const modelId of chain) {
+      for (const ref of chain) {
         try {
-          const model = createAudioModel(config, modelId);
+          const model = createAudioModel(config, ref);
           const result = await generateText({
             model,
             messages: [
@@ -100,9 +120,9 @@ export const audioTool = tool({
           });
           const text = result.text.trim();
           if (text) return text;
-          lastError = `empty response from ${modelId}`;
+          lastError = `empty response from ${ref.modelId}`;
         } catch (e: any) {
-          lastError = `${modelId}: ${e.message}`;
+          lastError = `${ref.modelId}: ${e.message}`;
         }
       }
       return `Error: all audio models failed — ${lastError}`;

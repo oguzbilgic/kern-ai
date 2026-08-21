@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, sta
 import { join, extname } from "path";
 import { generateText, type ModelMessage, type UserContent } from "ai";
 import { log } from "../../log.js";
-import { createModel, createAudioModel } from "../../model.js";
+import { createModel, createAudioModel, type AudioModelRef } from "../../model.js";
 import type { KernConfig } from "../../config.js";
 import type { MemoryDB } from "../../memory.js";
 import { getAudioModelChain, MAX_AUDIO_BYTES } from "../../tools/audio.js";
@@ -279,25 +279,30 @@ export async function digestMediaAtIngest(
     log.warn("media", `cannot read ${file} for digest: ${err}`);
     return null;
   }
-  const chain = isAudio ? getAudioModelChain(config) : getDigestModelChain(config);
+  // Audio chain entries carry explicit routing (AudioModelRef); the image
+  // chain is plain model IDs on the agent's own provider.
+  const chain: (string | AudioModelRef)[] = isAudio
+    ? getAudioModelChain(config)
+    : getDigestModelChain(config);
   const contentPart = isAudio
     ? ({ type: "file", data: buf, mediaType: mimeType } as const)
     : ({ type: "image", image: buf, mediaType: mimeType } as const);
   const digestPrompt = isAudio
     ? "Transcribe this audio verbatim. If it is not speech, briefly describe what you hear."
     : "Describe this image.";
-  const maxTokens = isAudio ? 2000 : 300;
+  const maxTokens = isAudio ? 4000 : 300;
 
   // Ollama thinking models blow the 300-token budget on reasoning before
   // emitting any description. Disable thinking defensively.
   const isOllama = config.provider === "ollama";
 
-  for (const modelId of chain) {
+  for (const entry of chain) {
+    const modelId = typeof entry === "string" ? entry : entry.modelId;
     try {
       log("media", `digesting ${file} with ${modelId}...`);
-      const digestModel = isAudio
-        ? createAudioModel(config, modelId)
-        : createModel({ ...config, model: modelId });
+      const digestModel = typeof entry === "string"
+        ? createModel({ ...config, model: modelId })
+        : createAudioModel(config, entry);
 
       const result = await generateText({
         model: digestModel,
@@ -438,7 +443,7 @@ export async function resolveMediaInMessages(
           if (digestEnabled && (isImage || isAudio)) {
             let description = sidecar.getDescription(filename);
             if (!description) {
-              const mimeType = part.mediaType || (isAudio ? "audio/unknown" : "image/unknown");
+              const mimeType = part.mediaType || "image/unknown";
               try {
                 description = await digestMediaAtIngest(sidecar, agentDir, filename, mimeType, config);
               } catch (err) {
