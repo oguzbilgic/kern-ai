@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { embed } from "ai";
 import type { KernConfig } from "./config.js";
+import { log } from "./log.js";
 
 /** Normalized OPENAI_BASE_URL — trimmed, trailing slashes stripped, undefined if unset/empty. */
 function openaiBaseURL(): string | undefined {
@@ -87,7 +88,10 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
  * needs an OpenRouter-style ID (e.g. `anthropic/claude-haiku-4.5`).
  *
  * Model selection:
- * - If `config.summaryModel` is set, use it.
+ * - If `config.summaryModel` is set, use it. For ollama/openai agents, a
+ *   namespaced ID (contains `/`, e.g. `openai/gpt-4.1-mini`) is routed via
+ *   OpenRouter when OPENROUTER_API_KEY is set — the agent's own provider
+ *   can't serve those IDs. Ollama `hf.co/...` IDs stay local.
  * - Otherwise, use a provider-specific default:
  *   - openai: gpt-4.1-mini
  *   - anthropic: anthropic/claude-haiku-4.5 (via OpenRouter)
@@ -99,12 +103,50 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
  * model — thinking models burn the output budget on reasoning tokens and
  * return empty summaries.
  */
+/**
+ * True when an explicit `summaryModel` should be routed through OpenRouter
+ * instead of the agent's own provider client. Applies to ollama/openai
+ * agents whose provider can't serve an OpenRouter-style namespaced ID
+ * (e.g. `openai/gpt-4.1-mini`). Requires OPENROUTER_API_KEY. Ollama's own
+ * namespaced IDs (`hf.co/...`) are excluded and stay local.
+ */
+export function summaryViaOpenRouter(config: KernConfig): boolean {
+  if (!config.summaryModel) return false;
+  if (config.provider !== "ollama" && config.provider !== "openai") return false;
+  if (!process.env.OPENROUTER_API_KEY) return false;
+  const id = config.summaryModel;
+  if (id.startsWith("hf.co/") || id.startsWith("huggingface.co/")) return false;
+  return id.includes("/");
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createSummaryModel(config: KernConfig): any {
+  if (summaryViaOpenRouter(config)) {
+    const orClient = createOpenAIClient("openrouter");
+    if (orClient) return orClient.chat(config.summaryModel);
+  }
+
   const client = createOpenAIClient(config.provider);
   if (!client) return null;
 
-  if (config.summaryModel) return client.chat(config.summaryModel);
+  if (config.summaryModel) {
+    // Namespaced ID on ollama/openai without an OpenRouter key: the agent's
+    // own provider can't serve it — warn instead of failing silently in the
+    // background summarization loop.
+    if (
+      (config.provider === "ollama" || config.provider === "openai") &&
+      config.summaryModel.includes("/") &&
+      !config.summaryModel.startsWith("hf.co/") &&
+      !config.summaryModel.startsWith("huggingface.co/") &&
+      !process.env.OPENROUTER_API_KEY
+    ) {
+      log.warn(
+        "model",
+        `summaryModel "${config.summaryModel}" looks like an OpenRouter ID but OPENROUTER_API_KEY is not set — routing to ${config.provider}, which will likely fail`
+      );
+    }
+    return client.chat(config.summaryModel);
+  }
 
   switch (config.provider) {
     case "openai":

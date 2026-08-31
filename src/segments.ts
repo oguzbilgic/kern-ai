@@ -1,7 +1,7 @@
 import { embed, embedMany, generateText } from "ai";
 import { log } from "./log.js";
 import { extractText, capForEmbedding, EMBED_MAX_CHARS } from "./util.js";
-import { createEmbeddingModel, createSummaryModel } from "./model.js";
+import { createEmbeddingModel, createSummaryModel, summaryViaOpenRouter } from "./model.js";
 import type { KernConfig } from "./config.js";
 import type { MemoryDB } from "./memory.js";
 import type Database from "better-sqlite3";
@@ -180,7 +180,9 @@ export class SegmentIndex {
     this.summaryModel = sumModel;
 
     this.summaryProviderOptions =
-      config.provider === "ollama" ? { openai: { think: false } } : undefined;
+      config.provider === "ollama" && !summaryViaOpenRouter(config)
+        ? { openai: { think: false } }
+        : undefined;
   }
 
   /**
