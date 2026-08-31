@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.33.1 (2026-08-31)
 
 ### Fixes
 - **`summaryModel` can now offload summaries from local-model agents** — on `ollama` and `openai` agents, a namespaced `summaryModel` ID (e.g. `openai/gpt-4.1-mini`) routes via OpenRouter when `OPENROUTER_API_KEY` is set. Previously the ID was sent to the agent's own provider, so an Ollama agent couldn't point summaries at a cloud model at all — background summarization competed with chat for the single local GPU slot, starving both. Ollama `hf.co/...` IDs still route locally.
