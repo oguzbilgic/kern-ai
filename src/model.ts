@@ -87,7 +87,10 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
  * needs an OpenRouter-style ID (e.g. `anthropic/claude-haiku-4.5`).
  *
  * Model selection:
- * - If `config.summaryModel` is set, use it.
+ * - If `config.summaryModel` is set, use it. For ollama/openai agents, a
+ *   namespaced ID (contains `/`, e.g. `openai/gpt-4.1-mini`) is routed via
+ *   OpenRouter when OPENROUTER_API_KEY is set — the agent's own provider
+ *   can't serve those IDs. Ollama `hf.co/...` IDs stay local.
  * - Otherwise, use a provider-specific default:
  *   - openai: gpt-4.1-mini
  *   - anthropic: anthropic/claude-haiku-4.5 (via OpenRouter)
@@ -99,8 +102,34 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
  * model — thinking models burn the output budget on reasoning tokens and
  * return empty summaries.
  */
+/**
+ * True when an explicit `summaryModel` should be routed through OpenRouter
+ * instead of the agent's own provider client. Applies to ollama/openai
+ * agents whose provider can't serve an OpenRouter-style namespaced ID
+ * (e.g. `openai/gpt-4.1-mini`). Requires OPENROUTER_API_KEY. Ollama's own
+ * namespaced IDs (`hf.co/...`) are excluded and stay local.
+ */
+export function summaryViaOpenRouter(config: KernConfig): boolean {
+  if (!config.summaryModel) return false;
+  if (config.provider !== "ollama" && config.provider !== "openai") return false;
+  if (!process.env.OPENROUTER_API_KEY) return false;
+  const id = config.summaryModel;
+  if (id.startsWith("hf.co/") || id.startsWith("huggingface.co/")) return false;
+  return id.includes("/");
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createSummaryModel(config: KernConfig): any {
+  if (summaryViaOpenRouter(config)) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    const orClient = createOpenAI({
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey,
+      headers: OPENROUTER_HEADERS,
+    });
+    return orClient.chat(config.summaryModel);
+  }
+
   const client = createOpenAIClient(config.provider);
   if (!client) return null;
 
