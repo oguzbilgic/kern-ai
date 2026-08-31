@@ -1,11 +1,22 @@
-import { test } from "node:test";
+import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { summaryViaOpenRouter } from "../src/model.js";
-import type { KernConfig } from "../src/config.js";
+import { configDefaults, type KernConfig } from "../src/config.js";
 
 function cfg(overrides: Partial<KernConfig>): KernConfig {
-  return { provider: "ollama", model: "gemma4:26b", summaryModel: "" , ...overrides } as KernConfig;
+  return { ...configDefaults, provider: "ollama", model: "gemma4:26b", ...overrides };
 }
+
+let savedKey: string | undefined;
+
+beforeEach(() => {
+  savedKey = process.env.OPENROUTER_API_KEY;
+});
+
+afterEach(() => {
+  if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY;
+  else process.env.OPENROUTER_API_KEY = savedKey;
+});
 
 test("summaryViaOpenRouter: ollama + namespaced ID + key → true", () => {
   process.env.OPENROUTER_API_KEY = "test-key";

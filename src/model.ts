@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { embed } from "ai";
 import type { KernConfig } from "./config.js";
+import { log } from "./log.js";
 
 /** Normalized OPENAI_BASE_URL — trimmed, trailing slashes stripped, undefined if unset/empty. */
 function openaiBaseURL(): string | undefined {
@@ -121,19 +122,31 @@ export function summaryViaOpenRouter(config: KernConfig): boolean {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createSummaryModel(config: KernConfig): any {
   if (summaryViaOpenRouter(config)) {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    const orClient = createOpenAI({
-      baseURL: "https://openrouter.ai/api/v1",
-      apiKey,
-      headers: OPENROUTER_HEADERS,
-    });
-    return orClient.chat(config.summaryModel);
+    const orClient = createOpenAIClient("openrouter");
+    if (orClient) return orClient.chat(config.summaryModel);
   }
 
   const client = createOpenAIClient(config.provider);
   if (!client) return null;
 
-  if (config.summaryModel) return client.chat(config.summaryModel);
+  if (config.summaryModel) {
+    // Namespaced ID on ollama/openai without an OpenRouter key: the agent's
+    // own provider can't serve it — warn instead of failing silently in the
+    // background summarization loop.
+    if (
+      (config.provider === "ollama" || config.provider === "openai") &&
+      config.summaryModel.includes("/") &&
+      !config.summaryModel.startsWith("hf.co/") &&
+      !config.summaryModel.startsWith("huggingface.co/") &&
+      !process.env.OPENROUTER_API_KEY
+    ) {
+      log.warn(
+        "model",
+        `summaryModel "${config.summaryModel}" looks like an OpenRouter ID but OPENROUTER_API_KEY is not set — routing to ${config.provider}, which will likely fail`
+      );
+    }
+    return client.chat(config.summaryModel);
+  }
 
   switch (config.provider) {
     case "openai":
