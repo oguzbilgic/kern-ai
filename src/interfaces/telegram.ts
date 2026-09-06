@@ -23,21 +23,6 @@ export function mdToHtml(text: string): string {
     return `__CODE_BLOCK_${idx}__`;
   });
 
-  // Convert markdown tables into <pre> blocks before other replacements
-  const tableRegex =
-    /((?:^[ \t]*\|.+?\|[ \t]*\n)(?:^[ \t]*\|[ \t]*:?[-]+:?[ \t]*(?:\|[ \t]*:?[-]+:?[ \t]*)*\|[ \t]*\n)(?:^[ \t]*\|.+?\|[ \t]*(?:\n|$))+)/gm;
-  html = html.replace(tableRegex, (match) => {
-    const idx = codeBlocks.length;
-    codeBlocks.push(`<pre>${escapeHtml(match.trim())}</pre>`);
-    return `\n__CODE_BLOCK_${idx}__\n`;
-  });
-
-  // Convert markdown headers (# Header -> <b>Header</b>)
-  html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
-
-  // Remove horizontal rules (--- or *** or ___)
-  html = html.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, "");
-
   // Protect inline code
   const inlineCodes: string[] = [];
   html = html.replace(/`([^`]+)`/g, (_, code) => {
@@ -76,13 +61,11 @@ export function stripMarkdown(text: string): string {
   let plain = text;
   plain = plain.replace(/```\w*\n([\s\S]*?)```/g, "$1");
   plain = plain.replace(/`([^`]+)`/g, "$1");
-  plain = plain.replace(/^#{1,6}\s+(.+)$/gm, "$1");
   plain = plain.replace(/\*\*(.+?)\*\*/g, "$1");
   plain = plain.replace(/(?<![*])(\*)(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$2");
   plain = plain.replace(/~~(.+?)~~/g, "$1");
   plain = plain.replace(/^[ \t]*- /gm, "• ");
   plain = plain.replace(/^> /gm, "");
-  plain = plain.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, "");
   return plain;
 }
 
