@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.33.2 (unreleased)
+
+### Fixes
+- **Telegram HTML escaping and interface prompt guidelines** — safely escapes HTML entities inside code blocks and inline code to prevent Telegram 400 Bad Request entity parsing errors. Updated `KERN.md` interface guidelines with clear Telegram formatting rules (avoid markdown headers and tables; use bold and monospace code blocks instead).
+
 ## 0.33.1 (2026-08-31)
 
 ### Fixes
