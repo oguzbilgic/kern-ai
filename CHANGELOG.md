@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.33.2 (unreleased)
+
+### Fixes
+- **Telegram markdown formatting no longer degrades to raw text on headers, tables, and rules** — Telegram's HTML parser rejected messages with unsupported markdown syntax (headers, tables, horizontal lines), silently falling back to unformatted plain text. `mdToHtml` now automatically converts markdown headers (`#`–`######`) to bold, wraps markdown tables in `<pre>` monospace blocks to keep columns aligned, strips horizontal dividers, and safely escapes HTML entities inside code blocks. Updated `KERN.md` interface guidelines for Telegram formatting.
+
 ## 0.33.1 (2026-08-31)
 
 ### Fixes

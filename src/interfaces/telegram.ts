@@ -7,14 +7,44 @@ import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
-function mdToHtml(text: string): string {
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function mdToHtml(text: string): string {
   let html = text;
 
-  // Code blocks first — protect from other replacements
-  html = html.replace(/```\w*\n([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
+  // Protect code blocks first
+  const codeBlocks: string[] = [];
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    const tag = lang ? `<pre><code class="language-${lang}">` : "<pre><code>";
+    codeBlocks.push(`${tag}${escapeHtml(code)}</code></pre>`);
+    return `__CODE_BLOCK_${idx}__`;
+  });
 
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  // Convert markdown tables into <pre> blocks before other replacements
+  const tableRegex =
+    /((?:^[ \t]*\|.+?\|[ \t]*\n)(?:^[ \t]*\|[ \t]*:?[-]+:?[ \t]*(?:\|[ \t]*:?[-]+:?[ \t]*)*\|[ \t]*\n)(?:^[ \t]*\|.+?\|[ \t]*(?:\n|$))+)/gm;
+  html = html.replace(tableRegex, (match) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(`<pre>${escapeHtml(match.trim())}</pre>`);
+    return `\n__CODE_BLOCK_${idx}__\n`;
+  });
+
+  // Convert markdown headers (# Header -> <b>Header</b>)
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
+
+  // Remove horizontal rules (--- or *** or ___)
+  html = html.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, "");
+
+  // Protect inline code
+  const inlineCodes: string[] = [];
+  html = html.replace(/`([^`]+)`/g, (_, code) => {
+    const idx = inlineCodes.length;
+    inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
+    return `__INLINE_CODE_${idx}__`;
+  });
 
   // Bold: **...** → <b>...</b>
   html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
@@ -26,25 +56,33 @@ function mdToHtml(text: string): string {
   html = html.replace(/~~(.+?)~~/g, "<s>$1</s>");
 
   // Lists: - item → • item
-  html = html.replace(/^- /gm, "• ");
+  html = html.replace(/^[ \t]*- /gm, "• ");
 
   // Blockquotes: > line
   html = html.replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>");
   // Merge adjacent blockquotes
   html = html.replace(/<\/blockquote>\n<blockquote>/g, "\n");
 
+  // Restore inline code
+  html = html.replace(/__INLINE_CODE_(\d+)__/g, (_, idx) => inlineCodes[Number(idx)]);
+
+  // Restore code blocks
+  html = html.replace(/__CODE_BLOCK_(\d+)__/g, (_, idx) => codeBlocks[Number(idx)]);
+
   return html;
 }
 
-function stripMarkdown(text: string): string {
+export function stripMarkdown(text: string): string {
   let plain = text;
   plain = plain.replace(/```\w*\n([\s\S]*?)```/g, "$1");
   plain = plain.replace(/`([^`]+)`/g, "$1");
+  plain = plain.replace(/^#{1,6}\s+(.+)$/gm, "$1");
   plain = plain.replace(/\*\*(.+?)\*\*/g, "$1");
   plain = plain.replace(/(?<![*])(\*)(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$2");
   plain = plain.replace(/~~(.+?)~~/g, "$1");
-  plain = plain.replace(/^- /gm, "• ");
+  plain = plain.replace(/^[ \t]*- /gm, "• ");
   plain = plain.replace(/^> /gm, "");
+  plain = plain.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, "");
   return plain;
 }
 
