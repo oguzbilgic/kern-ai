@@ -1,6 +1,6 @@
 {
   "name": "kern-ai",
-  "version": "0.33.2-next",
+  "version": "0.33.1-next",
   "description": "Simple agent runtime. Persistent memory, tools, Telegram.",
   "type": "module",
   "bin": {
