@@ -353,9 +353,9 @@ export class NostrInterface implements Interface {
   }
 
   /**
-   * Broadcast NIP-65 (kind 10002) relay list and NIP-17 (kind 10050) DM relay list.
-   * Both are replaceable events so clients (Coracle, Jumble, Amethyst) know where
-   * to send DMs to reach this agent without guessing or manual relay configuration.
+   * Broadcast NIP-65 (kind 10002) relay list, NIP-17 (kind 10050) DM relay list,
+   * and Kind 10044 encryption key announcement.
+   * Clients like Jumble gate starting DMs on both kind 10050 AND kind 10044.
    */
   async announceRelays(): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
@@ -382,14 +382,26 @@ export class NostrInterface implements Interface {
       this.sk,
     );
 
+    // Kind 10044: Encryption Key Announcement
+    const kind10044 = finalizeEvent(
+      {
+        kind: 10044,
+        created_at: now,
+        tags: [["n", this.pk]],
+        content: "",
+      },
+      this.sk,
+    );
+
     const targets = [...this.relays.values()].filter((r) => r.connected);
     if (targets.length === 0) return;
 
     await Promise.allSettled([
       ...targets.map((r) => r.publish(nip65)),
       ...targets.map((r) => r.publish(nip17)),
+      ...targets.map((r) => r.publish(kind10044)),
     ]);
-    log("nostr", `announced relay list (kinds 10002, 10050) to ${targets.length} relay(s)`);
+    log("nostr", `announced metadata (kinds 10002, 10050, 10044) to ${targets.length} relay(s)`);
   }
 }
 
