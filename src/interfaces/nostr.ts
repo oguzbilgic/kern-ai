@@ -81,6 +81,8 @@ export class NostrInterface implements Interface {
   private announced = false;
   // Remember if a sender talked via NIP-17 (gift wrap) or legacy NIP-04
   private senderMode = new Map<string, "nip17" | "nip04">();
+  // Remember if a sender used a device/encryption pubkey for NIP-17
+  private senderEncKey = new Map<string, string>();
 
   constructor(nsec: string, relays: string[], pairing?: PairingManager) {
     this.sk = decodeSecretKey(nsec);
@@ -235,6 +237,7 @@ export class NostrInterface implements Interface {
       try {
         // First try standard nostr-tools unwrapEvent
         let rumor: any;
+        let senderEncPk: string | undefined;
         try {
           rumor = nip17.unwrapEvent(ev as any, this.sk);
           senderPk = rumor.pubkey;
@@ -247,6 +250,7 @@ export class NostrInterface implements Interface {
 
           const nTag = seal.tags?.find((t: string[]) => t[0] === "n")?.[1];
           const senderEncryptionPubkey = nTag ?? seal.pubkey;
+          senderEncPk = senderEncryptionPubkey;
 
           const sealConvKey = nip44.v2.utils.getConversationKey(this.sk, senderEncryptionPubkey);
           const rumorJson = nip44.v2.decrypt(seal.content, sealConvKey);
@@ -258,6 +262,7 @@ export class NostrInterface implements Interface {
         text = rumor.content;
         mode = "nip17";
         if (rumor.id) this.remember(rumor.id);
+        if (senderEncPk) this.senderEncKey.set(senderPk, senderEncPk);
       } catch (err: any) {
         log.warn("nostr", `unwrap gift wrap failed for ${ev.id.slice(0, 8)}: ${err.message || err}`);
         return;
@@ -337,7 +342,9 @@ export class NostrInterface implements Interface {
 
     if (mode === "nip17") {
       // NIP-17 / NIP-59: Gift wrap (kind 1059) containing rumor (kind 14)
-      event = nip17.wrapEvent(this.sk, { publicKey: toPk }, text) as NostrEvent;
+      // If recipient used a client with custom encryption pubkey (like Jumble / NIP-4e), wrap to that key.
+      const recipientEncryptionPk = this.senderEncKey.get(toPk) || toPk;
+      event = nip17.wrapEvent(this.sk, { publicKey: recipientEncryptionPk }, text) as NostrEvent;
     } else {
       // Legacy NIP-04 (kind 4)
       const content = nip04.encrypt(this.sk, toPk, text);
