@@ -38,6 +38,12 @@ export interface KernConfig {
   telegramTools: boolean;
   /** Nostr relay URLs. Empty array = built-in public defaults. Overridable via NOSTR_RELAYS. */
   nostrRelays: string[];
+  /**
+   * IRC connection URL(s): `irc://nick@host:6667/#chan` or
+   * `ircs://nick:pass@host:6697/#a,#b`. Whitespace-separate for multiple
+   * servers. Empty = IRC disabled. Overridable via IRC_URL.
+   */
+  irc: string;
 
   // Runtime
   heartbeatInterval: number;
@@ -92,6 +98,7 @@ export const configDefaults: KernConfig = {
   mediaContext: 0,
   telegramTools: false,
   nostrRelays: [],
+  irc: "",
   heartbeatInterval: 60,
   timezone: "",
 };
@@ -116,6 +123,7 @@ const FIELD_TYPES: Record<string, string> = {
   mediaContext: "number",
   telegramTools: "boolean",
   nostrRelays: "string[]",
+  irc: "string",
   heartbeatInterval: "number",
   timezone: "string",
   mcpServers: "object",

@@ -17,6 +17,7 @@ Examples from human interfaces:
 [via slack, #engineering, user: U04ABC, time: 2026-04-06T14:30:00-07:00]
 [via matrix, matrix:!abc:example.com, user: @oguz:example.com, time: 2026-04-16T21:00:00-07:00]
 [via nostr, nostr:npub1n03…p2sku, user: npub1n03…p2sku, time: 2026-09-06T18:30:00-07:00]
+[via irc, irc:irc.example.com/#homelab, user: irc:irc.example.com/oguz, time: 2026-09-07T13:05:00-07:00]
 [via web, web, user: tui, time: 2026-04-06T14:30:00-07:00]
 [via tui, tui, user: tui, time: 2026-04-06T14:30:00-07:00]
 ```
@@ -40,6 +41,7 @@ The agent sees who's talking, from which channel, and when — and adapts behavi
 | `slack` | `#channel-name` or `slack:<Dxxx>` | `src/interfaces/slack.ts` | Slack user |
 | `matrix` | `matrix:<roomId>` | `src/interfaces/matrix.ts` | Matrix user |
 | `nostr` | `nostr:<npub>` | `src/interfaces/nostr.ts` | Nostr DM sender |
+| `irc` | `irc:<host>/<target>` | `src/interfaces/irc.ts` | IRC user (DM or channel) |
 | `cli` | `cli` | `src/interfaces/cli.ts` | CLI invocation |
 | `web` | `web` | HTTP POST to `/message` | Web UI user |
 | `tui` | `tui` | HTTP POST to `/message` | TUI client |
@@ -120,6 +122,7 @@ How each interface populates the internal message fields and SSE events:
 | slack | `message.user` | `message.channel` | `#<name>` (channel) or `slack-dm` (DM) | `slack` |
 | matrix | `event.sender` (mxid) | `roomId` | `matrix:<roomId>` | `matrix` |
 | nostr | sender `npub` | sender `npub` | `nostr:<npub>` | `nostr` |
+| irc | `irc:<host>/<account>` or `irc:<host>/~<nick>` | `<host>/<nick-or-channel>` | `irc:<host>/<nick-or-channel>` | `irc` |
 | cli | `"cli"` | `"cli"` | `"terminal"` | `cli` |
 | tui | `"tui"` | — | `"tui"` | `tui` |
 | web | `"tui"` | — | `"web"` | `web` |
@@ -128,6 +131,7 @@ Notes:
 - Slack channel names are resolved via `conversations.info` — DMs use `slack-dm`, channels use `#<channel-name>`.
 - Matrix room IDs are opaque (`!abc:example.com`); the channel label prefixes them with `matrix:`.
 - Nostr DMs have no room concept — a conversation *is* the counterparty, so `userId` and `chatId` are both the sender's `npub`.
+- IRC nicks are not identities — anyone can claim one. The `userId` is keyed on the server-verified account from the IRCv3 `account-tag`; an unauthenticated sender gets `~<nick>` instead and is never auto-paired. Both are namespaced by server host so multiple IRC networks can't collide.
 - TUI and web submit messages over HTTP without a `chatId` — they always represent the operator.
 
 ## TUI
@@ -314,7 +318,7 @@ The agent's `npub` is logged at startup (`[nostr] identity npub1…`).
 
 ### Behavior
 
-- **NIP-04 encrypted DMs (kind 4)** in and out — the DM format every client supports. Relays see ciphertext only.
+- **Both DM formats** in and out: modern NIP-17 gift-wrapped DMs (kind 1059, NIP-44 encryption, sender and recipient hidden from relays) and legacy NIP-04 (kind 4, every client supports it). Replies go back in whichever format the sender used.
 - **Multi-relay.** Subscribes to every configured relay, dedupes by event id, publishes replies to all connected relays. One reachable relay is enough.
 - **Reconnects** with backoff. Missed DMs are replayed on resubscribe (`since` cursor), so a relay blip doesn't lose messages.
 - **Pairing** works like Telegram/Slack DMs — gated per sender `npub`. The `message` tool can DM any paired `npub` proactively.
@@ -323,6 +327,70 @@ The agent's `npub` is logged at startup (`[nostr] identity npub1…`).
 ### Limitations (MVP)
 
 - **No group channels** (NIP-28 kind 42 / NIP-29). DMs only.
-- **No NIP-44 / gift-wrap (NIP-17).** NIP-04 leaks sender/recipient metadata to relays (not content). Fine on a private relay; on public relays assume the *fact* that you talk to the agent is visible.
+- **NIP-04 leaks metadata.** Kind 4 exposes sender and recipient to relays (not content). Clients that only speak NIP-04 get that tradeoff; NIP-17 senders don't.
 - **No media, reactions, or typing indicators.** Plain text turns only.
 - **Relay size limits.** Public relays cap events around 64–100 KB; very long replies may be rejected by some relays (publish succeeds if any relay accepts).
+
+## IRC
+
+Plain IRC — any network, or your own server on the tailnet. No dependencies beyond Node's `net`/`tls`: raw protocol with IRCv3 capability negotiation.
+
+- Interface: `irc`, channel: `irc:<host>/<target>`, user: `irc:<host>/<account>`
+
+### Setup
+
+1. Set a connection URL in `.kern/config.json`:
+   ```json
+   "irc": "ircs://myagent@irc.example.com:6697/#homelab"
+   ```
+   `IRC_URL=...` in `.env` overrides it (useful for Docker).
+2. Restart the agent. It connects, joins the listed channels, and DMs work immediately. The first *authenticated* sender is auto-paired as operator; everyone else gets a pairing code.
+
+URL anatomy:
+
+```
+ircs://nick:password@host:6697/#chan1,#chan2
+│      │    │        │    │     └── channels, comma-separated (# optional)
+│      │    │        │    └──────── port (default 6667 plain, 6697 TLS)
+│      │    │        └───────────── server host
+│      │    └────────────────────── server password, sent as PASS (optional)
+│      └─────────────────────────── nick (default "kern")
+└────────────────────────────────── irc:// plain, ircs:// TLS
+```
+
+Multiple networks: whitespace-separate whole URLs (commas already separate channels).
+
+```json
+"irc": "ircs://myagent@irc.libera.chat:6697/#kern ircs://myagent@irc.internal:6697/#ops"
+```
+
+### Behavior
+
+- **DMs are gated by pairing**, like Telegram/Slack/Nostr. Channels are open.
+- **Channels only answer when addressed.** The agent replies when its nick is mentioned anywhere in the line and stays silent otherwise, so several agents can share a channel without a feedback loop. A leading `nick:` address is stripped before the message reaches the model.
+- **Identity is the account, not the nick.** See below.
+- **Markdown is converted** to IRC control codes — bold, italic, monospace. Headers become bold, tables lose their separator rows, code fences are unwrapped, links render as `label <url>`.
+- **Lines are wrapped** to stay under the 512-byte protocol limit (splitting on word boundaries, never mid-codepoint) and sent about 4/sec so the server doesn't flood-kick. Very long replies are truncated with a notice.
+- **Reconnects** with jittered exponential backoff, up to a minute. Nick collisions retry with underscore suffixes.
+- **`/me` actions** arrive as `* nick does something`. Other CTCP is ignored.
+- **`message` tool** can address any `<host>/<target>` — a paired nick or a channel the agent is in.
+
+### Identity and spoofing
+
+IRC nicks are not identities. Anyone can `/nick oguz` the moment you disconnect. So the sender is keyed on the server-verified account from the IRCv3 `account-tag`, never on the nick:
+
+| Sender | userId | Auto-pairs? |
+|---|---|---|
+| Logged in to a server account | `irc:<host>/<account>` | Yes, if first user |
+| Not logged in | `irc:<host>/~<nick>` | Never |
+
+Unauthenticated senders always go through a pairing code, and the tilde is visible to the agent so it knows the name is unverified. Both forms are namespaced by server host, so the same account name on two networks stays two different users.
+
+This depends on the server supporting `account-tag` (Ergo, Solanum/Libera, InspIRCd, UnrealIRCd all do) and the user actually being logged in. On a server without it, every sender is unauthenticated and nothing auto-pairs.
+
+### Limitations
+
+- **No SASL.** The agent authenticates with a server `PASS` if given one; it can't log in to a NickServ account. This affects the agent's own identity, not its ability to verify senders.
+- **No media.** Text only.
+- **No history replay.** Messages sent while the agent is disconnected are lost — IRC has no store-and-forward (barring server-side history extensions, which aren't used).
+- **No streaming.** Replies arrive as complete messages, not token by token.

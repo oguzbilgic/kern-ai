@@ -4,6 +4,7 @@ import { TelegramInterface } from "./interfaces/telegram.js";
 import { SlackInterface } from "./interfaces/slack.js";
 import { MatrixInterface } from "./interfaces/matrix.js";
 import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
+import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
 import { loadConfig, saveConfigField } from "./config.js";
 import { readFile, appendFile } from "fs/promises";
@@ -476,6 +477,20 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     });
   }
 
+  // Start IRC if configured — IRC_URL overrides config.irc
+  const ircUrls = parseIrcUrls(process.env.IRC_URL || config.irc);
+  let ircBot: IrcInterface | null = null;
+  if (!forceCli && ircUrls.length) {
+    ircBot = new IrcInterface(ircUrls, pairing);
+    // start() is non-blocking — each connection retries on its own and
+    // reports via status/statusDetail.
+    await ircBot.start({
+      onMessage: async (msg, onEvent) => {
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent);
+      },
+    });
+  }
+
   // Register interface status reporting
   setInterfaceStatusFn(() => {
     const statuses: InterfaceStatus[] = [];
@@ -490,6 +505,9 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
     if (nostrBot) {
       statuses.push({ name: "nostr", status: nostrBot.status, detail: nostrBot.statusDetail });
+    }
+    if (ircBot) {
+      statuses.push({ name: "irc", status: ircBot.status, detail: ircBot.statusDetail });
     }
     return statuses;
   });
@@ -537,6 +555,21 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
     if (iface === "nostr" && nostrBot) {
       const sent = await nostrBot.sendToUser(userId, text);
+      if (sent) {
+        server.broadcast({
+          type: "outgoing" as any,
+          text,
+          fromInterface: iface,
+          fromUserId: userId,
+        });
+      }
+      return sent;
+    }
+    if (iface === "irc" && ircBot) {
+      // chatId is "<host>/<nick-or-channel>" — fall back to a bare userId of
+      // the same shape so the agent can address a channel it hasn't paired.
+      const chatId = pairing.getChatId(userId) || userId.replace(/^irc:/, "");
+      const sent = await ircBot.sendToUser(chatId, text);
       if (sent) {
         server.broadcast({
           type: "outgoing" as any,
@@ -596,6 +629,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     if (slackBot) await slackBot.stop().catch(() => {});
     if (matrixBot) await matrixBot.stop().catch(() => {});
     if (nostrBot) await nostrBot.stop().catch(() => {});
+    if (ircBot) await ircBot.stop().catch(() => {});
     await plugins.shutdown(pluginCtx);
     server.stop();
     memoryDB.close();
