@@ -1,9 +1,10 @@
 import { Relay } from "nostr-tools/relay";
 import WebSocket from "ws";
-import { finalizeEvent, getPublicKey, type Event as NostrEvent } from "nostr-tools/pure";
+import { finalizeEvent, getPublicKey, verifyEvent, type Event as NostrEvent } from "nostr-tools/pure";
 import * as nip04 from "nostr-tools/nip04";
 import * as nip17 from "nostr-tools/nip17";
 import * as nip19 from "nostr-tools/nip19";
+import * as nip44 from "nostr-tools/nip44";
 import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
@@ -232,8 +233,28 @@ export class NostrInterface implements Interface {
     if (ev.kind === 1059) {
       // NIP-17 / NIP-59 Gift Wrap (kind 1059 -> seal kind 13 -> rumor kind 14)
       try {
-        const rumor = nip17.unwrapEvent(ev as any, this.sk);
-        senderPk = rumor.pubkey;
+        // First try standard nostr-tools unwrapEvent
+        let rumor: any;
+        try {
+          rumor = nip17.unwrapEvent(ev as any, this.sk);
+          senderPk = rumor.pubkey;
+        } catch {
+          // If unwrapEvent fails (e.g. Jumble / NIP-4e dual-seal with 'n' tag or legacy encryption-key seal):
+          const giftWrapConvKey = nip44.v2.utils.getConversationKey(this.sk, ev.pubkey);
+          const sealJson = nip44.v2.decrypt(ev.content, giftWrapConvKey);
+          const seal = JSON.parse(sealJson);
+          if (!verifyEvent(seal)) throw new Error("invalid seal signature");
+
+          const nTag = seal.tags?.find((t: string[]) => t[0] === "n")?.[1];
+          const senderEncryptionPubkey = nTag ?? seal.pubkey;
+
+          const sealConvKey = nip44.v2.utils.getConversationKey(this.sk, senderEncryptionPubkey);
+          const rumorJson = nip44.v2.decrypt(seal.content, sealConvKey);
+          rumor = JSON.parse(rumorJson);
+
+          senderPk = nTag ? seal.pubkey : rumor.pubkey;
+        }
+
         text = rumor.content;
         mode = "nip17";
         if (rumor.id) this.remember(rumor.id);
