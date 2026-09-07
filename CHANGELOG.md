@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Features
-- **Nostr interface** — DM your agent from any Nostr client. Set `NOSTR_NSEC` in `.kern/.env` and the agent listens for NIP-04 encrypted DMs on public relays (or your own — `nostrRelays` in config, `NOSTR_RELAYS` in env). No server to host, no bot to register, no account: the agent's identity is a keypair, and relays see only ciphertext. Multi-relay with dedupe and replay-on-reconnect; pairing and the `message` tool work like every other interface. DMs only for now — channels and NIP-44 later.
+- **Nostr interface** — DM your agent from any Nostr client. Set `NOSTR_NSEC` in `.kern/.env` and the agent listens on public relays (or your own — `nostrRelays` in config, `NOSTR_RELAYS` in env). Supports both legacy NIP-04 encrypted DMs and modern NIP-17 / NIP-44 gift-wrapped DMs with metadata protection. No server to host, no bot to register, no phone number: the agent's identity is an Ed25519 keypair, and relays see only ciphertext. Multi-relay redundancy with cross-relay dedupe and reconnect backoff; pairing, slash commands, and the proactive `message` tool work identically to Telegram, Slack, and Matrix.
 - **Bundled `nostr-setup` skill** — the agent generates its own keypair with the bundled `nostr-tools`, tells the operator to back up the nsec, writes `NOSTR_NSEC` to `.kern/.env`, and hands back its npub. No key from the operator needed.
 
 ## 0.33.1 (2026-08-31)
