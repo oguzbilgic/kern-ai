@@ -266,3 +266,16 @@ test("sendToUser accepts npub, publishes encrypted DM", async () => {
   assert.equal(nip04.decrypt(userSk, agentPk, ev.content), "proactive");
   assert.equal(await iface.sendToUser("not-a-key", "x"), false);
 });
+
+test("unreachable relay is retried, not fatal", async () => {
+  const dead = await FakeRelay.create();
+  const url = dead.url;
+  dead.close(); // port now refuses connections
+  const iface = new NostrInterface(nip19.nsecEncode(generateSecretKey()), [url]);
+  ifaces.push(iface);
+  await iface.start({ onMessage: async () => "" });
+  await waitFor(() => iface.status === "error");
+  assert.match(iface.statusDetail || "", /no relays reachable/);
+  await new Promise((r) => setTimeout(r, 300)); // survive at least one retry tick
+  assert.equal(iface.status, "error");
+});

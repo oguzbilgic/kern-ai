@@ -1,4 +1,5 @@
 import { Relay } from "nostr-tools/relay";
+import WebSocket from "ws";
 import { finalizeEvent, getPublicKey, type Event as NostrEvent } from "nostr-tools/pure";
 import * as nip04 from "nostr-tools/nip04";
 import * as nip19 from "nostr-tools/nip19";
@@ -130,7 +131,10 @@ export class NostrInterface implements Interface {
       // `since = lastEmitted + 1`, so DMs that landed while we were
       // disconnected are replayed. It does NOT retry a failed *initial*
       // connect — that's what this outer loop is for.
-      const relay = new Relay(url, { enableReconnect: true } as any);
+      // Use `ws`, not Node's built-in WebSocket: nostr-tools calls ws.close()
+      // from its onerror handler, and undici's WebSocket re-fires error on
+      // close → infinite recursion → RangeError, process down.
+      const relay = new Relay(url, { enableReconnect: true, websocketImplementation: WebSocket } as any);
       this.relays.set(url, relay);
 
       let closed: () => void = () => {};
