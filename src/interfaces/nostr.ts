@@ -74,6 +74,7 @@ export class NostrInterface implements Interface {
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
   // Dedupe across relays — the same event arrives from every relay we're on.
+  // Stored across restarts isn't persistent in memory, but seen handles in-flight deduping.
   private seen = new Set<string>();
   private seenOrder: string[] = [];
   // Gate pairing-code messages to once per sender per process.
@@ -154,6 +155,9 @@ export class NostrInterface implements Interface {
         backoff = 1000;
         this.markConnected(url);
 
+        // NIP-59 / NIP-17: gift wraps have randomized created_at up to 2 days in the past.
+        // On restart, subscribe from 2 days ago so we don't miss recent DMs, but drop
+        // events whose inner rumor is older than our startup (or a small window) so we don't replay the past.
         const twoDaysAgo = Math.max(0, this.startedAt - 172800);
         relay.subscribe(
           [
@@ -261,7 +265,10 @@ export class NostrInterface implements Interface {
 
         text = rumor.content;
         mode = "nip17";
-        if (rumor.id) this.remember(rumor.id);
+        if (rumor.id && !this.remember(rumor.id)) return;
+        // If the inner rumor was created before this process started (with 60s grace),
+        // it was already processed in a previous run — don't replay it on startup!
+        if (rumor.created_at && rumor.created_at < this.startedAt - 60) return;
         if (senderEncPk) this.senderEncKey.set(senderPk, senderEncPk);
       } catch (err: any) {
         log.warn("nostr", `unwrap gift wrap failed for ${ev.id.slice(0, 8)}: ${err.message || err}`);
