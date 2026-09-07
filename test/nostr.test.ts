@@ -169,8 +169,8 @@ test("receives encrypted DM, decrypts, replies encrypted to sender", async () =>
   assert.equal(received[0].channel, `nostr:${nip19.npubEncode(userPk)}`);
 
   // Agent's reply lands on the relay, tagged to the user, decryptable by the user.
-  await waitFor(() => relay.events.some((e) => e.pubkey === agentPk));
-  const reply = relay.events.find((e) => e.pubkey === agentPk)!;
+  await waitFor(() => relay.events.some((e) => e.pubkey === agentPk && e.kind === 4));
+  const reply = relay.events.find((e) => e.pubkey === agentPk && e.kind === 4)!;
   assert.equal(reply.kind, 4);
   assert.deepEqual(reply.tags, [["p", userPk]]);
   assert.equal(nip04.decrypt(userSk, agentPk, reply.content), "pong: ping");
@@ -196,7 +196,7 @@ test("NO_REPLY suppresses the outbound DM", async () => {
   relay.inject(makeDM(userSk, agentPk, "quiet please"));
   await waitFor(() => calls === 1);
   await new Promise((r) => setTimeout(r, 150));
-  assert.equal(relay.events.filter((e) => e.pubkey === agentPk).length, 0);
+  assert.equal(relay.events.filter((e) => e.pubkey === agentPk && e.kind === 4).length, 0);
 });
 
 test("same event from two relays is handled once; reply fans out to both", async () => {
@@ -262,7 +262,7 @@ test("sendToUser accepts npub, publishes encrypted DM", async () => {
   await waitFor(() => iface.status === "connected");
 
   assert.equal(await iface.sendToUser(nip19.npubEncode(userPk), "proactive"), true);
-  const ev = relay.events.find((e) => e.pubkey === agentPk)!;
+  const ev = relay.events.find((e) => e.pubkey === agentPk && e.kind === 4)!;
   assert.equal(nip04.decrypt(userSk, agentPk, ev.content), "proactive");
   assert.equal(await iface.sendToUser("not-a-key", "x"), false);
 });
@@ -278,4 +278,25 @@ test("unreachable relay is retried, not fatal", async () => {
   assert.match(iface.statusDetail || "", /no relays reachable/);
   await new Promise((r) => setTimeout(r, 300)); // survive at least one retry tick
   assert.equal(iface.status, "error");
+});
+
+
+test("announces NIP-65 and NIP-17 relay lists on connect", async () => {
+  const relay = await FakeRelay.create();
+  relays.push(relay);
+  const agentSk = generateSecretKey();
+  const agentPk = getPublicKey(agentSk);
+
+  const iface = new NostrInterface(nip19.nsecEncode(agentSk), [relay.url]);
+  ifaces.push(iface);
+  await iface.start({ onMessage: async () => "" });
+  await waitFor(() => iface.status === "connected");
+  await waitFor(() => relay.events.some((e) => e.pubkey === agentPk && e.kind === 10002));
+  await waitFor(() => relay.events.some((e) => e.pubkey === agentPk && e.kind === 10050));
+
+  const nip65 = relay.events.find((e) => e.pubkey === agentPk && e.kind === 10002)!;
+  assert.deepEqual(nip65.tags, [["r", relay.url]]);
+
+  const nip17 = relay.events.find((e) => e.pubkey === agentPk && e.kind === 10050)!;
+  assert.deepEqual(nip17.tags, [["relay", relay.url]]);
 });

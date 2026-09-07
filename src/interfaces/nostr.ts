@@ -76,6 +76,7 @@ export class NostrInterface implements Interface {
   private seenOrder: string[] = [];
   // Gate pairing-code messages to once per sender per process.
   private sentCodes = new Set<string>();
+  private announced = false;
 
   constructor(nsec: string, relays: string[], pairing?: PairingManager) {
     this.sk = decodeSecretKey(nsec);
@@ -180,7 +181,15 @@ export class NostrInterface implements Interface {
     this.connectedUrls.add(url);
     this._status = "connected";
     this._statusDetail = `${this.connectedUrls.size}/${this.relayUrls.length} relays`;
-    if (wasDown) log("nostr", `connected via ${url}`);
+    if (wasDown) {
+      log("nostr", `connected via ${url}`);
+      if (!this.announced) {
+        this.announced = true;
+        this.announceRelays().catch((err) => {
+          log.warn("nostr", `failed to announce relays: ${err.message || err}`);
+        });
+      }
+    }
   }
 
   private markDisconnected(url: string, reason: string) {
@@ -299,6 +308,46 @@ export class NostrInterface implements Interface {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Broadcast NIP-65 (kind 10002) relay list and NIP-17 (kind 10050) DM relay list.
+   * Both are replaceable events so clients (Coracle, Jumble, Amethyst) know where
+   * to send DMs to reach this agent without guessing or manual relay configuration.
+   */
+  async announceRelays(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+
+    // Kind 10002: NIP-65 Relay List Metadata
+    const nip65 = finalizeEvent(
+      {
+        kind: 10002,
+        created_at: now,
+        tags: this.relayUrls.map((r) => ["r", r]),
+        content: "",
+      },
+      this.sk,
+    );
+
+    // Kind 10050: NIP-17 DM Relay List
+    const nip17 = finalizeEvent(
+      {
+        kind: 10050,
+        created_at: now,
+        tags: this.relayUrls.map((r) => ["relay", r]),
+        content: "",
+      },
+      this.sk,
+    );
+
+    const targets = [...this.relays.values()].filter((r) => r.connected);
+    if (targets.length === 0) return;
+
+    await Promise.allSettled([
+      ...targets.map((r) => r.publish(nip65)),
+      ...targets.map((r) => r.publish(nip17)),
+    ]);
+    log("nostr", `announced relay list (kinds 10002, 10050) to ${targets.length} relay(s)`);
   }
 }
 
