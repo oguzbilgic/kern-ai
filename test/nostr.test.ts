@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { WebSocketServer, type WebSocket } from "ws";
 import { generateSecretKey, getPublicKey, finalizeEvent, type Event } from "nostr-tools/pure";
 import * as nip04 from "nostr-tools/nip04";
+import * as nip17 from "nostr-tools/nip17";
 import * as nip19 from "nostr-tools/nip19";
 import { matchFilters, type Filter } from "nostr-tools/filter";
 import {
@@ -254,7 +255,6 @@ test("sendToUser accepts npub, publishes encrypted DM", async () => {
   const agentSk = generateSecretKey();
   const userSk = generateSecretKey();
   const userPk = getPublicKey(userSk);
-  const agentPk = getPublicKey(agentSk);
 
   const iface = new NostrInterface(nip19.nsecEncode(agentSk), [relay.url]);
   ifaces.push(iface);
@@ -262,9 +262,38 @@ test("sendToUser accepts npub, publishes encrypted DM", async () => {
   await waitFor(() => iface.status === "connected");
 
   assert.equal(await iface.sendToUser(nip19.npubEncode(userPk), "proactive"), true);
-  const ev = relay.events.find((e) => e.pubkey === agentPk && e.kind === 4)!;
-  assert.equal(nip04.decrypt(userSk, agentPk, ev.content), "proactive");
+  const wrap = relay.events.find((e) => e.kind === 1059)!;
+  assert.ok(wrap, "gift wrap event published");
+  const rumor = nip17.unwrapEvent(wrap as any, userSk);
+  assert.equal(rumor.content, "proactive");
   assert.equal(await iface.sendToUser("not-a-key", "x"), false);
+});
+
+test("receives NIP-17 gift wrapped DM and replies with NIP-17", async () => {
+  const relay = await FakeRelay.create();
+  relays.push(relay);
+  const agentSk = generateSecretKey();
+  const userSk = generateSecretKey();
+  const agentPk = getPublicKey(agentSk);
+
+  const received: any[] = [];
+  const iface = new NostrInterface(nip19.nsecEncode(agentSk), [relay.url]);
+  ifaces.push(iface);
+  await iface.start({ onMessage: async (msg) => { received.push(msg); return "pong: " + msg.text; } });
+  await waitFor(() => iface.status === "connected");
+
+  // User sends NIP-17 gift wrapped event
+  const wrap = nip17.wrapEvent(userSk, { publicKey: agentPk }, "hello from modern client");
+  relay.inject(wrap);
+
+  await waitFor(() => received.length === 1);
+  assert.equal(received[0].text, "hello from modern client");
+
+  // Agent should reply with NIP-17 gift wrap
+  await waitFor(() => relay.events.some((e) => e.kind === 1059 && e.id !== wrap.id));
+  const replyWrap = relay.events.find((e) => e.kind === 1059 && e.id !== wrap.id)!;
+  const rumor = nip17.unwrapEvent(replyWrap as any, userSk);
+  assert.equal(rumor.content, "pong: hello from modern client");
 });
 
 test("unreachable relay is retried, not fatal", async () => {

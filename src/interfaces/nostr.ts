@@ -2,6 +2,7 @@ import { Relay } from "nostr-tools/relay";
 import WebSocket from "ws";
 import { finalizeEvent, getPublicKey, type Event as NostrEvent } from "nostr-tools/pure";
 import * as nip04 from "nostr-tools/nip04";
+import * as nip17 from "nostr-tools/nip17";
 import * as nip19 from "nostr-tools/nip19";
 import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
@@ -77,6 +78,8 @@ export class NostrInterface implements Interface {
   // Gate pairing-code messages to once per sender per process.
   private sentCodes = new Set<string>();
   private announced = false;
+  // Remember if a sender talked via NIP-17 (gift wrap) or legacy NIP-04
+  private senderMode = new Map<string, "nip17" | "nip04">();
 
   constructor(nsec: string, relays: string[], pairing?: PairingManager) {
     this.sk = decodeSecretKey(nsec);
@@ -115,7 +118,8 @@ export class NostrInterface implements Interface {
   async sendToUser(userId: string, text: string): Promise<boolean> {
     try {
       const to = toHexPubkey(userId);
-      return await this.sendDM(to, text);
+      const mode = this.senderMode.get(to) || "nip17";
+      return await this.sendDM(to, text, mode);
     } catch (err: any) {
       log.warn("nostr", `sendToUser failed: ${err.message || err}`);
       return false;
@@ -147,8 +151,12 @@ export class NostrInterface implements Interface {
         backoff = 1000;
         this.markConnected(url);
 
+        const twoDaysAgo = Math.max(0, this.startedAt - 172800);
         relay.subscribe(
-          [{ kinds: [4], "#p": [this.pk], since: this.startedAt }],
+          [
+            { kinds: [4], "#p": [this.pk], since: this.startedAt },
+            { kinds: [1059], "#p": [this.pk], since: twoDaysAgo },
+          ],
           {
             onevent: (ev) => this.onEvent(ev, url, onMessage),
             onclose: (reason) => log.warn("nostr", `${url} subscription closed: ${reason}`),
@@ -214,21 +222,44 @@ export class NostrInterface implements Interface {
   }
 
   private onEvent(ev: NostrEvent, url: string, onMessage: StartOptions["onMessage"]) {
-    if (ev.kind !== 4) return;
     if (ev.pubkey === this.pk) return; // our own sends echoed back
     if (!this.remember(ev.id)) return; // already handled via another relay
 
     let text: string;
-    try {
-      text = nip04.decrypt(this.sk, ev.pubkey, ev.content);
-    } catch (err: any) {
-      log.warn("nostr", `decrypt failed for ${ev.id.slice(0, 8)} from ${ev.pubkey.slice(0, 8)}: ${err.message || err}`);
+    let senderPk: string;
+    let mode: "nip17" | "nip04";
+
+    if (ev.kind === 1059) {
+      // NIP-17 / NIP-59 Gift Wrap (kind 1059 -> seal kind 13 -> rumor kind 14)
+      try {
+        const rumor = nip17.unwrapEvent(ev as any, this.sk);
+        senderPk = rumor.pubkey;
+        text = rumor.content;
+        mode = "nip17";
+        if (rumor.id) this.remember(rumor.id);
+      } catch (err: any) {
+        log.warn("nostr", `unwrap gift wrap failed for ${ev.id.slice(0, 8)}: ${err.message || err}`);
+        return;
+      }
+    } else if (ev.kind === 4) {
+      // Legacy NIP-04 encrypted DM
+      senderPk = ev.pubkey;
+      mode = "nip04";
+      try {
+        text = nip04.decrypt(this.sk, ev.pubkey, ev.content);
+      } catch (err: any) {
+        log.warn("nostr", `decrypt failed for ${ev.id.slice(0, 8)} from ${ev.pubkey.slice(0, 8)}: ${err.message || err}`);
+        return;
+      }
+    } else {
       return;
     }
+
     if (!text.trim()) return;
+    this.senderMode.set(senderPk, mode);
 
     // Fire and forget — don't block the relay socket on a long turn
-    this.handleIncoming(ev.pubkey, text, onMessage).catch((err) => {
+    this.handleIncoming(senderPk, text, mode, onMessage).catch((err) => {
       log.error("nostr", `handle incoming failed: ${err.message || err}`);
     });
   }
@@ -236,10 +267,11 @@ export class NostrInterface implements Interface {
   private async handleIncoming(
     senderPk: string,
     text: string,
+    mode: "nip17" | "nip04",
     onMessage: StartOptions["onMessage"],
   ): Promise<void> {
     const sender = nip19.npubEncode(senderPk);
-    log("nostr", `message from ${sender.slice(0, 16)}…: ${text.slice(0, 80)}`);
+    log("nostr", `message [${mode}] from ${sender.slice(0, 16)}…: ${text.slice(0, 80)}`);
 
     // Pairing: auto-pair first user, gate others
     if (this.pairing && !this.pairing.isPaired(sender)) {
@@ -252,6 +284,7 @@ export class NostrInterface implements Interface {
         await this.sendDM(
           senderPk,
           `${sender} is not paired with this agent.\n\nPairing code: ${code}\n\nShare this code with the agent's operator to approve access.`,
+          mode,
         );
         return;
       }
@@ -270,26 +303,35 @@ export class NostrInterface implements Interface {
       );
       const reply = (response || "").trim();
       if (isNoReply(reply)) return;
-      await this.sendDM(senderPk, reply);
+      await this.sendDM(senderPk, reply, mode);
     } catch (err: any) {
       log.error("nostr", `turn failed for ${sender}: ${err.message || err}`);
-      await this.sendDM(senderPk, "Error processing message.").catch(() => {});
+      await this.sendDM(senderPk, "Error processing message.", mode).catch(() => {});
     }
   }
 
-  /** Encrypt, sign, and publish a kind-4 DM to every connected relay. */
-  private async sendDM(toPk: string, text: string): Promise<boolean> {
-    const content = nip04.encrypt(this.sk, toPk, text);
-    const event = finalizeEvent(
-      {
-        kind: 4,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [["p", toPk]],
-        content,
-      },
-      this.sk,
-    );
-    // Our own DM comes back on the subscription; skip it there.
+  /** Encrypt, sign, and publish a DM (NIP-17 gift wrap or legacy NIP-04) to every connected relay. */
+  private async sendDM(toPk: string, text: string, mode: "nip17" | "nip04" = "nip17"): Promise<boolean> {
+    let event: NostrEvent;
+
+    if (mode === "nip17") {
+      // NIP-17 / NIP-59: Gift wrap (kind 1059) containing rumor (kind 14)
+      event = nip17.wrapEvent(this.sk, { publicKey: toPk }, text) as NostrEvent;
+    } else {
+      // Legacy NIP-04 (kind 4)
+      const content = nip04.encrypt(this.sk, toPk, text);
+      event = finalizeEvent(
+        {
+          kind: 4,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [["p", toPk]],
+          content,
+        },
+        this.sk,
+      );
+    }
+
+    // Our own message comes back on the subscription; skip it there.
     this.remember(event.id);
 
     const targets = [...this.relays.values()].filter((r) => r.connected);
