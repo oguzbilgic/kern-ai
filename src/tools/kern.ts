@@ -138,6 +138,8 @@ export interface StatusData {
   queue: string;
   telegram: string | null;
   slack: string | null;
+  matrix: string | null;
+  nostr: string | null;
   segments: string | null;
   plugins: Record<string, any> | null;
 }
@@ -183,8 +185,10 @@ export function getStatusData(): StatusData {
     : "unknown";
 
   const ifaces = _getInterfaceStatuses ? _getInterfaceStatuses() : [];
-  const tg = ifaces.find(i => i.name === "telegram");
-  const sl = ifaces.find(i => i.name === "slack");
+  const ifaceStr = (name: string) => {
+    const i = ifaces.find(x => x.name === name);
+    return i ? (i.detail ? `${i.status} (${i.detail})` : i.status) : null;
+  };
 
   // Numeric context breakdown for UI
   const contextBreakdown = stats ? {
@@ -216,8 +220,10 @@ export function getStatusData(): StatusData {
     promptTokens: _totalPromptTokens,
     completionTokens: _totalCompletionTokens,
     queue: queueStr,
-    telegram: tg ? (tg.detail ? `${tg.status} (${tg.detail})` : tg.status) : null,
-    slack: sl ? (sl.detail ? `${sl.status} (${sl.detail})` : sl.status) : null,
+    telegram: ifaceStr("telegram"),
+    slack: ifaceStr("slack"),
+    matrix: ifaceStr("matrix"),
+    nostr: ifaceStr("nostr"),
     segments: _getSegmentStats ? (() => {
       const ss = _getSegmentStats!();
       if (!ss) return "disabled";
@@ -239,6 +245,8 @@ export function formatStatus(data: StatusData): string {
     `toolScope: ${data.toolScope}`,
     data.telegram ? `telegram: ${data.telegram}` : "",
     data.slack ? `slack: ${data.slack}` : "",
+    data.matrix ? `matrix: ${data.matrix}` : "",
+    data.nostr ? `nostr: ${data.nostr}` : "",
     `session: ${data.session}`,
     data.contextBreakdown ? (() => {
       const cb = data.contextBreakdown!;

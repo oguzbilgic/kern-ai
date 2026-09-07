@@ -54,10 +54,12 @@
     "grammy": "^1.35.0",
     "ink": "^6.8.0",
     "ink-spinner": "^5.0.0",
+    "nostr-tools": "^2.25.2",
     "react": "^19.2.4",
     "sqlite-vec": "^0.1.8",
     "turndown": "^7.2.4",
     "unpdf": "1.6.2",
+    "ws": "^8.21.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {
@@ -65,6 +67,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
     "@types/turndown": "^5.0.6",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   },
