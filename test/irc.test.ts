@@ -7,6 +7,8 @@ import {
   parseIrcUrls,
   parseIrcLine,
   formatForIrc,
+  redactIrcUrl,
+  isValidIrcTarget,
 } from "../src/interfaces/irc.js";
 
 // ---------------------------------------------------------------------------
@@ -337,6 +339,17 @@ test("DM: unauthenticated sender is tilde-marked", async () => {
   assert.equal(received[0].userId, "irc:127.0.0.1/~oguz", "no account tag → ~nick");
 });
 
+test("DM: account-tag \"*\" means not logged in, not an account named *", async () => {
+  // Some servers send the placeholder "*" rather than omitting the tag. A bare
+  // truthiness check would key this sender as irc:<host>/* and auto-pair them.
+  const { received } = await connect({});
+  const { server } = { server: servers[servers.length - 1] };
+  server.push("@account=* :oguz!u@h PRIVMSG vega :hello");
+
+  await waitFor(() => received.length > 0);
+  assert.equal(received[0].userId, "irc:127.0.0.1/~oguz", "placeholder account → ~nick");
+});
+
 test("channel: silent unless the nick is mentioned", async () => {
   const { server, received } = await connect({});
 
@@ -503,4 +516,51 @@ test("status reflects failure when the server is unreachable", async () => {
   await iface.start({ onMessage: async () => "ok" });
   await waitFor(() => iface.status === "error");
   assert.match(iface.statusDetail || "", /127\.0\.0\.1/);
+});
+
+// ---------------------------------------------------------------------------
+// Hardening (PR review follow-ups)
+// ---------------------------------------------------------------------------
+
+test("parseIrcUrl: channels in both path and fragment stay separate", () => {
+  // "#" opens a URL fragment, so a URL carrying channels on both sides used to
+  // fuse the last path channel to the first fragment one ("b#c").
+  const c = parseIrcUrl("irc://n@h/a,b#c,d");
+  assert.deepEqual(c.channels, ["#a", "#b", "#c", "#d"]);
+});
+
+test("redactIrcUrl: hides server password, keeps the rest legible", () => {
+  assert.equal(redactIrcUrl("ircs://nick:s3cret@h:6697/#x"), "ircs://nick:***@h:6697/#x");
+  // Nothing to redact — left untouched.
+  assert.equal(redactIrcUrl("ircs://nick@h/#x"), "ircs://nick@h/#x");
+  assert.equal(redactIrcUrl("not-a-url"), "not-a-url");
+});
+
+test("parseIrcUrls: password never reaches the log on a bad URL", () => {
+  const lines: string[] = [];
+  const orig = process.stderr.write.bind(process.stderr);
+  // log.warn goes to stderr; capture it rather than trusting the formatter.
+  (process.stderr as any).write = (chunk: any, ...rest: any[]) => {
+    lines.push(String(chunk));
+    return orig(chunk as any, ...(rest as [any]));
+  };
+  try {
+    parseIrcUrls("gopher://nick:hunter2@h/#x");
+  } finally {
+    (process.stderr as any).write = orig;
+  }
+  const out = lines.join("");
+  assert.ok(!out.includes("hunter2"), "password leaked into log output");
+});
+
+test("isValidIrcTarget: rejects line-injection and accepts real targets", () => {
+  assert.ok(isValidIrcTarget("oguz"));
+  assert.ok(isValidIrcTarget("#homelab"));
+  // A space or CRLF would let a crafted target append commands to the line.
+  assert.ok(!isValidIrcTarget("nick :hi\r\nQUIT"));
+  assert.ok(!isValidIrcTarget("nick PRIVMSG #chan"));
+  assert.ok(!isValidIrcTarget("a\r\nJOIN #evil"));
+  assert.ok(!isValidIrcTarget(":trailing"));
+  assert.ok(!isValidIrcTarget(""));
+  assert.ok(!isValidIrcTarget("a".repeat(201)));
 });

@@ -95,7 +95,12 @@ export function parseIrcUrl(raw: string): IrcServerConfig {
   if (!u.hostname) throw new Error("missing host");
 
   const tls = scheme === "ircs";
-  const chanPart = `${u.pathname}${u.hash}`.replace(/^\//, "");
+  // Channels may arrive in the path (`/a,b`), the fragment (`/#a,#b`), or both.
+  // Strip each part's own leading marker before joining, so a URL carrying both
+  // doesn't fuse the last path channel to the first fragment one ("b#c").
+  const pathPart = u.pathname.replace(/^\//, "");
+  const hashPart = u.hash.replace(/^#/, "");
+  const chanPart = [pathPart, hashPart].filter(Boolean).join(",");
   const channels = chanPart
     .split(",")
     .map((c) => decodeURIComponent(c.trim()))
@@ -112,6 +117,15 @@ export function parseIrcUrl(raw: string): IrcServerConfig {
   };
 }
 
+/**
+ * Best-effort redaction of a server password before an IRC URL reaches the log.
+ * Applied to raw strings that may have failed to parse, so it cannot rely on
+ * `new URL()` and works on the `scheme://user:pass@` prefix textually.
+ */
+export function redactIrcUrl(raw: string): string {
+  return raw.replace(/^([a-z]+:\/\/[^/@:]*):[^/@]*@/i, "$1:***@");
+}
+
 /** Parse a whitespace-separated list of IRC URLs. Invalid entries are skipped. */
 export function parseIrcUrls(raw?: string): IrcServerConfig[] {
   if (!raw) return [];
@@ -120,10 +134,22 @@ export function parseIrcUrls(raw?: string): IrcServerConfig[] {
     try {
       out.push(parseIrcUrl(part));
     } catch (err: any) {
-      log.warn("irc", `ignoring invalid URL "${part}": ${err.message || err}`);
+      log.warn("irc", `ignoring invalid URL "${redactIrcUrl(part)}": ${err.message || err}`);
     }
   }
   return out;
+}
+
+/**
+ * IRC is a line protocol, so a target containing whitespace or a CR/LF would
+ * let a crafted `message` tool call append arbitrary commands to the line.
+ * Targets are nicks or channels: no spaces, no control bytes, no leading ":"
+ * (which would be read as a trailing parameter).
+ */
+export function isValidIrcTarget(target: string): boolean {
+  if (!target || target.length > 200) return false;
+  if (target.startsWith(":")) return false;
+  return !/[\s\0\r\n,]/.test(target);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +356,6 @@ class IrcConnection {
   private caps = new Set<string>();
 
   private sendQueue: string[] = [];
-  private draining = false;
 
   // One pairing code per (user, target) per process, so a shared channel or a
   // chatty client can't be used to spam codes.
@@ -610,8 +635,11 @@ class IrcConnection {
     }
 
     // Identity comes from the authenticated account, never the nick.
-    const account = line.tags["account"];
-    const authenticated = Boolean(account);
+    // Servers signal "not logged in" either by omitting account-tag or by
+    // sending the placeholder "*", so a bare truthiness check would key an
+    // anonymous sender as `irc:<host>/*` and let them auto-pair.
+    const account = line.tags["account"]?.trim();
+    const authenticated = Boolean(account) && account !== "*";
     const userId = `irc:${this.host}/${authenticated ? account : `~${nick}`}`;
     const channel = `irc:${this.host}/${replyTo}`;
 
@@ -720,7 +748,10 @@ export class IrcInterface implements Interface {
     if (slash < 0) return false;
     const host = chatId.slice(0, slash);
     const target = chatId.slice(slash + 1);
-    if (!target) return false;
+    if (!host || !isValidIrcTarget(target)) {
+      log.warn("irc", `refusing to send to invalid target "${target}"`);
+      return false;
+    }
 
     const conn = this.connections.find((c) => c.host === host);
     if (!conn) {
