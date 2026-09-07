@@ -25,6 +25,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `maxContextTokens` | `100000` | Token budget for context window. Messages beyond this are trimmed oldest-first. Full history stays in session JSONL files. |
 | `maxToolResultChars` | `20000` | Max characters per tool result in context. Oversized results are truncated in context only. Full results stay in session storage. Set to `0` to disable. |
 | `telegramTools` | `false` | Show tool call progress lines (⚙ bash, etc.) in Telegram messages. |
+| `nostrRelays` | `[]` | Nostr relay URLs. Empty = built-in public defaults (damus, nos.lol, primal). `NOSTR_RELAYS` env (comma-separated) overrides. See [Interfaces § Nostr](interfaces.md#nostr). |
 | `heartbeatInterval` | `60` | Minutes between heartbeat prompts. Agent reviews notes, updates knowledge. 0 to disable. |
 | `timezone` | `""` | IANA timezone (e.g. `"America/Los_Angeles"`) used for the `time:` field in the envelope the model reads. Empty = autoresolve to host. Storage (logs, recall, session metadata) stays UTC regardless. |
 | `recall` | `true` | Enable recall and segments (embedding-based features). Set to `false` to disable. Requires an embedding API key. Session storage and notes summaries work regardless. |
@@ -102,6 +103,8 @@ SLACK_APP_TOKEN=xapp-...
 MATRIX_HOMESERVER=https://matrix.example.com
 MATRIX_USER_ID=@myagent:example.com
 MATRIX_ACCESS_TOKEN=syt_...
+NOSTR_NSEC=nsec1...
+# NOSTR_RELAYS=wss://relay.example.com  # optional: overrides nostrRelays config
 KERN_AUTH_TOKEN=...
 ```
 

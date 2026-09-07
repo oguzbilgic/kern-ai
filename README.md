@@ -8,7 +8,7 @@ Agents that run on your machine, use real tools, remember everything, and publis
 
 ## Why kern
 
-- **One brain, every channel** — terminal, browser, Telegram, Slack, Matrix feed into one session. The agent knows who's talking, what channel it's in, and what happened 10,000 messages ago.
+- **One brain, every channel** — terminal, browser, Telegram, Slack, Matrix, Nostr feed into one session. The agent knows who's talking, what channel it's in, and what happened 10,000 messages ago.
 - **Memory that compounds** — conversations segmented by topic, summarized into a hierarchy, compressed into context. Semantic recall over everything. The agent gets better the longer it runs.
 - **Agents build their own UI** — dashboards with live data, served from the agent, displayed in a side panel. Not chat — real interfaces that update themselves.
 - **Your infra, your data** — runs on your laptop, server, or homelab. The whole agent is a git-tracked folder. Pay only for API tokens — or use Ollama for fully local, zero-cost inference.
@@ -93,7 +93,8 @@ Terminal ─────┐
 Web UI ───────┤
 Telegram ─────┤── one session
 Slack ────────┤
-Matrix ───────┘
+Matrix ───────┤
+Nostr ────────┘
 ```
 
 Every interface feeds into the same session. Message from Telegram, pick up in the terminal, continue in the browser. Each message carries metadata — who said it, which channel, when — so the agent connects context across all of them without losing track.
@@ -141,9 +142,10 @@ Optionally, `kern proxy start` launches an authenticated reverse proxy that disc
 | **Telegram** | Set `TELEGRAM_BOT_TOKEN` in `.kern/.env` |
 | **Slack** | Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.kern/.env` |
 | **Matrix** | Set `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` in `.kern/.env` |
+| **Nostr** | Set `NOSTR_NSEC` in `.kern/.env` — DM the agent's npub from any Nostr client |
 | **Desktop** | macOS app via Tauri ([releases](https://github.com/oguzbilgic/kern-ai/releases)) |
 
-First Telegram/Slack/Matrix user is auto-paired as operator. Others pair with `KERN-XXXX` codes.
+First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair with `KERN-XXXX` codes.
 
 ## Configuration
 

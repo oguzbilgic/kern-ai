@@ -16,6 +16,7 @@ Examples from human interfaces:
 [via telegram, telegram:12345, user: 8105113489, time: 2026-04-06T14:30:00-07:00]
 [via slack, #engineering, user: U04ABC, time: 2026-04-06T14:30:00-07:00]
 [via matrix, matrix:!abc:example.com, user: @oguz:example.com, time: 2026-04-16T21:00:00-07:00]
+[via nostr, nostr:npub1n03…p2sku, user: npub1n03…p2sku, time: 2026-09-06T18:30:00-07:00]
 [via web, web, user: tui, time: 2026-04-06T14:30:00-07:00]
 [via tui, tui, user: tui, time: 2026-04-06T14:30:00-07:00]
 ```
@@ -38,6 +39,7 @@ The agent sees who's talking, from which channel, and when — and adapts behavi
 | `telegram` | `telegram:<chatId>` | `src/interfaces/telegram.ts` | Telegram user |
 | `slack` | `#channel-name` or `slack:<Dxxx>` | `src/interfaces/slack.ts` | Slack user |
 | `matrix` | `matrix:<roomId>` | `src/interfaces/matrix.ts` | Matrix user |
+| `nostr` | `nostr:<npub>` | `src/interfaces/nostr.ts` | Nostr DM sender |
 | `cli` | `cli` | `src/interfaces/cli.ts` | CLI invocation |
 | `web` | `web` | HTTP POST to `/message` | Web UI user |
 | `tui` | `tui` | HTTP POST to `/message` | TUI client |
@@ -117,6 +119,7 @@ How each interface populates the internal message fields and SSE events:
 | telegram | `msg.from.id` (stringified) | `msg.chat.id` (stringified) | `telegram:<chatId>` | `telegram` |
 | slack | `message.user` | `message.channel` | `#<name>` (channel) or `slack-dm` (DM) | `slack` |
 | matrix | `event.sender` (mxid) | `roomId` | `matrix:<roomId>` | `matrix` |
+| nostr | sender `npub` | sender `npub` | `nostr:<npub>` | `nostr` |
 | cli | `"cli"` | `"cli"` | `"terminal"` | `cli` |
 | tui | `"tui"` | — | `"tui"` | `tui` |
 | web | `"tui"` | — | `"web"` | `web` |
@@ -124,6 +127,7 @@ How each interface populates the internal message fields and SSE events:
 Notes:
 - Slack channel names are resolved via `conversations.info` — DMs use `slack-dm`, channels use `#<channel-name>`.
 - Matrix room IDs are opaque (`!abc:example.com`); the channel label prefixes them with `matrix:`.
+- Nostr DMs have no room concept — a conversation *is* the counterparty, so `userId` and `chatId` are both the sender's `npub`.
 - TUI and web submit messages over HTTP without a `chatId` — they always represent the operator.
 
 ## TUI
@@ -282,3 +286,43 @@ Long-polled `/sync` against a Matrix homeserver (Synapse, Dendrite, Conduit, etc
 - **No E2E encryption.** Rooms with `m.room.encryption` state are joined but messages are skipped. Create unencrypted rooms for agents (Element: turn off encryption in room create advanced options).
 - **No media.** Images, files, voice messages pass through silently.
 - **No reactions, edits, threads, or replies.** Plain text turns only.
+
+## Nostr
+
+Encrypted direct messages over [Nostr](https://nostr.com) relays. No server to run, no account to create — the agent's identity is a keypair, and any Nostr client (Damus, Amethyst, Primal, Coracle, …) can DM it.
+
+- Interface: `nostr`, channel: `nostr:<npub>`, user: `<npub>`
+
+### Setup
+
+1. Generate a keypair for the agent. Any Nostr client can do this, or:
+   ```bash
+   node -e 'const t=require("nostr-tools");const sk=t.generateSecretKey();console.log(t.nip19.nsecEncode(sk));console.log(t.nip19.npubEncode(t.getPublicKey(sk)))'
+   ```
+2. Add the secret key to `.kern/.env`:
+   ```
+   NOSTR_NSEC=nsec1...
+   ```
+3. Optionally pick relays in `.kern/config.json` (defaults to a few large public relays):
+   ```json
+   "nostrRelays": ["wss://relay.damus.io", "wss://nos.lol"]
+   ```
+   `NOSTR_RELAYS=wss://a,wss://b` in `.env` overrides the config list (useful for Docker).
+4. Restart the agent. From your Nostr client, DM the agent's `npub`. The first sender is auto-paired as operator; everyone else gets a pairing code.
+
+The agent's `npub` is logged at startup (`[nostr] identity npub1…`).
+
+### Behavior
+
+- **NIP-04 encrypted DMs (kind 4)** in and out — the DM format every client supports. Relays see ciphertext only.
+- **Multi-relay.** Subscribes to every configured relay, dedupes by event id, publishes replies to all connected relays. One reachable relay is enough.
+- **Reconnects** with backoff. Missed DMs are replayed on resubscribe (`since` cursor), so a relay blip doesn't lose messages.
+- **Pairing** works like Telegram/Slack DMs — gated per sender `npub`. The `message` tool can DM any paired `npub` proactively.
+- **Private deployments.** Point `nostrRelays` at a single self-hosted relay on your tailnet (e.g. [khatru](https://github.com/fiatjaf/khatru), [nostr-rs-relay](https://github.com/scsibug/nostr-rs-relay)) and nothing ever touches a public server. Relays don't federate — traffic goes only where you point it.
+
+### Limitations (MVP)
+
+- **No group channels** (NIP-28 kind 42 / NIP-29). DMs only.
+- **No NIP-44 / gift-wrap (NIP-17).** NIP-04 leaks sender/recipient metadata to relays (not content). Fine on a private relay; on public relays assume the *fact* that you talk to the agent is visible.
+- **No media, reactions, or typing indicators.** Plain text turns only.
+- **Relay size limits.** Public relays cap events around 64–100 KB; very long replies may be rejected by some relays (publish succeeds if any relay accepts).

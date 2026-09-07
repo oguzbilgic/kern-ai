@@ -36,6 +36,8 @@ export interface KernConfig {
 
   // Interface
   telegramTools: boolean;
+  /** Nostr relay URLs. Empty array = built-in public defaults. Overridable via NOSTR_RELAYS. */
+  nostrRelays: string[];
 
   // Runtime
   heartbeatInterval: number;
@@ -89,6 +91,7 @@ export const configDefaults: KernConfig = {
   audioModel: "",
   mediaContext: 0,
   telegramTools: false,
+  nostrRelays: [],
   heartbeatInterval: 60,
   timezone: "",
 };
@@ -112,6 +115,7 @@ const FIELD_TYPES: Record<string, string> = {
   audioModel: "string",
   mediaContext: "number",
   telegramTools: "boolean",
+  nostrRelays: "string[]",
   heartbeatInterval: "number",
   timezone: "string",
   mcpServers: "object",
@@ -123,6 +127,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function typeMatches(value: unknown, expected: string): boolean {
   if (expected === "object") return isPlainObject(value);
+  if (expected === "string[]") return Array.isArray(value) && value.every((v) => typeof v === "string");
   return typeof value === expected;
 }
 

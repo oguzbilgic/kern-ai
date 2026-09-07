@@ -3,6 +3,7 @@ import { updateKernel } from "./kernel.js";
 import { TelegramInterface } from "./interfaces/telegram.js";
 import { SlackInterface } from "./interfaces/slack.js";
 import { MatrixInterface } from "./interfaces/matrix.js";
+import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { CliInterface } from "./interfaces/cli.js";
 import { loadConfig, saveConfigField } from "./config.js";
 import { readFile, appendFile } from "fs/promises";
@@ -459,6 +460,22 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     });
   }
 
+  // Start Nostr if configured
+  const nostrNsec = process.env.NOSTR_NSEC;
+  let nostrBot: NostrInterface | null = null;
+  if (!forceCli && nostrNsec) {
+    // NOSTR_RELAYS (comma-separated) overrides config.nostrRelays; empty → defaults
+    const relays = parseRelayList(process.env.NOSTR_RELAYS);
+    nostrBot = new NostrInterface(nostrNsec, relays.length ? relays : config.nostrRelays, pairing);
+    // start() is non-blocking — per-relay loops handle connection errors
+    // and report via status/statusDetail.
+    await nostrBot.start({
+      onMessage: async (msg, onEvent) => {
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent);
+      },
+    });
+  }
+
   // Register interface status reporting
   setInterfaceStatusFn(() => {
     const statuses: InterfaceStatus[] = [];
@@ -470,6 +487,9 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
     if (matrixBot) {
       statuses.push({ name: "matrix", status: matrixBot.status, detail: matrixBot.statusDetail });
+    }
+    if (nostrBot) {
+      statuses.push({ name: "nostr", status: nostrBot.status, detail: nostrBot.statusDetail });
     }
     return statuses;
   });
@@ -505,6 +525,18 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     if (iface === "matrix" && matrixBot) {
       const chatId = pairing.getChatId(userId) || userId;
       const sent = await matrixBot.sendToUser(chatId, text);
+      if (sent) {
+        server.broadcast({
+          type: "outgoing" as any,
+          text,
+          fromInterface: iface,
+          fromUserId: userId,
+        });
+      }
+      return sent;
+    }
+    if (iface === "nostr" && nostrBot) {
+      const sent = await nostrBot.sendToUser(userId, text);
       if (sent) {
         server.broadcast({
           type: "outgoing" as any,
@@ -563,6 +595,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     if (telegramBot) await telegramBot.stop().catch(() => {});
     if (slackBot) await slackBot.stop().catch(() => {});
     if (matrixBot) await matrixBot.stop().catch(() => {});
+    if (nostrBot) await nostrBot.stop().catch(() => {});
     await plugins.shutdown(pluginCtx);
     server.stop();
     memoryDB.close();
