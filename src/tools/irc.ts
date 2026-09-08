@@ -90,25 +90,26 @@ function runProbeSocket(opts: {
 
 export const ircTool = tool({
   description:
-    "Manage IRC connection, configuration, registration, and runtime operations (join, part, whois, names).",
+    "Manage IRC connection, configuration, and send IRC protocol commands (e.g. WHOIS, NAMES, JOIN, PART, PRIVMSG NickServ, MODE).",
   inputSchema: z.object({
     action: z
-      .enum(["probe", "register", "configure", "join", "part", "names", "whois"])
+      .enum(["probe", "register", "configure", "send"])
       .describe(
-        "probe: test IRC server connectivity and features. register: register nick with NickServ. configure: format and write connection URL to config. join: join a channel. part: leave a channel. names: list users in a channel. whois: inspect user/account info.",
+        "probe: test IRC server connectivity and features. register: register nick with NickServ during setup. configure: format and write connection URL to config. send: send a raw IRC command to the running interface and capture response lines.",
       ),
-    host: z.string().optional().describe("IRC server hostname (required for probe, register, configure, or targeting specific connection)"),
+    command: z
+      .string()
+      .optional()
+      .describe("Raw IRC command to send (for send action, e.g. 'WHOIS Atlas', 'NAMES #homelab', 'JOIN #dev', 'PRIVMSG NickServ :IDENTIFY pass')"),
+    host: z.string().optional().describe("IRC server hostname (for probe, register, configure, or targeting specific connection in send)"),
     port: z.number().optional().describe("IRC server port (default: 6667 plain, 6697 TLS)"),
     tls: z.boolean().optional().describe("Use TLS/SSL (default: true if port is 6697, false otherwise)"),
     nick: z.string().optional().describe("Nickname (for register or configure)"),
     password: z.string().optional().describe("Account password (for register or configure)"),
     email: z.string().optional().describe("Optional email address for NickServ registration"),
     channels: z.string().optional().describe("Comma-separated list of channels to join, e.g. '#homelab,#general'"),
-    channel: z.string().optional().describe("Channel name (for join, part, names)"),
-    target: z.string().optional().describe("Nick to inspect (for whois)"),
-    reason: z.string().optional().describe("Part reason (for part)"),
   }),
-  execute: async ({ action, host, port, tls, nick, password, email, channels, channel, target, reason }) => {
+  execute: async ({ action, command, host, port, tls, nick, password, email, channels }) => {
     switch (action) {
       case "probe": {
         if (!host) return "Error: host is required for probe";
@@ -266,54 +267,31 @@ export const ircTool = tool({
         }
       }
 
-      case "join": {
-        if (!channel) return "Error: channel is required for join";
-        const chan = /^[#&]/.test(channel) ? channel : `#${channel}`;
+      case "send": {
+        if (!command) return "Error: command is required for send (e.g. 'WHOIS nick' or 'NAMES #chan')";
         if (!_ircBot) return "Error: IRC interface is not running on this agent";
 
-        const sent = _ircBot.raw(`JOIN ${chan}`, host);
-        if (!sent) return `Failed to send JOIN: no connection for host ${host || "(default)"}`;
-        return `Joined ${chan}`;
-      }
+        const clean = command.trim();
+        // Prevent CRLF injection
+        if (/[\r\n]/.test(clean)) {
+          return "Error: command must not contain carriage return or newline characters";
+        }
 
-      case "part": {
-        if (!channel) return "Error: channel is required for part";
-        const chan = /^[#&]/.test(channel) ? channel : `#${channel}`;
-        if (!_ircBot) return "Error: IRC interface is not running on this agent";
+        // Prevent destructive QUIT via send
+        if (/^QUIT(\s|$)/i.test(clean)) {
+          return "Error: QUIT command cannot be sent via irc tool as it terminates the connection";
+        }
 
-        const msg = reason ? ` :${reason}` : "";
-        const sent = _ircBot.raw(`PART ${chan}${msg}`, host);
-        if (!sent) return `Failed to send PART: no connection for host ${host || "(default)"}`;
-        return `Parted ${chan}`;
-      }
+        const res = await _ircBot.sendCommand(clean, host);
+        if (!res.success) {
+          return `Command failed: ${res.error || "failed to send command"}`;
+        }
 
-      case "names": {
-        if (!channel) return "Error: channel is required for names";
-        const chan = /^[#&]/.test(channel) ? channel : `#${channel}`;
-        if (!_ircBot) return "Error: IRC interface is not running on this agent";
+        if (!res.lines || res.lines.length === 0) {
+          return `Command sent: ${clean} (no server reply received)`;
+        }
 
-        const result = await _ircBot.queryNames(chan, host);
-        if (!result.success || !result.nicks) return `NAMES query failed: ${result.error || "no names returned"}`;
-        return `Users in ${chan} (${result.nicks.length}):\n  ${result.nicks.join(", ")}`;
-      }
-
-      case "whois": {
-        if (!target) return "Error: target (nick) is required for whois";
-        if (!_ircBot) return "Error: IRC interface is not running on this agent";
-
-        const result = await _ircBot.queryWhois(target, host);
-        if (!result.success) return `WHOIS query failed: ${result.error}`;
-        const info = result.info;
-        return [
-          `WHOIS ${info.nick}:`,
-          info.user && info.host ? `  Mask: ${info.nick}!${info.user}@${info.host}` : null,
-          info.realname ? `  Realname: ${info.realname}` : null,
-          info.account ? `  Account: ${info.account} (Identified)` : `  Account: none (Unidentified)`,
-          info.channels?.length ? `  Channels: ${info.channels.join(" ")}` : null,
-          info.server ? `  Server: ${info.server} (${info.serverInfo || ""})` : null,
-        ]
-          .filter(Boolean)
-          .join("\n");
+        return res.lines.join("\n");
       }
     }
   },

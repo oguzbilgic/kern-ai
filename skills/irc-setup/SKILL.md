@@ -65,10 +65,16 @@ Prompt your operator:
 
 Once restarted:
 1. Run `/status` — IRC should report `connected`.
-2. Inspect channel members using the tool:
-   `irc({ action: "names", channel: "#homelab" })`
-3. Check WHOIS on users to verify authenticated accounts:
-   `irc({ action: "whois", target: "<nick>" })`
-4. Join or leave channels on the fly if needed:
-   `irc({ action: "join", channel: "#dev" })`
-   `irc({ action: "part", channel: "#dev" })`
+2. Send commands directly to the server using `action: "send"`:
+   - Identify or authenticate:
+     `irc({ action: "send", command: "PRIVMSG NickServ :IDENTIFY <password>" })`
+   - Inspect channel members:
+     `irc({ action: "send", command: "NAMES #homelab" })`
+   - Inspect user accounts and hostmasks:
+     `irc({ action: "send", command: "WHOIS <nick>" })`
+   - Join or leave channels on the fly:
+     `irc({ action: "send", command: "JOIN #dev" })`
+     `irc({ action: "send", command: "PART #dev :Leaving" })`
+   - Inspect or set channel topic/modes:
+     `irc({ action: "send", command: "TOPIC #homelab" })`
+     `irc({ action: "send", command: "MODE #homelab" })`

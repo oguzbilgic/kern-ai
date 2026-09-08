@@ -27,39 +27,49 @@ test("ircTool: configure action formats URL and writes to config.json", async ()
   }
 });
 
-test("ircTool: join, part, names, whois delegate cleanly to ircBot", async () => {
-  let lastRaw = "";
+test("ircTool: send action executes raw command and returns server response lines", async () => {
+  let lastSentCommand = "";
   const fakeBot: any = {
-    raw(line: string) {
-      lastRaw = line;
-      return true;
-    },
-    async queryNames(channel: string) {
-      return { success: true, nicks: ["alice", "bob"] };
-    },
-    async queryWhois(target: string) {
-      return {
-        success: true,
-        info: { nick: target, user: "u", host: "h.net", account: target, realname: "Real Name" },
-      };
+    async sendCommand(cmd: string) {
+      lastSentCommand = cmd;
+      if (cmd.startsWith("WHOIS")) {
+        return {
+          success: true,
+          lines: [
+            ":irc 311 bot alice ~u host * :Real Name",
+            ":irc 330 bot alice alice :is logged in as",
+            ":irc 318 bot alice :End of /WHOIS list.",
+          ],
+        };
+      }
+      if (cmd.startsWith("PRIVMSG NickServ")) {
+        return {
+          success: true,
+          lines: [":NickServ NOTICE bot :You are now identified for alice."],
+        };
+      }
+      return { success: true, lines: [] };
     },
   };
 
   setIrcInterface(fakeBot);
 
-  const joinRes = await (ircTool as any).execute({ action: "join", channel: "#test" });
-  assert.equal(joinRes, "Joined #test");
-  assert.equal(lastRaw, "JOIN #test");
+  // Rejects CRLF injection
+  const crlfRes = await (ircTool as any).execute({ action: "send", command: "WHOIS alice\r\nQUIT" });
+  assert.match(crlfRes, /carriage return or newline/);
 
-  const partRes = await (ircTool as any).execute({ action: "part", channel: "#test", reason: "bye" });
-  assert.equal(partRes, "Parted #test");
-  assert.equal(lastRaw, "PART #test :bye");
+  // Rejects QUIT
+  const quitRes = await (ircTool as any).execute({ action: "send", command: "QUIT :bye" });
+  assert.match(quitRes, /QUIT command cannot be sent/);
 
-  const namesRes = await (ircTool as any).execute({ action: "names", channel: "#test" });
-  assert.match(namesRes, /Users in #test \(2\):/);
-  assert.match(namesRes, /alice, bob/);
+  // Executes WHOIS
+  const whoisRes = await (ircTool as any).execute({ action: "send", command: "WHOIS alice" });
+  assert.equal(lastSentCommand, "WHOIS alice");
+  assert.match(whoisRes, /311 bot alice/);
+  assert.match(whoisRes, /is logged in as/);
 
-  const whoisRes = await (ircTool as any).execute({ action: "whois", target: "alice" });
-  assert.match(whoisRes, /WHOIS alice:/);
-  assert.match(whoisRes, /Account: alice \(Identified\)/);
+  // Executes NickServ IDENTIFY
+  const idRes = await (ircTool as any).execute({ action: "send", command: "PRIVMSG NickServ :IDENTIFY secretpass" });
+  assert.equal(lastSentCommand, "PRIVMSG NickServ :IDENTIFY secretpass");
+  assert.match(idRes, /You are now identified/);
 });

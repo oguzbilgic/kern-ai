@@ -402,9 +402,73 @@ class IrcConnection {
     return true;
   }
 
-  // Active query callbacks for WHOIS, NAMES, etc.
+  // Active query callbacks for WHOIS, NAMES, raw lines, etc.
   private pendingWhois = new Map<string, { resolve: (val: any) => void; info: any; timer: NodeJS.Timeout }>();
   private pendingNames = new Map<string, { resolve: (val: any) => void; nicks: string[]; timer: NodeJS.Timeout }>();
+  private rawCaptures = new Set<{ onLine: (raw: string, line: IrcLine) => void }>();
+
+  /**
+   * Send a raw IRC line and capture server response lines for a short duration.
+   */
+  async sendCommand(
+    command: string,
+    timeoutMs = 2500,
+  ): Promise<{ success: boolean; lines: string[]; error?: string }> {
+    if (!this.socket || !this.registered) return { success: false, lines: [], error: "Not connected to IRC server" };
+
+    const captured: string[] = [];
+    return new Promise((resolve) => {
+      let settled = false;
+      let idleTimer: NodeJS.Timeout | null = null;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (idleTimer) clearTimeout(idleTimer);
+        clearTimeout(maxTimer);
+        this.rawCaptures.delete(capture);
+        resolve({ success: true, lines: captured });
+      };
+
+      const maxTimer = setTimeout(finish, timeoutMs);
+
+      const resetIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        // After receiving some lines, settle if quiet for 500ms
+        idleTimer = setTimeout(finish, 600);
+      };
+
+      const capture = {
+        onLine: (raw: string, line: IrcLine) => {
+          captured.push(raw);
+          resetIdle();
+
+          // Settle early on known terminal responses
+          const cmd = line.command;
+          if (
+            cmd === "318" || // RPL_ENDOFWHOIS
+            cmd === "366" || // RPL_ENDOFNAMES
+            cmd === "323" || // RPL_LISTEND
+            cmd === "368" || // RPL_ENDOFBANLIST
+            cmd === "401" || // ERR_NOSUCHNICK
+            cmd === "402" || // ERR_NOSUCHSERVER
+            cmd === "403" || // ERR_NOSUCHCHANNEL
+            cmd === "404" || // ERR_CANNOTSENDTOCHAN
+            cmd === "421" || // ERR_UNKNOWNCOMMAND
+            cmd === "433" || // ERR_NICKNAMEINUSE
+            cmd === "442" || // ERR_NOTONCHANNEL
+            cmd === "461" || // ERR_NEEDMOREPARAMS
+            cmd === "482"    // ERR_CHANOPRIVSNEEDED
+          ) {
+            setTimeout(finish, 50);
+          }
+        },
+      };
+
+      this.rawCaptures.add(capture);
+      this.enqueue(command);
+    });
+  }
 
   async queryWhois(target: string, timeoutMs = 8000): Promise<{ success: boolean; info?: any; error?: string }> {
     if (!this.socket || !this.registered) return { success: false, error: "Not connected to IRC server" };
@@ -543,7 +607,12 @@ class IrcConnection {
     for (const raw of lines) {
       if (!raw) continue;
       const line = parseIrcLine(raw);
-      if (line) this.handleLine(line);
+      if (line) {
+        for (const capture of this.rawCaptures) {
+          capture.onLine(raw, line);
+        }
+        this.handleLine(line);
+      }
     }
   }
 
@@ -913,6 +982,17 @@ export class IrcInterface implements Interface {
     const conn = host ? this.connections.find((c) => c.host === host) : this.connections[0];
     if (!conn) return false;
     return conn.sendRaw(line);
+  }
+
+  /** Run a raw command and capture the response lines. */
+  async sendCommand(
+    command: string,
+    host?: string,
+    timeoutMs = 2500,
+  ): Promise<{ success: boolean; lines: string[]; error?: string }> {
+    const conn = host ? this.connections.find((c) => c.host === host) : this.connections[0];
+    if (!conn) return { success: false, lines: [], error: "No active IRC connection" };
+    return conn.sendCommand(command, timeoutMs);
   }
 
   /** Run a WHOIS query against a user. */
