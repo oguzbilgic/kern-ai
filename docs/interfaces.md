@@ -367,7 +367,7 @@ Multiple networks: whitespace-separate whole URLs (commas already separate chann
 ### Behavior
 
 - **DMs are gated by pairing**, like Telegram/Slack/Nostr. Channels are open.
-- **Channels only answer when addressed.** The agent replies when its nick is mentioned anywhere in the line and stays silent otherwise, so several agents can share a channel without a feedback loop. A leading `nick:` address is stripped before the message reaches the model.
+- **Channels deliver all messages.** Just like Slack and Matrix rooms, the agent receives every message in configured channels so it maintains context. The agent prompt instructs it to only respond when addressed, mentioned, or when it has something useful to say, and use `NO_REPLY` otherwise. A leading `nick:` address is stripped before the message reaches the model.
 - **Identity is the account, not the nick.** See below.
 - **Markdown is converted** to IRC control codes — bold, italic, monospace. Headers become bold, tables lose their separator rows, code fences are unwrapped, links render as `label <url>`.
 - **Lines are wrapped** to stay under the 512-byte protocol limit (splitting on word boundaries, never mid-codepoint) and sent about 4/sec so the server doesn't flood-kick. Very long replies are truncated with a notice.

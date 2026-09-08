@@ -351,18 +351,17 @@ test("DM: account-tag \"*\" means not logged in, not an account named *", async 
   assert.equal(received[0].userId, "irc:127.0.0.1/~oguz", "placeholder account → ~nick");
 });
 
-test("channel: silent unless the nick is mentioned", async () => {
+test("channel: receives all messages, strips leading nick address", async () => {
   const { server, received } = await connect({});
 
   server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :just chatting");
-  server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :vegan food is nice");
-  await sleep(250);
-  assert.equal(received.length, 0, "bare chatter and substring matches are ignored");
+  await waitFor(() => received.length === 1);
+  assert.equal(received[0].text, "just chatting", "bare chatter is delivered to the agent");
 
   server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :vega: status?");
-  await waitFor(() => received.length > 0);
-  assert.equal(received[0].text, "status?", "leading address is stripped");
-  assert.equal(received[0].chatId, "127.0.0.1/#homelab", "replies go to the channel");
+  await waitFor(() => received.length === 2);
+  assert.equal(received[1].text, "status?", "leading address is stripped");
+  assert.equal(received[1].chatId, "127.0.0.1/#homelab", "replies go to the channel");
 
   await waitFor(() => server.privmsgs().length > 0);
   assert.deepEqual(server.privmsgs()[0], ["#homelab", "pong"]);

@@ -636,11 +636,11 @@ class IrcConnection {
     const isChannel = /^[#&+!]/.test(target);
     const replyTo = isChannel ? target : nick;
 
-    // Channels: only answer when addressed. Strip a leading "nick:" address.
-    if (isChannel) {
-      if (!this.isMentioned(text)) return;
-      text = text.replace(new RegExp(`^\\s*@?${escapeRegex(this.nick)}\\s*[:,]?\\s*`, "i"), "").trim();
-      if (!text) text = "(mentioned with no message)";
+    // If addressed directly with a leading "nick:" or "@nick:", strip the prefix
+    // (e.g. "vega: what's up" -> "what's up"). If bare mention only, provide a fallback.
+    if (isChannel && this.isMentioned(text)) {
+      const stripped = text.replace(new RegExp(`^\\s*@?${escapeRegex(this.nick)}\\s*[:,]?\\s*`, "i"), "").trim();
+      text = stripped || "(mentioned with no message)";
     }
 
     // Identity comes from the authenticated account, never the nick.
