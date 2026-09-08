@@ -398,10 +398,20 @@ class IrcConnection {
 
   /** Send text to a nick or channel. Returns false if not connected. */
   send(target: string, text: string): boolean {
-    if (!this.socket || !this.registered) return false;
-    for (const line of formatForIrc(text)) {
+    if (!this.socket || !this.registered) {
+      // Dropping outbound text silently makes delivery unanswerable from the
+      // log, which is exactly the failure mode this logging exists to close.
+      log.warn(
+        "irc",
+        `${this.host}: dropped message to ${target} — not registered (${text.length} chars)`,
+      );
+      return false;
+    }
+    const lines = formatForIrc(text);
+    for (const line of lines) {
       this.enqueue(`PRIVMSG ${target} :${line}`);
     }
+    log("irc", `${this.host}: -> ${target}: ${lines.length} line(s), ${text.length} chars`);
     return true;
   }
 
@@ -698,9 +708,16 @@ class IrcConnection {
       if (isNoReply(response)) return;
       this.send(replyTo, response);
     } catch (err: any) {
-      log.error("irc", `${this.host}: turn failed in ${replyTo}: ${err.message || err}`);
-      // Only surface errors in DMs; don't spam shared channels.
-      if (!isChannel) this.send(replyTo, "Error processing message.");
+      const reason = String(err?.message || err || "unknown error");
+      log.error("irc", `${this.host}: turn failed in ${replyTo}: ${reason}`);
+      // Surface the failure in channels too. Silence is worse than a short
+      // error line — it looks identical to the agent ignoring the message,
+      // which is impossible to debug from the other side. One line, capped,
+      // addressed to the sender so it reads as a reply and not as spam.
+      const line = isChannel
+        ? `${nick}: turn failed — ${reason.slice(0, 200)}`
+        : `Error processing message: ${reason.slice(0, 200)}`;
+      this.send(replyTo, line);
     }
   }
 }

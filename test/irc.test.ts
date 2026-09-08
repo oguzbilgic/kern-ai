@@ -564,3 +564,35 @@ test("isValidIrcTarget: rejects line-injection and accepts real targets", () => 
   assert.ok(!isValidIrcTarget(""));
   assert.ok(!isValidIrcTarget("a".repeat(201)));
 });
+
+test("turn failures are surfaced in channels, not swallowed", async () => {
+  const { server, received } = await connect({
+    onMessage: async () => {
+      throw new Error("API credits exhausted");
+    },
+  });
+  server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :vega are you there");
+  await waitFor(() => received.length > 0);
+  await waitFor(() => server.privmsgs().length > 0);
+
+  const [target, text] = server.privmsgs()[0];
+  assert.equal(target, "#homelab", "goes back to the channel");
+  assert.ok(text.startsWith("oguz:"), "addressed to the sender");
+  assert.ok(text.includes("API credits exhausted"), "carries the reason");
+});
+
+test("turn failures in DMs carry the reason too", async () => {
+  const { server, received } = await connect({
+    onMessage: async () => {
+      throw new Error("DNS resolution failed");
+    },
+  });
+  server.push("@account=oguz :oguz!u@h PRIVMSG vega :hi");
+  await waitFor(() => received.length > 0);
+  await waitFor(() => server.privmsgs().length > 0);
+
+  const [target, text] = server.privmsgs()[0];
+  assert.equal(target, "oguz", "goes back to the sender");
+  assert.ok(text.startsWith("Error processing message"), "still prefixed as an error");
+  assert.ok(text.includes("DNS resolution failed"), "carries the reason");
+});
