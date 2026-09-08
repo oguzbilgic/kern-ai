@@ -210,7 +210,8 @@ test("formatForIrc: markdown maps to IRC control codes", () => {
   const out = formatForIrc("**bold** and `code` and *em*");
   assert.equal(out.length, 1);
   assert.ok(out[0].includes("\x02bold\x02"), "bold → \\x02");
-  assert.ok(out[0].includes("\x11code\x11"), "inline code → \\x11");
+  assert.ok(out[0].includes("code"), "inline code has backticks stripped");
+  assert.ok(!out[0].includes("\x11"), "no 0x11 monospace control codes");
   assert.ok(out[0].includes("\x1dem\x1d"), "italic → \\x1d");
 });
 

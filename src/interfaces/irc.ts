@@ -225,7 +225,6 @@ export function parseIrcLine(line: string): IrcLine | null {
 
 const BOLD = "\x02";
 const ITALIC = "\x1d";
-const MONO = "\x11";
 
 /**
  * Convert markdown to IRC formatting codes and drop constructs IRC can't
@@ -261,8 +260,8 @@ function markdownToIrc(text: string): string {
     line = line.replace(/^\s*>\s?/, "");
     // Links: keep the label, keep the URL visible.
     line = line.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, "$1 <$2>");
-    // Inline styling → IRC control codes.
-    line = line.replace(/`([^`\n]+)`/g, `${MONO}$1${MONO}`);
+    // Inline code: strip backticks (IRC has no universal monospace code; \x11 renders as Ctrl-Q/Q in terminal clients).
+    line = line.replace(/`([^`\n]+)`/g, "$1");
     line = line.replace(/\*\*([^*\n]+)\*\*/g, `${BOLD}$1${BOLD}`);
     line = line.replace(/(^|\s)[*_]([^*_\n]+)[*_](?=\s|$|[.,!?;:])/g, `$1${ITALIC}$2${ITALIC}`);
 
