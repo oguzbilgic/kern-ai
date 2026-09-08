@@ -15,6 +15,7 @@ import { registerAgent, writePidFile, removePidFile, assignPort } from "./regist
 import { AgentServer } from "./server.js";
 import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
+import { setIrcInterface, initIrcTool } from "./tools/irc.js";
 import { SegmentIndex } from "./segments.js";
 import { MemoryDB } from "./memory.js";
 import { MessageQueue } from "./queue.js";
@@ -478,10 +479,12 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   }
 
   // Start IRC if configured — IRC_URL overrides config.irc
+  initIrcTool(agentDir);
   const ircUrls = parseIrcUrls(process.env.IRC_URL || config.irc);
   let ircBot: IrcInterface | null = null;
   if (!forceCli && ircUrls.length) {
     ircBot = new IrcInterface(ircUrls, pairing);
+    setIrcInterface(ircBot);
     // start() is non-blocking — each connection retries on its own and
     // reports via status/statusDetail.
     await ircBot.start({

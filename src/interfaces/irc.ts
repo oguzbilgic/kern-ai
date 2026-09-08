@@ -395,6 +395,43 @@ class IrcConnection {
     this.status = "disconnected";
   }
 
+  /** Send a raw IRC protocol line. Returns false if not connected. */
+  sendRaw(line: string): boolean {
+    if (!this.socket || !this.registered) return false;
+    this.enqueue(line);
+    return true;
+  }
+
+  // Active query callbacks for WHOIS, NAMES, etc.
+  private pendingWhois = new Map<string, { resolve: (val: any) => void; info: any; timer: NodeJS.Timeout }>();
+  private pendingNames = new Map<string, { resolve: (val: any) => void; nicks: string[]; timer: NodeJS.Timeout }>();
+
+  async queryWhois(target: string, timeoutMs = 8000): Promise<{ success: boolean; info?: any; error?: string }> {
+    if (!this.socket || !this.registered) return { success: false, error: "Not connected to IRC server" };
+    const t = target.toLowerCase();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingWhois.delete(t);
+        resolve({ success: false, error: "WHOIS query timed out" });
+      }, timeoutMs);
+      this.pendingWhois.set(t, { resolve, info: { nick: target }, timer });
+      this.enqueue(`WHOIS ${target}`);
+    });
+  }
+
+  async queryNames(channel: string, timeoutMs = 8000): Promise<{ success: boolean; nicks?: string[]; error?: string }> {
+    if (!this.socket || !this.registered) return { success: false, error: "Not connected to IRC server" };
+    const c = channel.toLowerCase();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingNames.delete(c);
+        resolve({ success: false, error: "NAMES query timed out" });
+      }, timeoutMs);
+      this.pendingNames.set(c, { resolve, nicks: [], timer });
+      this.enqueue(`NAMES ${channel}`);
+    });
+  }
+
   /** Send text to a nick or channel. Returns false if not connected. */
   send(target: string, text: string): boolean {
     if (!this.socket || !this.registered) {
@@ -610,6 +647,100 @@ class IrcConnection {
         this.socket?.destroy();
         return;
 
+      case "353": { // RPL_NAMREPLY: <client> <symbol> <channel> :[prefix]nick1 ...
+        const chan = (line.params[2] || "").toLowerCase();
+        const pending = this.pendingNames.get(chan);
+        if (pending) {
+          const namesStr = line.params[3] || "";
+          const list = namesStr.split(/\s+/).map((n) => n.replace(/^[@+~&%]/, "")).filter(Boolean);
+          pending.nicks.push(...list);
+        }
+        return;
+      }
+
+      case "366": { // RPL_ENDOFNAMES: <client> <channel> :End of /NAMES list
+        const chan = (line.params[1] || "").toLowerCase();
+        const pending = this.pendingNames.get(chan);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingNames.delete(chan);
+          pending.resolve({ success: true, nicks: pending.nicks });
+        }
+        return;
+      }
+
+      case "311": { // RPL_WHOISUSER: <client> <nick> <user> <host> * :<realname>
+        const nick = (line.params[1] || "").toLowerCase();
+        const pending = this.pendingWhois.get(nick);
+        if (pending) {
+          pending.info.user = line.params[2];
+          pending.info.host = line.params[3];
+          pending.info.realname = line.params[5];
+        }
+        return;
+      }
+
+      case "312": { // RPL_WHOISSERVER: <client> <nick> <server> :<server info>
+        const nick = (line.params[1] || "").toLowerCase();
+        const pending = this.pendingWhois.get(nick);
+        if (pending) {
+          pending.info.server = line.params[2];
+          pending.info.serverInfo = line.params[3];
+        }
+        return;
+      }
+
+      case "319": { // RPL_WHOISCHANNELS: <client> <nick> :[prefix]chan1 ...
+        const nick = (line.params[1] || "").toLowerCase();
+        const pending = this.pendingWhois.get(nick);
+        if (pending) {
+          pending.info.channels = (line.params[2] || "").split(/\s+/).filter(Boolean);
+        }
+        return;
+      }
+
+      case "330": { // RPL_WHOISACCOUNT: <client> <nick> <account> :is logged in as
+        const nick = (line.params[1] || "").toLowerCase();
+        const pending = this.pendingWhois.get(nick);
+        if (pending) {
+          pending.info.account = line.params[2];
+        }
+        return;
+      }
+
+      case "318": { // RPL_ENDOFWHOIS: <client> <nick> :End of /WHOIS list
+        const nick = (line.params[1] || "").toLowerCase();
+        const pending = this.pendingWhois.get(nick);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingWhois.delete(nick);
+          pending.resolve({ success: true, info: pending.info });
+        }
+        return;
+      }
+
+      case "401": { // ERR_NOSUCHNICK
+        const target = (line.params[1] || "").toLowerCase();
+        const pendingW = this.pendingWhois.get(target);
+        if (pendingW) {
+          clearTimeout(pendingW.timer);
+          this.pendingWhois.delete(target);
+          pendingW.resolve({ success: false, error: `No such nick "${line.params[1]}"` });
+        }
+        return;
+      }
+
+      case "403": { // ERR_NOSUCHCHANNEL
+        const chan = (line.params[1] || "").toLowerCase();
+        const pendingN = this.pendingNames.get(chan);
+        if (pendingN) {
+          clearTimeout(pendingN.timer);
+          this.pendingNames.delete(chan);
+          pendingN.resolve({ success: false, error: `No such channel "${line.params[1]}"` });
+        }
+        return;
+      }
+
       case "PRIVMSG":
         this.handlePrivmsg(line);
         return;
@@ -775,5 +906,26 @@ export class IrcInterface implements Interface {
       return false;
     }
     return conn.send(target, text);
+  }
+
+  /** Send a raw IRC line to a specific server host (or the first connection). */
+  raw(line: string, host?: string): boolean {
+    const conn = host ? this.connections.find((c) => c.host === host) : this.connections[0];
+    if (!conn) return false;
+    return conn.sendRaw(line);
+  }
+
+  /** Run a WHOIS query against a user. */
+  async queryWhois(target: string, host?: string): Promise<{ success: boolean; info?: any; error?: string }> {
+    const conn = host ? this.connections.find((c) => c.host === host) : this.connections[0];
+    if (!conn) return { success: false, error: "No active IRC connection" };
+    return conn.queryWhois(target);
+  }
+
+  /** Run a NAMES query on a channel. */
+  async queryNames(channel: string, host?: string): Promise<{ success: boolean; nicks?: string[]; error?: string }> {
+    const conn = host ? this.connections.find((c) => c.host === host) : this.connections[0];
+    if (!conn) return { success: false, error: "No active IRC connection" };
+    return conn.queryNames(channel);
   }
 }
