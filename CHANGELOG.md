@@ -1,5 +1,8 @@
 # Changelog
 
+## next
+- **`embeddingModel` config field** ([#334](https://github.com/oguzbilgic/kern-ai/pull/334)) — recall and segments picked their embedding model from `provider` alone, so an `openai` agent pointed at an OpenAI-compatible endpoint that does not serve `text-embedding-3-small` got a 404 on every embedding request while chat kept working. Set `embeddingModel` to the ID that endpoint does serve (`gemini-embedding-001` on Google's OpenAI-compatible endpoint, for example). Empty (default) keeps the existing per-provider defaults.
+
 ## 0.34.1 (2026-09-09)
 
 ### Improvements
