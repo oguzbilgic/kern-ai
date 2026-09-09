@@ -95,7 +95,7 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
  * - Otherwise, use a provider-specific default:
  *   - openai: gpt-4.1-mini
  *   - anthropic: anthropic/claude-haiku-4.5 (via OpenRouter)
- *   - openrouter: openai/gpt-4.1-mini
+ *   - openrouter: google/gemini-2.5-flash-lite
  *   - ollama: reuses the agent's chat model (avoids forcing users to pull
  *     a separate model just for summaries)
  *
@@ -154,11 +154,11 @@ export function createSummaryModel(config: KernConfig): any {
     case "anthropic":
       return client.chat("anthropic/claude-haiku-4.5");
     case "openrouter":
-      return client.chat("openai/gpt-4.1-mini");
+      return client.chat("google/gemini-2.5-flash-lite");
     case "ollama":
       return client.chat(config.model);
     default:
-      return client.chat("openai/gpt-4.1-mini");
+      return client.chat("google/gemini-2.5-flash-lite");
   }
 }
 
