@@ -1,5 +1,8 @@
 # Changelog
 
+## next
+- **Tool calls work against Google's OpenAI-compatible endpoint** ([#336](https://github.com/oguzbilgic/kern-ai/pull/336)) — with `provider: "openai"` and `OPENAI_BASE_URL` pointed at `generativelanguage.googleapis.com`, the first tool call ended the turn with `Type validation failed`, because Google omits `index` on streamed tool-call deltas. That endpoint now uses `@ai-sdk/openai-compatible` under the `google` provider name, which also echoes the `thought_signature` Google requires on the request after a tool result. An agent on Gemini no longer needs a translating gateway in front of it. Every other endpoint, custom or not, is unchanged.
+
 ## 0.34.1 (2026-09-09)
 
 ### Improvements
