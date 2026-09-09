@@ -253,6 +253,11 @@ export class SegmentIndex {
       const insertSeg = this.db.prepare(
         "INSERT OR IGNORE INTO semantic_segments (session_id, msg_start, msg_end, start_time, end_time, level, summary, token_count) VALUES (?, ?, ?, ?, ?, 0, ?, ?)"
       );
+      const selectSegId = this.db.prepare(
+        "SELECT id FROM semantic_segments WHERE session_id = ? AND level = 0 AND msg_start = ? AND msg_end = ?"
+      );
+      // vec0 rejects INSERT OR REPLACE, so a stale vector is deleted first.
+      const deleteVec = this.db.prepare("DELETE FROM vec_segments WHERE rowid = ?");
       const insertVec = this.db.prepare(
         "INSERT INTO vec_segments (rowid, embedding) VALUES (?, ?)"
       );
@@ -266,8 +271,15 @@ export class SegmentIndex {
       const tx = this.db.transaction(() => {
         for (const seg of merged) {
           const info = insertSeg.run(seg.session_id, seg.msg_start, seg.msg_end, seg.start_time, seg.end_time, seg.text, seg.token_count);
-          if (info.changes === 0) continue;
-          const segId = typeof info.lastInsertRowid === "bigint" ? info.lastInsertRowid : BigInt(info.lastInsertRowid);
+          // Same as recall: an existing row whose vector was dropped by a
+          // dimension rebuild has to be re-vectorized, not skipped.
+          const existing = info.changes === 0
+            ? (selectSegId.get(seg.session_id, seg.msg_start, seg.msg_end) as { id: number } | undefined)
+            : undefined;
+          const rowid = info.changes === 0 ? existing?.id : info.lastInsertRowid;
+          if (rowid === undefined) continue;
+          const segId = typeof rowid === "bigint" ? rowid : BigInt(rowid);
+          deleteVec.run(segId);
           insertVec.run(segId, new Float32Array(seg.embedding));
           created++;
         }
