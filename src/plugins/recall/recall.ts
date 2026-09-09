@@ -141,6 +141,11 @@ export class RecallIndex {
     const insertChunk = this.db.prepare(
       "INSERT OR IGNORE INTO chunks (session_id, msg_start, msg_end, text, timestamp, token_count) VALUES (?, ?, ?, ?, ?, ?)"
     );
+    const selectChunkId = this.db.prepare(
+      "SELECT id FROM chunks WHERE session_id = ? AND msg_start = ? AND msg_end = ?"
+    );
+    // vec0 rejects INSERT OR REPLACE, so a stale vector is deleted first.
+    const deleteVec = this.db.prepare("DELETE FROM vec_chunks WHERE rowid = ?");
     const insertVec = this.db.prepare(
       "INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)"
     );
@@ -160,8 +165,17 @@ export class RecallIndex {
           chunk.timestamp,
           chunk.token_count
         );
-        if (info.changes === 0) continue; // duplicate chunk, skip vec insert
-        const chunkId = typeof info.lastInsertRowid === "bigint" ? info.lastInsertRowid : BigInt(info.lastInsertRowid);
+        // A chunk row can already exist while its vector does not: the vector
+        // tables are dropped and re-created on a dimension change, and the
+        // rows they described stay behind. Re-vectorize instead of skipping,
+        // or that history is never searchable again.
+        const existing = info.changes === 0
+          ? (selectChunkId.get(chunk.session_id, chunk.msg_start, chunk.msg_end) as { id: number } | undefined)
+          : undefined;
+        const rowid = info.changes === 0 ? existing?.id : info.lastInsertRowid;
+        if (rowid === undefined) continue;
+        const chunkId = typeof rowid === "bigint" ? rowid : BigInt(rowid);
+        deleteVec.run(chunkId);
         insertVec.run(chunkId, new Float32Array(embeddings[i]));
         indexed++;
       }

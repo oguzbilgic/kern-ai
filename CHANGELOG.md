@@ -1,5 +1,8 @@
 # Changelog
 
+## next
+- **Embedding rebuilds no longer lose existing memory** ([#335](https://github.com/oguzbilgic/kern-ai/pull/335)) — a dimension change drops the vector tables, and the backfill that followed re-embedded every chunk but skipped the vector insert for rows that already existed, so recall over that history stopped matching for good. Existing rows are now re-vectorized in place. A failed dimension probe also no longer counts as a dimension change: an unreachable provider or a bad key kept the healthy index it used to destroy.
+
 ## 0.34.1 (2026-09-09)
 
 ### Improvements

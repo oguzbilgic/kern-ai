@@ -117,7 +117,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   // Initialize semantic segments (uses embeddings for context summarization)
   let segmentIndex: SegmentIndex | null = null;
   let segmentRunning = false;
-  if (embeddingDims > 0) {
+  if (memoryDB.dimensions > 0) {
     try {
       segmentIndex = new SegmentIndex(memoryDB, config);
       runtime.setSegmentIndex(segmentIndex);

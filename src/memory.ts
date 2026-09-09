@@ -15,13 +15,16 @@ const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
  */
 export class MemoryDB {
   public db: Database.Database;
-  private embeddingDimensions: number;
+  /** Width the vector tables were opened at. Never null after initSchema. */
+  public dimensions = DEFAULT_EMBEDDING_DIMENSIONS;
+  private probedDimensions: number | null;
 
-  constructor(agentDir: string, dimensions?: number) {
+  /** `dimensions` null means the probe failed; the width on disk is kept. */
+  constructor(agentDir: string, dimensions?: number | null) {
     const dbPath = join(agentDir, ".kern", "recall.db");
     this.db = new Database(dbPath);
     sqliteVec.load(this.db);
-    this.embeddingDimensions = dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+    this.probedDimensions = dimensions ?? null;
     this.initSchema();
   }
 
@@ -121,10 +124,19 @@ export class MemoryDB {
    * Create or migrate vector tables. Detects dimension mismatch
    * and rebuilds vector indexes + resets indexing state when
    * the embedding model changes (e.g. OpenAI 1536 → Ollama 768).
+   *
+   * A failed probe is not a dimension. Rebuilding on one would drop a healthy
+   * index because the provider was briefly unreachable, so the width already
+   * on disk wins.
    */
   private initVecTables(): void {
-    const dims = this.embeddingDimensions;
     const existingDims = this.getVecTableDimensions();
+    const dims = this.probedDimensions ?? existingDims ?? DEFAULT_EMBEDDING_DIMENSIONS;
+    this.dimensions = dims;
+
+    if (this.probedDimensions === null && existingDims !== null) {
+      log.warn("memory", `Embedding dimensions unknown, keeping the existing ${existingDims}`);
+    }
 
     if (existingDims !== null && existingDims !== dims) {
       log.warn("memory", `Embedding dimension changed (${existingDims} → ${dims}), rebuilding vector indexes...`);
@@ -164,19 +176,20 @@ export class MemoryDB {
 
   /**
    * Probe the actual embedding model to detect its output dimensions.
-   * Returns the dimension count, or the default if probing fails.
+   * Returns null when the width could not be established, which the caller
+   * must not confuse with a real change of model.
    */
-  static async detectEmbeddingDimensions(config: KernConfig): Promise<number> {
+  static async detectEmbeddingDimensions(config: KernConfig): Promise<number | null> {
     try {
       const model = createEmbeddingModel(config);
-      if (!model) return DEFAULT_EMBEDDING_DIMENSIONS;
+      if (!model) return null;
       const result = await embed({ model, value: "dimension probe" });
       const dims = result.embedding.length;
       log.debug("memory", `Detected embedding dimensions: ${dims}`);
       return dims;
     } catch (err: any) {
       log.warn("memory", `Failed to probe embedding dimensions: ${err.message}`);
-      return DEFAULT_EMBEDDING_DIMENSIONS;
+      return null;
     }
   }
 
