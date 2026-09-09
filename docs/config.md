@@ -34,6 +34,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `summaryModel` | `""` | Model for segment summarization. Empty = provider default (OpenAI: `gpt-4.1-mini`, Anthropic: `anthropic/claude-haiku-4.5` via OpenRouter, OpenRouter: `google/gemini-2.5-flash-lite`, Ollama: reuses `model`). Summary calls always use an OpenAI-compatible client: `openai` and `ollama` route directly, **all other providers (including `anthropic`) route via OpenRouter** — so on an Anthropic agent `summaryModel` needs an OpenRouter-style ID like `"anthropic/claude-haiku-4.5"`, not a bare Anthropic model ID. Exception: on `ollama` and `openai` agents, a namespaced `summaryModel` (contains `/`, e.g. `"openai/gpt-4.1-mini"`) routes via OpenRouter when `OPENROUTER_API_KEY` is set — lets local-model agents offload summaries to a cheap cloud model. Ollama `hf.co/...` IDs stay local. Useful when the main `model` is a thinking model — thinking burns the summary token budget on reasoning and returns empty text. Set this to a non-thinking model (e.g. `"google/gemini-2.5-flash-lite"` on OpenRouter/Anthropic, `"qwen3:4b-instruct"` on Ollama). |
 | `subAgentModel` | `""` | Model for spawned sub-agents, on the parent's provider. The model ID must be valid for that provider — same format as `model` (e.g. `claude-haiku-4-5` on `anthropic`, `anthropic/claude-haiku-4.5` on `openrouter`). Empty = inherit the parent's `model`. Sub-agents are read-only and bounded, so a cheaper model usually suffices — in heavy research fan-out they can account for most of the token volume. Individual `spawn` calls can override per-child. |
 | `autoRecall` | `false` | Automatically inject relevant old context before each turn. Requires recall enabled. |
+| `embeddingModel` | `""` | Embedding model for recall and segments. Empty = provider default (OpenAI: `text-embedding-3-small`, Anthropic and OpenRouter: `openai/text-embedding-3-small` via OpenRouter, Ollama: `nomic-embed-text`). The ID is used on the agent's own provider client, so it has to be valid there: a bare ID on `openai` and `ollama`, an OpenRouter-style ID like `"openai/text-embedding-3-large"` on `anthropic` and `openrouter`. Needed when `provider: "openai"` points at a gateway that doesn't serve OpenAI's embedding IDs. |
 | `mediaDigest` | `true` | Enable media pre-digest: describes images (vision model) and transcribes audio (audio model) on arrival, caches results, and replaces raw media with text in context. Set to `false` to disable the entire digest pipeline. |
 | `mediaModel` | `""` | Vision model for media descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default. Example: `"openai/gpt-4.1-mini"`. |
 | `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.7-flash` via OpenRouter for anthropic/ollama/openai agents with `OPENROUTER_API_KEY` set. Setting this field skips the (usually failing) attempt on the text-only chat model. |
@@ -74,6 +75,18 @@ Recall and segment boundary detection use an embedding model chosen automaticall
 | `anthropic` | `openai/text-embedding-3-small` (via OpenRouter — Anthropic has no embeddings API) |
 | `openrouter` | `openai/text-embedding-3-small` |
 | `ollama` | `nomic-embed-text` |
+
+Set `embeddingModel` to override the default. This is what you want with `provider: "openai"` pointed at an OpenAI-compatible gateway that doesn't serve OpenAI's own embedding IDs, such as Google's `https://generativelanguage.googleapis.com/v1beta/openai/`, where `text-embedding-3-small` returns a 404 and recall fails on every turn:
+
+```json
+{
+  "provider": "openai",
+  "model": "gemini-3.8-flash",
+  "embeddingModel": "gemini-embedding-001"
+}
+```
+
+Changing this on an agent that already has memory is not safe yet. kern tracks the vector width, not which model produced the vectors, so a same-width change (`gemini-embedding-001` to another 3072-dimension model) leaves the old vectors in place and searches them with vectors from a different embedding space. A different-width change does recreate the vector tables, but the rows already in `chunks` are not re-vectorized. Pick the embedding model when you create an agent.
 
 ## Environment variable overrides
 

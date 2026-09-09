@@ -27,6 +27,7 @@ export interface KernConfig {
   // Memory
   recall: boolean;
   autoRecall: boolean;
+  embeddingModel: string;
 
   // Media
   mediaDigest: boolean;
@@ -92,6 +93,7 @@ export const configDefaults: KernConfig = {
   subAgentModel: "",
   recall: true,
   autoRecall: false,
+  embeddingModel: "",
   mediaDigest: true,
   mediaModel: "",
   audioModel: "",
@@ -117,6 +119,7 @@ const FIELD_TYPES: Record<string, string> = {
   subAgentModel: "string",
   recall: "boolean",
   autoRecall: "boolean",
+  embeddingModel: "string",
   mediaDigest: "boolean",
   mediaModel: "string",
   audioModel: "string",
