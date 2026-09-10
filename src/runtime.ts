@@ -408,12 +408,16 @@ export class Runtime {
       try {
         const steps = await result.steps;
         if (steps.length >= this.config.maxSteps) {
-          const stepNotice = fullText.trim()
-            ? `\n\n⏳ Reached step limit (${this.config.maxSteps} steps). Reply \"continue\" to proceed.`
-            : `⏳ Reached step limit (${this.config.maxSteps} steps). Work is partially completed. Reply \"continue\" to proceed.`;
+          const unit = this.config.maxSteps === 1 ? "step" : "steps";
+          const hasEmittedText = fullText.trim().length > 0;
+          const stepNotice = hasEmittedText
+            ? `\n\n⏳ Reached step limit (${this.config.maxSteps} ${unit}). Reply \"continue\" to proceed.`
+            : `⏳ Reached step limit (${this.config.maxSteps} ${unit}). Work is partially completed. Reply \"continue\" to proceed.`;
           fullText += stepNotice;
           onEvent({ type: "text-delta", text: stepNotice });
-          await this.session.append([{ role: "assistant", content: fullText }]);
+          // If the model emitted text, onStepFinish already persisted the assistant message;
+          // append only the notice. If 0 text was emitted, write the notice as an assistant message.
+          await this.session.append([{ role: "assistant", content: stepNotice }]);
           log("runtime", `step limit (${this.config.maxSteps}) reached — appended continuation notice`);
         }
       } catch (err) {
