@@ -59,14 +59,16 @@ export class DiscordInterface implements Interface {
   private client: Client;
   private pairing: PairingManager | null;
   private token: string;
+  private mentionOnly: boolean;
   private botUserId: string = "";
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
   private sentCodes = new Set<string>();
 
-  constructor(token: string, pairing?: PairingManager) {
+  constructor(token: string, pairing?: PairingManager, mentionOnly: boolean = true) {
     this.token = token;
     this.pairing = pairing || null;
+    this.mentionOnly = mentionOnly;
 
     this.client = new Client({
       intents: [
@@ -121,8 +123,8 @@ export class DiscordInterface implements Interface {
 
         log.debug("discord", `msg received (dm=${isDM}, mentioned=${isMentioned}, channel=${message.channel.id}, author=${message.author.id}): "${message.content}"`);
 
-        // In channels/guilds, only reply when explicitly mentioned or in DMs
-        if (!isDM && !isMentioned) return;
+        // In channels/guilds, check mentionOnly policy
+        if (!isDM && this.mentionOnly && !isMentioned) return;
 
         // Clean text: strip bot mention prefix like <@123456789> or role mentions
         let cleanText = message.content;

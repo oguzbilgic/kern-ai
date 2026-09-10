@@ -36,6 +36,7 @@ export interface KernConfig {
 
   // Interface
   telegramTools: boolean;
+  discordMentionOnly: boolean;
   /** Nostr relay URLs. Empty array = built-in public defaults. Overridable via NOSTR_RELAYS. */
   nostrRelays: string[];
   /**
@@ -97,6 +98,7 @@ export const configDefaults: KernConfig = {
   audioModel: "",
   mediaContext: 0,
   telegramTools: false,
+  discordMentionOnly: true,
   nostrRelays: [],
   irc: "",
   heartbeatInterval: 60,
@@ -122,6 +124,7 @@ const FIELD_TYPES: Record<string, string> = {
   audioModel: "string",
   mediaContext: "number",
   telegramTools: "boolean",
+  discordMentionOnly: "boolean",
   nostrRelays: "string[]",
   irc: "string",
   heartbeatInterval: "number",

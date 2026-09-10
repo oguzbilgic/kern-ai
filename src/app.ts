@@ -483,7 +483,10 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   const discordToken = process.env.DISCORD_TOKEN;
   let discordBot: DiscordInterface | null = null;
   if (!forceCli && discordToken) {
-    discordBot = new DiscordInterface(discordToken, pairing);
+    const mentionOnly = process.env.DISCORD_MENTION_ONLY !== undefined
+      ? process.env.DISCORD_MENTION_ONLY === "true" || process.env.DISCORD_MENTION_ONLY === "1"
+      : config.discordMentionOnly ?? true;
+    discordBot = new DiscordInterface(discordToken, pairing, mentionOnly);
     discordBot.start({
       onMessage: async (msg, onEvent) => {
         return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
