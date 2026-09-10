@@ -112,14 +112,52 @@ export class AgentServer {
     this.currentSessionIdFn = fn;
   }
 
-  async start(host: string = "0.0.0.0", port: number = 0): Promise<number> {
-    return new Promise((resolve) => {
-      this.server.listen(port, host, () => {
-        this.port = (this.server.address() as any).port;
-        log("server", `listening on ${host}:${this.port}`);
-        resolve(this.port);
-      });
-    });
+  async start(
+    host: string = "0.0.0.0",
+    port: number = 0,
+    maxRetries: number = 8,
+    retryDelayMs: number = 200
+  ): Promise<number> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const boundPort = await new Promise<number>((resolve, reject) => {
+          let cleanedUp = false;
+          const cleanup = () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            this.server.removeListener("error", onError);
+            this.server.removeListener("listening", onListening);
+          };
+          const onError = (err: any) => {
+            cleanup();
+            reject(err);
+          };
+          const onListening = () => {
+            cleanup();
+            this.port = (this.server.address() as any).port;
+            log("server", `listening on ${host}:${this.port}`);
+            resolve(this.port);
+          };
+          this.server.once("error", onError);
+          this.server.once("listening", onListening);
+          try {
+            this.server.listen(port, host);
+          } catch (err) {
+            cleanup();
+            reject(err);
+          }
+        });
+        return boundPort;
+      } catch (err: any) {
+        if (err.code === "EADDRINUSE" && attempt < maxRetries) {
+          log("server", `port ${port} in use, retrying in ${retryDelayMs}ms (${attempt + 1}/${maxRetries})...`);
+          await new Promise((r) => setTimeout(r, retryDelayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(`Failed to bind server to ${host}:${port}`);
   }
 
   hasConnectedClients(): boolean {
@@ -131,7 +169,9 @@ export class AgentServer {
       client.res.end();
     }
     this.clients = [];
-    this.server.close();
+    if (this.server.listening) {
+      this.server.close();
+    }
   }
 
   // Broadcast event to all SSE clients (optionally skip one connection)
