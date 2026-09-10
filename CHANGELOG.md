@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## next
 
 ### Features
-- **Discord interface** — connect your agent directly to Discord via bot gateway. Add `DISCORD_TOKEN` to `.kern/.env` to enable. Supports pairing-gated Direct Messages, server/guild channels with @mention gating, automatic message chunking for Discord's 2,000-character limit, typing indicators, media attachment ingestion (up to 25 MB), and proactive messaging via `message` tool.
+- **Discord interface** ([#337](https://github.com/oguzbilgic/kern-ai/pull/337)) — connect your agent directly to Discord via bot gateway. Add `DISCORD_TOKEN` to `.kern/.env` to enable. Supports pairing-gated Direct Messages, server/guild channels with @mention gating, automatic message chunking for Discord's 2,000-character limit, typing indicators, media attachment ingestion (up to 25 MB), and proactive messaging via `message` tool.
+
+### Fixes
+- **Stop background summarization from getting stuck in an infinite loop** ([#338](https://github.com/oguzbilgic/kern-ai/pull/338)) — under certain conditions when rolling up older conversation segments into higher-level summaries, already-summarized segments could fail to link to their parent summary. The background process would continuously re-summarize the exact same conversation window every few seconds, burning API tokens and driving unexpected spend. Rollup now detects existing parent summaries immediately, linking child segments and stopping the loop.
 
 ## 0.34.1 (2026-09-09)
 
