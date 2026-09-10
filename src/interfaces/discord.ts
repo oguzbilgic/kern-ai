@@ -64,6 +64,8 @@ export class DiscordInterface implements Interface {
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
   private sentCodes = new Set<string>();
+  private running: boolean = false;
+  private retryTimeout?: NodeJS.Timeout;
 
   constructor(token: string, pairing?: PairingManager, mentionOnly: boolean = true) {
     this.token = token;
@@ -88,6 +90,7 @@ export class DiscordInterface implements Interface {
   get statusDetail() { return this._statusDetail; }
 
   async start({ onMessage }: StartOptions): Promise<void> {
+    this.running = true;
     return new Promise<void>((resolve, reject) => {
       let resolved = false;
 
@@ -95,6 +98,10 @@ export class DiscordInterface implements Interface {
         this.botUserId = c.user.id;
         this._status = "connected";
         this._statusDetail = undefined;
+        if (this.retryTimeout) {
+          clearTimeout(this.retryTimeout);
+          this.retryTimeout = undefined;
+        }
         log("discord", `connected as ${c.user.tag} (${c.user.id})`);
         if (!resolved) {
           resolved = true;
@@ -226,19 +233,34 @@ export class DiscordInterface implements Interface {
         }
       });
 
-      this.client.login(this.token).catch((err) => {
-        this._status = "error";
-        this._statusDetail = err.message || String(err);
-        log.error("discord", `login failed: ${err.message || err}`);
-        if (!resolved) {
-          resolved = true;
-          reject(err);
-        }
-      });
+      const tryLogin = (backoff = 2000) => {
+        if (!this.running) return;
+        this.client.login(this.token).catch((err) => {
+          this._status = "error";
+          this._statusDetail = err.message || String(err);
+          log.error("discord", `login failed: ${err.message || err}`);
+          if (!resolved) {
+            resolved = true;
+            resolve(); // Don't block startup — retry in background
+          }
+          if (this.running) {
+            const nextBackoff = Math.min(backoff * 1.5, 60000);
+            log("discord", `retrying login in ${Math.round(backoff / 1000)}s`);
+            this.retryTimeout = setTimeout(() => tryLogin(nextBackoff), backoff);
+          }
+        });
+      };
+
+      tryLogin();
     });
   }
 
   async stop(): Promise<void> {
+    this.running = false;
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+      this.retryTimeout = undefined;
+    }
     this._status = "disconnected";
     try {
       this.client.destroy();
