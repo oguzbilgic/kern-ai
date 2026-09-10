@@ -1,12 +1,12 @@
 # Changelog
 
-## next
+## 0.35.0 (2026-09-10)
 
 ### Features
-- **Discord interface** ([#337](https://github.com/oguzbilgic/kern-ai/pull/337)) — connect your agent directly to Discord via bot gateway. Add `DISCORD_TOKEN` to `.kern/.env` to enable. Supports pairing-gated Direct Messages, server/guild channels with @mention gating, automatic message chunking for Discord's 2,000-character limit, typing indicators, media attachment ingestion (up to 25 MB), and proactive messaging via `message` tool.
+- **Your agent is on Discord** ([#337](https://github.com/oguzbilgic/kern-ai/pull/337), [#339](https://github.com/oguzbilgic/kern-ai/pull/339), [#342](https://github.com/oguzbilgic/kern-ai/pull/342)) — connect your agent directly to Discord via bot gateway. Add `DISCORD_TOKEN` to `.kern/.env` to enable. Supports pairing-gated Direct Messages (sent cleanly without reply headers), server/guild channels with @mention gating (replying to the trigger message), automatic message chunking for Discord's 2,000-character limit, typing indicators, media attachment ingestion (up to 25 MB), resilient connection retry loops with backoff, and proactive messaging via `message` tool.
 
 ### Fixes
-- **Surface step-limit notifications instead of silently dropping turns** — turns that reach `maxSteps` (30) now append an explicit `⏳ Reached step limit (30 steps). Reply "continue" to proceed.` notice. If the model emitted 0 text on the step limit, a clear message is delivered and persisted instead of being silently treated as `NO_REPLY` and deleting placeholders on chat interfaces.
+- **Surface step-limit notifications instead of silently dropping turns** ([#341](https://github.com/oguzbilgic/kern-ai/pull/341)) — turns that reach `maxSteps` (30) now append an explicit `⏳ Reached step limit (30 steps). Reply "continue" to proceed.` notice. If the model emitted 0 text on the step limit, a clear message is delivered and persisted instead of being silently treated as `NO_REPLY` and deleting placeholders on chat interfaces.
 - **Stop background summarization from getting stuck in an infinite loop** ([#338](https://github.com/oguzbilgic/kern-ai/pull/338)) — under certain conditions when rolling up older conversation segments into higher-level summaries, already-summarized segments could fail to link to their parent summary. The background process would continuously re-summarize the exact same conversation window every few seconds, burning API tokens and driving unexpected spend. Rollup now detects existing parent summaries immediately, linking child segments and stopping the loop.
 
 ## 0.34.1 (2026-09-09)
