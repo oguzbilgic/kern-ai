@@ -211,7 +211,7 @@ export class DiscordInterface implements Interface {
 
           const chunks = chunkMessage(reply);
           for (let i = 0; i < chunks.length; i++) {
-            if (i === 0) {
+            if (i === 0 && !isDM) {
               await message.reply({ content: chunks[i], allowedMentions: { repliedUser: false } });
             } else {
               await (message.channel as any).send({ content: chunks[i] });
@@ -220,10 +220,12 @@ export class DiscordInterface implements Interface {
         } catch (err: any) {
           clearInterval(typingInterval);
           log.error("discord", `turn failed: ${err.message || err}`);
-          await message.reply({
-            content: "Error processing message.",
-            allowedMentions: { repliedUser: false },
-          }).catch(() => {});
+          const errorMsg = { content: "Error processing message.", allowedMentions: { repliedUser: false } };
+          if (isDM) {
+            await (message.channel as any).send({ content: "Error processing message." }).catch(() => {});
+          } else {
+            await message.reply(errorMsg).catch(() => {});
+          }
         }
       });
 
