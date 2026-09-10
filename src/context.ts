@@ -69,7 +69,6 @@ export async function loadSystemPrompt(agentDir: string, config: KernConfig, plu
     kern: "manage your own runtime (status, config, env)",
     message: "send messages proactively",
     irc: "manage IRC connections, register accounts, and query users/channels",
-    slack: "inspect Slack channels, read message history/threads, look up users, view pins/bookmarks, and add emoji reactions",
     ...pluginToolDescriptions,
   };
   // Plugin tools are always available — add them to the list

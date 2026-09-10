@@ -17,7 +17,6 @@ import { AgentServer } from "./server.js";
 import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
 import { setIrcInterface, initIrcTool } from "./tools/irc.js";
-import { setSlackInterface } from "./tools/slack.js";
 import { SegmentIndex } from "./segments.js";
 import { MemoryDB } from "./memory.js";
 import { MessageQueue } from "./queue.js";
@@ -441,7 +440,6 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   let slackBot: SlackInterface | null = null;
   if (!forceCli && slackBotToken && slackAppToken) {
     slackBot = new SlackInterface(slackBotToken, slackAppToken, pairing);
-    setSlackInterface(slackBot);
     await slackBot.start({
       onMessage: async (msg, onEvent) => {
         return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, msg.attachments);

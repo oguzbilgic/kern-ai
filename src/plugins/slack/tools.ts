@@ -1,11 +1,15 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { SlackInterface } from "../interfaces/slack.js";
+import type { WebClient } from "@slack/web-api";
 
-let _slackBot: SlackInterface | null = null;
+let _client: WebClient | null = null;
 
-export function setSlackInterface(slackBot: SlackInterface | null) {
-  _slackBot = slackBot;
+export function setSlackWebClient(client: WebClient | null) {
+  _client = client;
+}
+
+export function getSlackWebClient(): WebClient | null {
+  return _client;
 }
 
 export const slackTool = tool({
@@ -28,11 +32,11 @@ export const slackTool = tool({
     types: z.string().optional().describe("Comma-separated channel types for channels action (default: 'public_channel,private_channel')"),
   }),
   execute: async ({ action, channel, threadTs, timestamp, name, userId, limit = 20, oldest, latest, types }) => {
-    if (!_slackBot || !_slackBot.client) {
+    if (!_client) {
       return "Error: Slack interface is not running or not configured on this agent.";
     }
 
-    const client = _slackBot.client;
+    const client = _client;
     const boundedLimit = Math.min(Math.max(1, limit), 100);
 
     try {
