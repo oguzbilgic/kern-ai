@@ -4,8 +4,8 @@ import { createConnection } from "net";
 import { connect as tlsConnect } from "tls";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
-import { parseIrcLine } from "../interfaces/irc.js";
-import type { IrcInterface, IrcLine } from "../interfaces/irc.js";
+import { parseIrcLine } from "../../interfaces/irc.js";
+import type { IrcInterface, IrcLine } from "../../interfaces/irc.js";
 
 let _agentDir = "";
 let _ircBot: IrcInterface | null = null;

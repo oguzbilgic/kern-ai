@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ircTool, initIrcTool, setIrcInterface } from "../src/tools/irc.js";
+import { ircTool, initIrcTool, setIrcInterface } from "../src/plugins/irc/tools.js";
 import { mkdtemp, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";

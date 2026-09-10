@@ -7,6 +7,7 @@ import { skillsPlugin } from "./skills/plugin.js";
 import { mcpPlugin } from "./mcp/plugin.js";
 import { subagentsPlugin } from "./subagents/plugin.js";
 import { slackPlugin } from "./slack/plugin.js";
+import { ircPlugin } from "./irc/plugin.js";
 import { log } from "../log.js";
 
 export type { KernPlugin, PluginContext, RouteHandler, ContextInjection, BeforeContextInfo } from "./types.js";
@@ -24,6 +25,7 @@ const availablePlugins: KernPlugin[] = [
   mcpPlugin,
   subagentsPlugin,
   slackPlugin,
+  ircPlugin,
 ];
 
 /** Active plugin instances after loading */

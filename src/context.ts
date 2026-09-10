@@ -68,7 +68,6 @@ export async function loadSystemPrompt(agentDir: string, config: KernConfig, plu
     audio: "transcribe or analyze audio files using the AI model",
     kern: "manage your own runtime (status, config, env)",
     message: "send messages proactively",
-    irc: "manage IRC connections, register accounts, and query users/channels",
     ...pluginToolDescriptions,
   };
   // Plugin tools are always available — add them to the list
