@@ -404,6 +404,22 @@ export class Runtime {
 
       log("runtime", `stream finished, text length: ${fullText.length}`);
 
+      // Check if turn hit the step limit (#310 / step-limit notice)
+      try {
+        const steps = await result.steps;
+        if (steps.length >= this.config.maxSteps) {
+          const stepNotice = fullText.trim()
+            ? `\n\n⏳ Reached step limit (${this.config.maxSteps} steps). Reply \"continue\" to proceed.`
+            : `⏳ Reached step limit (${this.config.maxSteps} steps). Work is partially completed. Reply \"continue\" to proceed.`;
+          fullText += stepNotice;
+          onEvent({ type: "text-delta", text: stepNotice });
+          await this.session.append([{ role: "assistant", content: fullText }]);
+          log("runtime", `step limit (${this.config.maxSteps}) reached — appended continuation notice`);
+        }
+      } catch (err) {
+        log("runtime", `failed to evaluate steps for step limit notice: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
       // If the stream had an error and produced no output, throw to hit error handler
       if (streamError && fullText.length === 0) {
         throw streamError;
