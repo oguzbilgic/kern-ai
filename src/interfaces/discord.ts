@@ -159,7 +159,7 @@ export class DiscordInterface implements Interface {
           } else {
             if (this.sentCodes.has(senderId)) return;
             this.sentCodes.add(senderId);
-            const code = await this.pairing.getOrCreateCode(senderId, "discord", channelLabel);
+            const code = await this.pairing.getOrCreateCode(senderId, "discord", `discord:${channelId}`);
             await message.reply(
               `You are not paired with this agent.\n\nPairing code: \`${code}\`\n\nShare this code with the operator to approve access.`
             );
