@@ -236,6 +236,7 @@ Socket Mode connection. No public URL needed.
    - `chat:write`, `channels:read`, `channels:history`
    - `groups:read`, `groups:history`
    - `im:read`, `im:write`, `im:history`
+   - Optional for full `slack` tool capabilities: `users:read`, `reactions:write`, `reactions:read`, `pins:read`, `bookmarks:read`
 4. Install the app to your workspace — get bot token (`xoxb-...`)
 5. Subscribe to bot events:
    - `message.channels`, `message.groups`, `message.im`
@@ -252,6 +253,7 @@ Socket Mode connection. No public URL needed.
 - **DMs**: pairing required. Unpaired users get a code.
 - **Channels**: reads ALL messages, only responds when @mentioned or directly relevant. Returns `NO_REPLY` to suppress.
 - **Replies**: post directly to channel or DM (no threading).
+- **Tool**: built-in `slack` tool allows inspecting channels, reading message history & threads, looking up users, viewing pins/bookmarks, and adding emoji reactions without posting unprovoked messages.
 - Graceful shutdown: Socket Mode closes cleanly on SIGTERM.
 
 ## Matrix
