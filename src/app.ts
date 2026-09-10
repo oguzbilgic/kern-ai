@@ -7,6 +7,7 @@ import { MatrixInterface } from "./interfaces/matrix.js";
 import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
+import { MentionGate } from "./mentions.js";
 import { loadConfig, saveConfigField } from "./config.js";
 import { readFile, appendFile } from "fs/promises";
 import { join, basename } from "path";
@@ -422,11 +423,19 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   await registerAgent(agentDir);
   await writePidFile(agentDir, process.pid);
 
+  // Mention gating for group chats and channels. Shared by every group-capable
+  // interface so observed messages from one channel fold into that channel's
+  // next addressed turn. DMs and the local surfaces are never gated.
+  const mentionGate = new MentionGate(config.mentionsOnly);
+  if (config.mentionsOnly) {
+    log("kern", "mentions-only: group messages are only answered when addressed");
+  }
+
   // Start Telegram if configured
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
   let telegramBot: TelegramInterface | null = null;
   if (!forceCli && telegramToken) {
-    telegramBot = new TelegramInterface(telegramToken, pairing, config.telegramTools);
+    telegramBot = new TelegramInterface(telegramToken, pairing, config.telegramTools, mentionGate);
     await telegramBot.start({
       onMessage: async (msg, onEvent) => {
         return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
@@ -439,7 +448,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   const slackAppToken = process.env.SLACK_APP_TOKEN;
   let slackBot: SlackInterface | null = null;
   if (!forceCli && slackBotToken && slackAppToken) {
-    slackBot = new SlackInterface(slackBotToken, slackAppToken, pairing);
+    slackBot = new SlackInterface(slackBotToken, slackAppToken, pairing, mentionGate);
     await slackBot.start({
       onMessage: async (msg, onEvent) => {
         return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, msg.attachments);
@@ -453,7 +462,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   const matrixToken = process.env.MATRIX_ACCESS_TOKEN;
   let matrixBot: MatrixInterface | null = null;
   if (!forceCli && matrixHomeserver && matrixUserId && matrixToken) {
-    matrixBot = new MatrixInterface(matrixHomeserver, matrixUserId, matrixToken, pairing);
+    matrixBot = new MatrixInterface(matrixHomeserver, matrixUserId, matrixToken, pairing, mentionGate);
     // start() is non-blocking — the sync loop handles connection errors and
     // auth failures internally and reports via status/statusDetail.
     await matrixBot.start({
@@ -501,7 +510,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   const ircUrls = parseIrcUrls(process.env.IRC_URL || config.irc);
   let ircBot: IrcInterface | null = null;
   if (!forceCli && ircUrls.length) {
-    ircBot = new IrcInterface(ircUrls, pairing);
+    ircBot = new IrcInterface(ircUrls, pairing, mentionGate);
     setIrcInterface(ircBot);
     // start() is non-blocking — each connection retries on its own and
     // reports via status/statusDetail.

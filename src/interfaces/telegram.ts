@@ -3,6 +3,7 @@ import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { BARE_MENTION_TEXT, MentionGate, SentIds, escapeRegex } from "../mentions.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -66,23 +67,149 @@ function guessMime(filename?: string, fallback = "application/octet-stream"): st
   return map[ext || ""] || fallback;
 }
 
+/** Best available human-readable label for a Telegram sender. */
+function senderName(from: { username?: string; first_name?: string; id: number }): string {
+  if (from.username) return `@${from.username}`;
+  if (from.first_name) return from.first_name;
+  return String(from.id);
+}
+
+/** Text and caption entities on a message, as one list. */
+export function mentionEntities(msg: any): any[] {
+  if (!msg) return [];
+  return [...(msg.entities || []), ...(msg.caption_entities || [])];
+}
+
+/**
+ * Patterns that match our own handle in message text.
+ *
+ * Plain `@name\b` is too loose: `\b` fires on `.` and `/`, so it matches
+ * inside `https://x.com/@name/status/1` and `ops@name.example.com`. The first
+ * pattern therefore requires a real boundary before the `@` and rejects a
+ * trailing word char or dot. The second covers `/command@name`, where the `@`
+ * legitimately follows word characters.
+ */
+function mentionPatterns(username: string, flags = "i"): { inline: RegExp; command: RegExp } {
+  const u = escapeRegex(username);
+  return {
+    inline: new RegExp(`(^|[^\\w@/.])@${u}(?![\\w.])[ \\t]?`, flags),
+    command: new RegExp(`^(/[A-Za-z0-9_]+)@${u}(?![\\w.])[ \\t]?`, flags),
+  };
+}
+
+/**
+ * Whether a group message is addressed to this bot.
+ *
+ * Entities are authoritative when Telegram sends them: a `mention` entity
+ * equal to our handle, a `bot_command` entity carrying our `@handle` suffix, or
+ * a `text_mention` pointing at our user id (how clients link a bot with no
+ * public username). Captions and forwards don't always carry entities, so we
+ * fall back to matching the raw text. A reply to one of our own messages counts
+ * regardless.
+ */
+export function isAddressedTo(
+  msg: any,
+  botId: number,
+  botUsername: string,
+): boolean {
+  if (!msg) return false;
+
+  // Reply to something we said
+  if (botId && msg.reply_to_message?.from?.id === botId) return true;
+
+  const body: string = msg.text || msg.caption || "";
+  const entities = mentionEntities(msg);
+  const handle = botUsername ? `@${botUsername}`.toLowerCase() : "";
+
+  for (const e of entities) {
+    if (e.type === "text_mention" && botId && e.user?.id === botId) return true;
+    if (!handle || typeof e.offset !== "number" || typeof e.length !== "number") continue;
+    const slice = body.slice(e.offset, e.offset + e.length).toLowerCase();
+    if (e.type === "mention" && slice === handle) return true;
+    if (e.type === "bot_command" && slice.endsWith(handle)) return true;
+  }
+
+  if (!botUsername) return false;
+  const { inline, command } = mentionPatterns(botUsername);
+  return inline.test(body) || command.test(body);
+}
+
+/**
+ * Remove our own handle from a message we were addressed in, so the model reads
+ * the request rather than its own name, and `/status@bot` reaches the command
+ * router as `/status`.
+ *
+ * Entity offsets are used when available (they never misfire on URLs), with the
+ * bounded text patterns as the fallback. Each removal swallows one following
+ * space so `hey @bot check` doesn't become `hey  check`; nothing else about the
+ * text is normalized, because newlines and indentation are load-bearing in the
+ * logs, YAML and code people paste at their agents.
+ */
+export function stripBotMention(text: string, entities: any[], botUsername: string): string {
+  if (!text) return "";
+  const handle = botUsername ? `@${botUsername}`.toLowerCase() : "";
+  if (!handle) return text.trim();
+
+  if (entities.length) {
+    const cuts: Array<[number, number]> = [];
+    for (const e of entities) {
+      if (typeof e.offset !== "number" || typeof e.length !== "number") continue;
+      const end = e.offset + e.length;
+      const slice = text.slice(e.offset, end).toLowerCase();
+      if (e.type === "mention" && slice === handle) {
+        cuts.push([e.offset, end]);
+      } else if (e.type === "bot_command" && slice.endsWith(handle)) {
+        cuts.push([end - handle.length, end]);
+      }
+    }
+    // Right to left, so earlier offsets stay valid.
+    cuts.sort((a, b) => b[0] - a[0]);
+    let out = text;
+    for (const [from, to] of cuts) {
+      const end = " \t".includes(out[to]) ? to + 1 : to;
+      out = out.slice(0, from) + out.slice(end);
+    }
+    return out.trim();
+  }
+
+  const { inline, command } = mentionPatterns(botUsername, "gi");
+  return text.replace(inline, "$1").replace(command, "$1").trim();
+}
+
 export class TelegramInterface implements Interface {
   private bot: Bot;
   private pairing: PairingManager | null;
   private showTools: boolean;
+  private gate: MentionGate | null;
+  /** Our own @username, resolved at start. Empty if getMe failed. */
+  private botUsername = "";
+  /** Our own numeric user id, used to spot replies to our messages. */
+  private botId = 0;
+  /** Albums (media groups) we were addressed by, so their other files count. */
+  private addressedAlbums = new SentIds(50);
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
 
-  constructor(token: string, pairing?: PairingManager, showTools = false) {
+  constructor(token: string, pairing?: PairingManager, showTools = false, gate?: MentionGate) {
     this.bot = new Bot(token);
     this.pairing = pairing || null;
     this.showTools = showTools;
+    this.gate = gate || null;
   }
 
   get status() { return this._status; }
   get statusDetail() { return this._statusDetail; }
 
   async start({ onMessage }: StartOptions): Promise<void> {
+    // Resolve our own identity so we can tell when a group message is for us
+    try {
+      const me = await this.bot.api.getMe();
+      this.botUsername = me.username || "";
+      this.botId = me.id;
+    } catch (err: any) {
+      log.warn("telegram", `getMe failed, mention detection degraded: ${err.message || err}`);
+    }
+
     // Register bot commands with Telegram
     this.bot.api.setMyCommands([
       { command: "status", description: "Show agent status" },
@@ -93,9 +220,11 @@ export class TelegramInterface implements Interface {
     this.bot.on("message", async (ctx) => {
       const userId = ctx.from.id;
       const chatId = ctx.chat.id.toString();
+      const isGroup = ctx.chat.type !== "private";
 
       // Extract text from message (could be caption for media messages)
-      const text = ctx.message.text || ctx.message.caption || "";
+      const rawText = ctx.message.text || ctx.message.caption || "";
+      let text = rawText;
 
       // Skip messages with no text and no media
       const hasMedia = !!(
@@ -110,6 +239,45 @@ export class TelegramInterface implements Interface {
       if (!text && !hasMedia) return;
 
       log("telegram", `message from ${userId}: ${(text || "[media]").slice(0, 50)}`);
+
+      // Group chats: only speak when addressed — an @mention of our username,
+      // a text_mention pointing at us, or a reply to one of our messages.
+      // Anything else is observed and folded into the next addressed turn, so
+      // we keep the conversation without answering messages meant for others.
+      //
+      // This runs before the pairing check on purpose: an unaddressed message
+      // from an unpaired group member should produce nothing at all, not a
+      // public pairing code for a message that wasn't for us.
+      const channelKey = `telegram:${chatId}`;
+      const album = ctx.message.media_group_id as string | undefined;
+      let addressed = true;
+      if (isGroup) {
+        // An album arrives as one message per file and only one of them carries
+        // the caption, so the rest look like room traffic. If we were addressed
+        // by any part of this album, the whole album is for us.
+        addressed = this.isAddressed(ctx.message) || (!!album && this.addressedAlbums.has(album));
+        // If getMe failed we cannot tell a mention from room chatter. Failing
+        // closed would make the agent mute in every group, so pass everything
+        // through instead — the prompt's NO_REPLY convention still applies.
+        const canDetect = Boolean(this.botId || this.botUsername);
+        if (this.gate?.active && canDetect && !addressed) {
+          const sender = senderName(ctx.from);
+          this.gate.observe(channelKey, sender, text || "[media]");
+          log("telegram", `not addressed in ${chatId}, observing (${this.gate.pending(channelKey)} buffered)`);
+          return;
+        }
+        if (addressed) {
+          if (album) this.addressedAlbums.add(album);
+          if (this.gate?.active) {
+            // Strip our @username so the model reads the request, not its own
+            // name. Also normalizes `/status@bot` to `/status` for the slash
+            // command handler. Only under gating — with `mentionsOnly: false`
+            // the text reaches the model exactly as it always did.
+            text = stripBotMention(text, mentionEntities(ctx.message), this.botUsername)
+              || (hasMedia ? "" : BARE_MENTION_TEXT);
+          }
+        }
+      }
 
       // Check pairing
       if (this.pairing && !this.pairing.isPaired(userId.toString())) {
@@ -268,7 +436,7 @@ export class TelegramInterface implements Interface {
       try {
         const response = await onMessage(
           {
-            text: text || "",
+            text: (isGroup ? this.gate?.withContext(channelKey, text) : undefined) || text || "",
             userId: userId.toString(),
             chatId,
             interface: "telegram",
@@ -351,6 +519,10 @@ export class TelegramInterface implements Interface {
 
     log("telegram", "connected");
     this.startPolling();
+  }
+
+  private isAddressed(msg: any): boolean {
+    return isAddressedTo(msg, this.botId, this.botUsername);
   }
 
   private startPolling(): void {

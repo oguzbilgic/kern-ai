@@ -147,6 +147,8 @@ Optionally, `kern proxy start` launches an authenticated reverse proxy that disc
 
 First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair with `KERN-XXXX` codes.
 
+In group chats and channels the agent only answers when it's addressed — an @mention, its nick, or a reply to something it said. The rest of the room still reaches it as context on its next turn, so it keeps up without talking over anyone. Set `mentionsOnly: false` to have it consider every message instead. [Details](docs/interfaces.md#mentions-only)
+
 ## Configuration
 
 ### `.kern/config.json`
@@ -157,7 +159,8 @@ First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair w
   "provider": "openrouter",
   "toolScope": "full",
   "maxContextTokens": 100000,
-  "summaryBudget": 0.75
+  "summaryBudget": 0.75,
+  "mentionsOnly": true
 }
 ```
 

@@ -4,6 +4,7 @@ import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { MentionGate, escapeRegex, mentionsName } from "../mentions.js";
 
 /**
  * IRC interface — plain TCP or TLS, IRCv3 message tags, DMs and channels.
@@ -32,6 +33,8 @@ import { isNoReply } from "../util.js";
  * ---------
  * - DMs are gated by the pairing manager, like Telegram/Slack/Matrix.
  * - Channels are open, but the agent only answers when its nick is mentioned.
+ *   Unaddressed channel traffic is observed and folded into the next addressed
+ *   turn (see src/mentions.ts), so context survives without the agent talking.
  *   Everything else returns NO_REPLY, so agents don't talk over each other.
  * - Outbound text is converted to IRC formatting codes, wrapped to fit the
  *   512-byte line limit, and rate-limited to avoid flood kicks.
@@ -327,10 +330,6 @@ export function formatForIrc(text: string, maxLines = MAX_REPLY_LINES): string[]
   return lines;
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -360,12 +359,15 @@ class IrcConnection {
   // chatty client can't be used to spam codes.
   private sentCodes = new Set<string>();
 
+  private gate: MentionGate | null;
+
   status: ConnStatus = "disconnected";
   statusDetail?: string;
 
-  constructor(config: IrcServerConfig, pairing: PairingManager | null) {
+  constructor(config: IrcServerConfig, pairing: PairingManager | null, gate: MentionGate | null = null) {
     this.config = config;
     this.pairing = pairing;
+    this.gate = gate;
     this.nick = config.nick;
   }
 
@@ -838,7 +840,8 @@ class IrcConnection {
 
     // If addressed directly with a leading "nick:" or "@nick:", strip the prefix
     // (e.g. "vega: what's up" -> "what's up"). If bare mention only, provide a fallback.
-    if (isChannel && this.isMentioned(text)) {
+    const mentioned = this.isMentioned(text);
+    if (isChannel && mentioned) {
       const stripped = text.replace(new RegExp(`^\\s*@?${escapeRegex(this.nick)}\\s*[:,]?\\s*`, "i"), "").trim();
       text = stripped || "(mentioned with no message)";
     }
@@ -852,14 +855,13 @@ class IrcConnection {
     const userId = `irc:${this.host}/${authenticated ? account : `~${nick}`}`;
     const channel = `irc:${this.host}/${replyTo}`;
 
-    this.handleIncoming({ userId, channel, replyTo, nick, text, isChannel, authenticated }).catch(
+    this.handleIncoming({ userId, channel, replyTo, nick, text, isChannel, authenticated, mentioned }).catch(
       (err) => log.error("irc", `${this.host}: handle failed: ${err.message || err}`),
     );
   }
 
   private isMentioned(text: string): boolean {
-    const n = escapeRegex(this.nick);
-    return new RegExp(`(^|[^\\w\\[\\]{}\\\\^\`|-])@?${n}([^\\w\\[\\]{}\\\\^\`|-]|$)`, "i").test(text);
+    return mentionsName(text, this.nick);
   }
 
   private async handleIncoming(msg: {
@@ -870,8 +872,9 @@ class IrcConnection {
     text: string;
     isChannel: boolean;
     authenticated: boolean;
+    mentioned: boolean;
   }): Promise<void> {
-    const { userId, channel, replyTo, nick, text, isChannel, authenticated } = msg;
+    const { userId, channel, replyTo, nick, text, isChannel, authenticated, mentioned } = msg;
     log("irc", `${this.host}: ${nick} in ${replyTo}: ${text.slice(0, 80)}`);
 
     // Pairing gates DMs only — channels are open, like Slack/Telegram groups.
@@ -899,9 +902,24 @@ class IrcConnection {
 
     if (!this.onMessage) return;
 
+    // Channels: only answer when our nick is mentioned. Everything else is
+    // observed and folded into the next addressed turn — the agent keeps the
+    // channel's context without talking over it.
+    if (isChannel && this.gate?.active && !mentioned) {
+      this.gate.observe(channel, nick, text);
+      log("irc", `${this.host}: not addressed in ${replyTo}, observing (${this.gate.pending(channel)} buffered)`);
+      return;
+    }
+
     try {
       const response = await this.onMessage(
-        { text, userId, chatId: `${this.host}/${replyTo}`, interface: "irc", channel },
+        {
+          text: (isChannel ? this.gate?.withContext(channel, text) : undefined) || text,
+          userId,
+          chatId: `${this.host}/${replyTo}`,
+          interface: "irc",
+          channel,
+        },
         () => {}, // no streaming — IRC gets the final text
       );
       if (isNoReply(response)) return;
@@ -928,8 +946,8 @@ class IrcConnection {
 export class IrcInterface implements Interface {
   private connections: IrcConnection[];
 
-  constructor(servers: IrcServerConfig[], pairing?: PairingManager) {
-    this.connections = servers.map((s) => new IrcConnection(s, pairing || null));
+  constructor(servers: IrcServerConfig[], pairing?: PairingManager, gate?: MentionGate) {
+    this.connections = servers.map((s) => new IrcConnection(s, pairing || null, gate || null));
   }
 
   get status(): ConnStatus {

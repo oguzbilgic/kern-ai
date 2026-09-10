@@ -37,6 +37,13 @@ export interface KernConfig {
   // Interface
   telegramTools: boolean;
   discordMentionOnly: boolean;
+  /**
+   * Only start a turn in group chats and channels when the agent is addressed
+   * — an @mention, or a reply to one of its own messages. Unaddressed messages
+   * are still observed and folded into the next addressed turn as context.
+   * DMs and the local surfaces (cli, tui, web) are never gated.
+   */
+  mentionsOnly: boolean;
   /** Nostr relay URLs. Empty array = built-in public defaults. Overridable via NOSTR_RELAYS. */
   nostrRelays: string[];
   /**
@@ -99,6 +106,7 @@ export const configDefaults: KernConfig = {
   mediaContext: 0,
   telegramTools: false,
   discordMentionOnly: true,
+  mentionsOnly: true,
   nostrRelays: [],
   irc: "",
   heartbeatInterval: 60,
@@ -125,6 +133,7 @@ const FIELD_TYPES: Record<string, string> = {
   mediaContext: "number",
   telegramTools: "boolean",
   discordMentionOnly: "boolean",
+  mentionsOnly: "boolean",
   nostrRelays: "string[]",
   irc: "string",
   heartbeatInterval: "number",

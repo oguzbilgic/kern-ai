@@ -4,6 +4,7 @@ import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { BARE_MENTION_TEXT, MentionGate, SentIds } from "../mentions.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -34,10 +35,13 @@ export class SlackInterface implements Interface {
   private pairing: PairingManager | null;
   private botUserId: string = "";
   private botToken: string;
+  private gate: MentionGate | null;
+  /** `ts` of messages we posted, so thread replies to them read as addressed. */
+  private sentTs = new SentIds();
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
 
-  constructor(botToken: string, appToken: string, pairing?: PairingManager) {
+  constructor(botToken: string, appToken: string, pairing?: PairingManager, gate?: MentionGate) {
     this.app = new SlackApp({
       token: botToken,
       appToken,
@@ -45,6 +49,7 @@ export class SlackInterface implements Interface {
     });
     this.botToken = botToken;
     this.pairing = pairing || null;
+    this.gate = gate || null;
   }
 
   get status() { return this._status; }
@@ -131,13 +136,20 @@ export class SlackInterface implements Interface {
       // Determine if DM or channel
       let channelName = channelId;
       let isDM = false;
+      // Whether we actually know which it is. A failed lookup used to only
+      // mislabel the channel; under gating it would silently mute a DM, so the
+      // unknown case passes through ungated.
+      let kindKnown = false;
       try {
         const info = await client.conversations.info({ channel: channelId });
         if (info.channel) {
           isDM = info.channel.is_im || false;
           channelName = isDM ? `slack-dm:${userId}` : `#${info.channel.name || channelId}`;
+          kindKnown = true;
         }
-      } catch {}
+      } catch (err: any) {
+        log.warn("slack", `conversations.info failed for ${channelId}, not gating: ${err.message || err}`);
+      }
 
       // Check pairing for DMs
       if (isDM && this.pairing && !this.pairing.isPaired(userId)) {
@@ -152,21 +164,51 @@ export class SlackInterface implements Interface {
 
       // Detect @mention
       const isMentioned = text.includes(`<@${this.botUserId}>`);
+      // A thread reply under one of our own messages is addressed to us even
+      // without a mention. `parent_user_id` is set by Slack on thread replies;
+      // `sentTs` covers threads we rooted in this process as a fallback.
+      const isReplyToUs =
+        ("parent_user_id" in message && message.parent_user_id === this.botUserId) ||
+        this.sentTs.has(threadTs);
+      const addressed = isMentioned || isReplyToUs;
       // Clean @mention from text
       let cleanText = text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim();
 
       // If just a bare mention with no text and no files, skip
       if (!cleanText && !isMentioned && attachments.length === 0) return;
       // If mentioned with no text, use "hello" as default
-      if (!cleanText && isMentioned && attachments.length === 0) cleanText = "(mentioned with no message)";
+      if (!cleanText && isMentioned && attachments.length === 0) cleanText = BARE_MENTION_TEXT;
 
       // Build channel label
       const channelLabel = isDM ? `slack-dm` : channelName;
+      const channelKey = `slack:${channelId}`;
+
+      // Channels: stay quiet unless addressed. The message is still observed
+      // and folded into the next addressed turn, so we keep the thread of the
+      // conversation without speaking in it uninvited.
+      // `botUserId` empty means auth.test() failed and we cannot recognize our
+      // own mentions — pass everything through rather than going mute.
+      if (!isDM && kindKnown && this.gate?.active && this.botUserId && !addressed) {
+        this.gate.observe(channelKey, `<@${userId}>`, cleanText || "[media]");
+        log("slack", `not addressed in ${channelName}, observing (${this.gate.pending(channelKey)} buffered)`);
+        return;
+      }
+
+      // We're taking a turn on this message. If it's in a thread, remember the
+      // thread — our reply goes to the channel, not the thread, so without this
+      // an in-thread follow-up would look unaddressed.
+      if (threadTs) this.sentTs.add(threadTs);
+
+      // Fold anything observed in this channel since we last spoke into the
+      // message the model sees.
+      const outboundText = isDM
+        ? cleanText || ""
+        : this.gate?.withContext(channelKey, cleanText || "") || cleanText || "";
 
       try {
         const response = await onMessage(
           {
-            text: cleanText || "",
+            text: outboundText,
             userId,
             chatId: channelId,
             interface: "slack",
@@ -196,10 +238,10 @@ export class SlackInterface implements Interface {
               });
             } catch (err: any) {
               log.warn("slack", `voice reply failed, falling back to text: ${err.message}`);
-              await say(mdToSlack(response));
+              this.sentTs.add((await say(mdToSlack(response)))?.ts as string | undefined);
             }
           } else {
-            await say(mdToSlack(response));
+            this.sentTs.add((await say(mdToSlack(response)))?.ts as string | undefined);
           }
         }
       } catch (error: any) {

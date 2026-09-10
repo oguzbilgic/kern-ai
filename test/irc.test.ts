@@ -10,6 +10,7 @@ import {
   redactIrcUrl,
   isValidIrcTarget,
 } from "../src/interfaces/irc.js";
+import { MentionGate } from "../src/mentions.js";
 
 // ---------------------------------------------------------------------------
 // Minimal in-process IRC server: CAP negotiation, registration, JOIN, PRIVMSG.
@@ -270,6 +271,7 @@ test("formatForIrc: reply line count is capped with a truncation notice", () => 
 async function connect(opts: {
   channels?: string;
   pairing?: any;
+  gate?: MentionGate;
   onMessage?: (msg: any) => Promise<string>;
 }) {
   const server = await FakeIrcServer.create();
@@ -279,6 +281,7 @@ async function connect(opts: {
   const iface = new IrcInterface(
     parseIrcUrls(`irc://vega@127.0.0.1:${server.port}/${opts.channels ?? "#homelab"}`),
     opts.pairing,
+    opts.gate,
   );
   ifaces.push(iface);
 
@@ -351,8 +354,8 @@ test("DM: account-tag \"*\" means not logged in, not an account named *", async 
   assert.equal(received[0].userId, "irc:127.0.0.1/~oguz", "placeholder account → ~nick");
 });
 
-test("channel: receives all messages, strips leading nick address", async () => {
-  const { server, received } = await connect({});
+test("channel: with mentions-only off, receives all messages and strips leading nick address", async () => {
+  const { server, received } = await connect({ gate: new MentionGate(false) });
 
   server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :just chatting");
   await waitFor(() => received.length === 1);
@@ -368,10 +371,52 @@ test("channel: receives all messages, strips leading nick address", async () => 
 });
 
 test("channel: mention anywhere in the line counts", async () => {
-  const { server, received } = await connect({});
+  const { server, received } = await connect({ gate: new MentionGate(false) });
   server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :hey vega can you look?");
   await waitFor(() => received.length > 0);
   assert.match(received[0].text, /hey .*can you look\?/);
+});
+
+test("channel: unaddressed messages are observed, not answered", async () => {
+  const { server, received } = await connect({ gate: new MentionGate(true) });
+
+  server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :anyone deploying today?");
+  server.push("@account=ada :ada!u@h PRIVMSG #homelab :I pushed the migration");
+  // Give the connection a beat to prove it stays quiet.
+  await sleep(150);
+  assert.equal(received.length, 0, "no turn for messages we were not addressed in");
+  assert.equal(server.privmsgs().length, 0, "and nothing sent to the channel");
+
+  server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :vega: did it land?");
+  await waitFor(() => received.length === 1);
+  const text = received[0].text as string;
+  assert.match(text, /you were not addressed in/, "observed messages are folded in as context");
+  assert.match(text, /oguz: anyone deploying today\?/);
+  assert.match(text, /ada: I pushed the migration/);
+  assert.match(text, /did it land\?$/, "the addressed message comes last");
+
+  await waitFor(() => server.privmsgs().length > 0);
+  assert.deepEqual(server.privmsgs()[0], ["#homelab", "pong"]);
+});
+
+test("channel: observed buffer is cleared once folded in", async () => {
+  const { server, received } = await connect({ gate: new MentionGate(true) });
+
+  server.push("@account=ada :ada!u@h PRIVMSG #homelab :standup in 5");
+  server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :vega: noted?");
+  await waitFor(() => received.length === 1);
+  assert.match(received[0].text, /standup in 5/);
+
+  server.push("@account=oguz :oguz!u@h PRIVMSG #homelab :vega: anything else?");
+  await waitFor(() => received.length === 2);
+  assert.equal(received[1].text, "anything else?", "no stale context on the next turn");
+});
+
+test("DM: never gated by mentions-only", async () => {
+  const { server, received } = await connect({ gate: new MentionGate(true) });
+  server.push("@account=oguz :oguz!u@h PRIVMSG vega :no mention here");
+  await waitFor(() => received.length === 1);
+  assert.equal(received[0].text, "no mention here");
 });
 
 test("NO_REPLY suppresses the outbound message", async () => {

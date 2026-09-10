@@ -2,6 +2,7 @@ import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { MentionGate, SentIds, mentionsName } from "../mentions.js";
 
 /**
  * Matrix interface — long-polls /sync, accepts invites, replies via /send.
@@ -11,6 +12,7 @@ import { isNoReply } from "../util.js";
  * - Typing indicators while the agent is thinking
  * - Auto-accept invites (any inviter; pairing still gates message handling)
  * - Pairing enforced in every room (DM and group) before messages are processed
+ * - Group rooms only answer when the agent is mentioned or replied to
  * - No E2E encryption, no media, no reactions
  *
  * Config via env:
@@ -18,11 +20,21 @@ import { isNoReply } from "../util.js";
  *   MATRIX_USER_ID        e.g. @vega:matrix
  *   MATRIX_ACCESS_TOKEN   from login/register
  */
+/** How long a joined-member count is trusted before it is re-fetched. */
+const MEMBER_COUNT_TTL = 5 * 60 * 1000;
+
 export class MatrixInterface implements Interface {
   private homeserver: string;
   private userId: string;
   private token: string;
   private pairing: PairingManager | null;
+  private gate: MentionGate | null;
+  /** Our display name, so mention pills (which render as the name) match. */
+  private displayName = "";
+  /** Event ids we sent, so `m.in_reply_to` on them reads as addressing us. */
+  private sentEvents = new SentIds();
+  /** roomId -> joined member count and when we counted it. */
+  private memberCounts = new Map<string, { count: number; at: number }>();
   private nextBatch: string | null = null;
   private running = false;
   private abort: AbortController | null = null;
@@ -37,12 +49,14 @@ export class MatrixInterface implements Interface {
     userId: string,
     token: string,
     pairing?: PairingManager,
+    gate?: MentionGate,
   ) {
     // Strip trailing slash for clean URL joins
     this.homeserver = homeserver.replace(/\/$/, "");
     this.userId = userId;
     this.token = token;
     this.pairing = pairing || null;
+    this.gate = gate || null;
   }
 
   get status() { return this._status; }
@@ -53,6 +67,12 @@ export class MatrixInterface implements Interface {
     // prime nextBatch on its first successful poll and recover from any
     // initial outage on its own.
     this.running = true;
+    // Mention pills render as the display name in the plaintext body, so we
+    // need it to recognize being addressed. Best-effort — falls back to
+    // matching the mxid and localpart.
+    this.profileDisplayName()
+      .then((name) => { this.displayName = name; })
+      .catch(() => {});
     this.syncLoop(onMessage).catch((err) => {
       log.error("matrix", `sync loop crashed: ${err.message || err}`);
       this._status = "error";
@@ -128,15 +148,27 @@ export class MatrixInterface implements Interface {
         // Process new messages in joined rooms
         const joins = sync.rooms?.join || {};
         for (const [roomId, room] of Object.entries(joins)) {
+          // On a gappy (`limited`) sync the membership delta arrives in
+          // `state`, not the truncated timeline — drop the cached count so a
+          // room that became (or stopped being) a two-person conversation is
+          // recounted rather than judged from stale numbers.
+          if ((room.state?.events || []).some((ev) => ev.type === "m.room.member")) {
+            this.memberCounts.delete(roomId);
+          }
           const events = room.timeline?.events || [];
           for (const ev of events) {
+            // Membership changed — our cached DM/group verdict may be stale.
+            if (ev.type === "m.room.member") {
+              this.memberCounts.delete(roomId);
+              continue;
+            }
             if (ev.type !== "m.room.message") continue;
             if (ev.sender === this.userId) continue; // our own sends
             if (ev.content?.msgtype !== "m.text") continue; // skip media for MVP
             const body = ev.content.body || "";
             if (!body) continue;
             // Fire and forget — don't block the sync loop on a long turn
-            this.handleIncoming(roomId, ev.sender, body, onMessage).catch((err) => {
+            this.handleIncoming(roomId, ev.sender, body, ev, onMessage).catch((err) => {
               log.error("matrix", `handle incoming failed: ${err.message || err}`);
             });
           }
@@ -168,6 +200,7 @@ export class MatrixInterface implements Interface {
     roomId: string,
     sender: string,
     text: string,
+    event: MatrixEvent,
     onMessage: StartOptions["onMessage"],
   ): Promise<void> {
     log("matrix", `message from ${sender} in ${roomId}: ${text.slice(0, 80)}`);
@@ -191,6 +224,22 @@ export class MatrixInterface implements Interface {
       }
     }
 
+    // Group rooms: only answer when addressed. Unaddressed messages are
+    // observed and folded into the next addressed turn, so the agent keeps the
+    // room's context without replying to messages meant for others.
+    const channelKey = `matrix:${roomId}`;
+    let isGroup = false;
+    if (this.gate?.active) {
+      // Only when gating is on — otherwise this costs a `joined_members` round
+      // trip per message for nothing.
+      isGroup = (await this.roomKind(roomId)) === "group";
+      if (isGroup && !this.isAddressed(text, event)) {
+        this.gate.observe(channelKey, sender, text);
+        log("matrix", `not addressed in ${roomId}, observing (${this.gate.pending(channelKey)} buffered)`);
+        return;
+      }
+    }
+
     // Keep typing indicator alive while the turn runs (Matrix times out at ~30s)
     const typingInterval = setInterval(() => {
       this.setTyping(roomId, true).catch(() => {});
@@ -200,7 +249,7 @@ export class MatrixInterface implements Interface {
     try {
       const response = await onMessage(
         {
-          text,
+          text: (isGroup ? this.gate?.withContext(channelKey, text) : undefined) || text,
           userId: sender,
           chatId: roomId,
           interface: "matrix",
@@ -228,11 +277,75 @@ export class MatrixInterface implements Interface {
 
   private async sendMessage(roomId: string, body: string): Promise<void> {
     const txnId = `kern-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await this.api(
+    const res = await this.api<{ event_id?: string }>(
       "PUT",
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
       { msgtype: "m.text", body },
     );
+    // Remember what we said so replies to it count as addressing us.
+    this.sentEvents.add(res?.event_id);
+  }
+
+  /**
+   * Whether an incoming event addresses this agent.
+   *
+   * Checks, in order: the `m.mentions` list (current spec), a reply pointing at
+   * an event we sent, and finally the plaintext body — mention pills render as
+   * the display name, and older clients write the mxid. The reply fallback
+   * (`> <@someone:server> quoted text` lines) is stripped first, otherwise
+   * quoting a message that mentioned us would look like a fresh mention.
+   */
+  private isAddressed(text: string, event: MatrixEvent): boolean {
+    const mentions = event.content?.["m.mentions"];
+    if (mentions?.user_ids?.includes(this.userId)) return true;
+
+    const inReplyTo = event.content?.["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+    if (this.sentEvents.has(inReplyTo)) return true;
+
+    const body = stripReplyFallback(text);
+    if (body.includes(this.userId)) return true;
+    const localpart = this.userId.replace(/^@/, "").split(":")[0];
+    if (localpart && mentionsName(body, localpart)) return true;
+    if (this.displayName && mentionsName(body, this.displayName)) return true;
+    return false;
+  }
+
+  /**
+   * Whether a room is a two-person conversation, a group, or not knowable right
+   * now. Matrix has no DM flag on the room itself, so member count is the
+   * practical test: 2 or fewer joined members is a DM, more is a group.
+   *
+   * Counts are cached with a short TTL and dropped on membership changes, so a
+   * room that gains or loses members is re-counted. A failed lookup returns
+   * `unknown` rather than a guess — the caller then leaves the message ungated,
+   * because guessing "group" would mute a DM the agent should have answered.
+   */
+  private async roomKind(roomId: string): Promise<"dm" | "group" | "unknown"> {
+    const cached = this.memberCounts.get(roomId);
+    if (cached && Date.now() - cached.at < MEMBER_COUNT_TTL) {
+      return cached.count <= 2 ? "dm" : "group";
+    }
+    try {
+      const res = await this.api<{ joined?: Record<string, unknown> }>(
+        "GET",
+        `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`,
+      );
+      const count = Object.keys(res?.joined || {}).length;
+      this.memberCounts.set(roomId, { count, at: Date.now() });
+      return count <= 2 ? "dm" : "group";
+    } catch (err: any) {
+      log.warn("matrix", `joined_members failed for ${roomId}, not gating: ${err.message || err}`);
+      return "unknown";
+    }
+  }
+
+  /** Fetch our own display name from the homeserver. Empty string on failure. */
+  private async profileDisplayName(): Promise<string> {
+    const res = await this.api<{ displayname?: string }>(
+      "GET",
+      `/_matrix/client/v3/profile/${encodeURIComponent(this.userId)}/displayname`,
+    );
+    return res?.displayname || "";
   }
 
   private async setTyping(roomId: string, typing: boolean): Promise<void> {
@@ -266,6 +379,19 @@ export class MatrixInterface implements Interface {
   }
 }
 
+/**
+ * Drop the rich-reply fallback a client prepends to a reply body — the quoted
+ * `> <@user:server> ...` lines followed by a blank line.
+ */
+export function stripReplyFallback(body: string): string {
+  const lines = body.split("\n");
+  let i = 0;
+  while (i < lines.length && lines[i].startsWith(">")) i++;
+  // The fallback is separated from the actual reply by one blank line.
+  if (i > 0 && i < lines.length && lines[i].trim() === "") i++;
+  return i > 0 ? lines.slice(i).join("\n") : body;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -276,16 +402,20 @@ interface MatrixSync {
   rooms?: {
     invite?: Record<string, unknown>;
     join?: Record<string, {
-      timeline?: { events?: MatrixEvent[] };
+      timeline?: { events?: MatrixEvent[]; limited?: boolean };
+      state?: { events?: MatrixEvent[] };
     }>;
   };
 }
 
 interface MatrixEvent {
   type: string;
+  event_id?: string;
   sender: string;
   content?: {
     msgtype?: string;
     body?: string;
+    "m.mentions"?: { user_ids?: string[] };
+    "m.relates_to"?: { "m.in_reply_to"?: { event_id?: string } };
   };
 }

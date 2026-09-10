@@ -2,6 +2,9 @@
 
 ## next
 
+### Behaviour Changes
+- **Agents only answer when addressed in shared rooms** — in group chats and channels (Telegram groups, Slack channels, Matrix group rooms, IRC channels) a turn now starts only when the agent is actually addressed: an @mention, its nick, or a reply to one of its own messages. Etiquette used to be prompt-only, so every message in a busy channel cost a full turn (tokens, latency, a visible "..." on Telegram) before the model could decline — and sometimes it answered anyway. Unaddressed messages are still *observed*: buffered per channel and folded into the next addressed turn as a context block, so the agent keeps the room without speaking in it uninvited. DMs, TUI, web and heartbeats are never gated. Set `mentionsOnly: false` in `.kern/config.json` for the old behavior.
+
 ### Features
 - **Discord interface** ([#337](https://github.com/oguzbilgic/kern-ai/pull/337)) — connect your agent directly to Discord via bot gateway. Add `DISCORD_TOKEN` to `.kern/.env` to enable. Supports pairing-gated Direct Messages, server/guild channels with @mention gating, automatic message chunking for Discord's 2,000-character limit, typing indicators, media attachment ingestion (up to 25 MB), and proactive messaging via `message` tool.
 

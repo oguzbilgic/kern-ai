@@ -134,6 +134,61 @@ Notes:
 - IRC nicks are not identities — anyone can claim one. The `userId` is keyed on the server-verified account from the IRCv3 `account-tag`; an unauthenticated sender gets `~<nick>` instead and is never auto-paired. Both are namespaced by server host so multiple IRC networks can't collide.
 - TUI and web submit messages over HTTP without a `chatId` — they always represent the operator.
 
+## Mentions-only
+
+Group chats and channels are noisy, and most of what happens in them is not for
+the agent. By default (`mentionsOnly: true` in `.kern/config.json`) kern only
+starts a turn in a shared room when the agent is actually addressed:
+
+| Interface | Addressed means |
+|-----------|-----------------|
+| **Telegram** (groups, supergroups) | `@botusername` in the text or caption, a `text_mention` entity pointing at the bot, or a reply to one of the bot's messages |
+| **Slack** (channels, private channels) | `<@BOTID>` mention, or a thread reply under a message the bot posted |
+| **Matrix** (group rooms) | the room's `m.mentions` list includes the agent, the body names it (mxid, localpart, or display name — mention pills render as the display name), or the message replies to an event the agent sent |
+| **IRC** (channels) | the agent's nick appears as a word, with or without a leading `@` (`vega: status?`, `hey vega`) |
+
+Everything else in the room is **observed, not answered**: it is buffered per
+channel (most recent 50 messages, 500 characters each) and folded into the next
+addressed turn as a context block, oldest first:
+
+```
+[2 messages in this channel you were not addressed in — context only, do not reply to them]
+ada: anyone deploying today?
+oguz: I pushed the migration
+[end of observed messages]
+did it land?
+```
+
+So the agent still walks into the conversation knowing what was said — it just
+doesn't speak uninvited, and unaddressed traffic costs no tokens, no latency,
+and no visible "..." placeholder.
+
+Never gated: DMs on every interface, the TUI, the web UI, the CLI, heartbeats,
+and sub-agent announces. A direct message is addressed by construction.
+
+Two consequences worth knowing:
+
+- **Slash commands in groups need the mention too.** `/status@yourbot` works in
+  a Telegram group; a bare `/status` is treated as room traffic. In a DM both
+  work. (The `@yourbot` suffix is stripped before the command is parsed, which
+  it wasn't before.) A command never gets the observed-messages block prefixed
+  to it — that would stop it looking like a command — so the buffer waits for
+  the next ordinary turn.
+- **Buffers are in-memory.** A restart drops observed-but-unanswered context;
+  the session and recall are unaffected. At most 200 channels are buffered at
+  once, least-recently-active evicted.
+- **Gating fails open.** If the agent can't tell a mention from room chatter —
+  Telegram `getMe` failed, Slack `auth.test`/`conversations.info` failed, Matrix
+  `joined_members` failed — the message is delivered as it was before rather
+  than swallowed, so a broken API call can never make the agent mute.
+- **Telegram groups don't hand out pairing codes for room traffic.** The gate
+  runs before the pairing check, so an unpaired member's unaddressed message
+  produces nothing at all. Mention the agent and the usual pairing code arrives.
+
+Set `mentionsOnly: false` to restore the previous behavior, where every group
+message started a turn and the model was merely asked (via the `NO_REPLY`
+convention in `KERN.md`) to stay quiet.
+
 ## TUI
 
 Interactive terminal chat. Connects to a running agent via HTTP/SSE.
@@ -216,6 +271,7 @@ Long polling bot. Works behind NAT, no public URL needed.
 
 - Unpaired users get a pairing code
 - Paired users can chat normally
+- **Groups**: only answers when @mentioned, `text_mention`ed, or replied to — see [Mentions-only](#mentions-only). Other group messages are observed and folded into the next addressed turn. Set `mentionsOnly: false` to answer everything.
 - Responses stream with typing indicator
 - Tool calls shown live (⚙), replaced by response
 - Markdown converted to Telegram HTML
@@ -250,7 +306,7 @@ Socket Mode connection. No public URL needed.
 ### Behavior
 
 - **DMs**: pairing required. Unpaired users get a code.
-- **Channels**: reads ALL messages, only responds when @mentioned or directly relevant. Returns `NO_REPLY` to suppress.
+- **Channels**: reads ALL messages, but only *answers* when `<@BOTID>`-mentioned or replied to in a thread it started — see [Mentions-only](#mentions-only). Unaddressed messages are observed and folded into the next addressed turn. With `mentionsOnly: false`, every message runs a turn and the model returns `NO_REPLY` to suppress.
 - **Replies**: post directly to channel or DM (no threading).
 - Graceful shutdown: Socket Mode closes cleanly on SIGTERM.
 
@@ -282,7 +338,7 @@ Long-polled `/sync` against a Matrix homeserver (Synapse, Dendrite, Conduit, etc
 - Sends typing indicators while thinking
 - Replies as plain `m.text` messages
 - **Pairing required everywhere.** Unpaired users (in DMs or group rooms) get a pairing code (same flow as Telegram/Slack). The code is sent once per `(user, room)` pair to avoid spam. This differs from Slack channels, which accept messages from any workspace member — Matrix rooms can span homeservers and federations, so kern treats every unknown sender as untrusted.
-- **Group room behavior.** Once paired, responses follow the `KERN.md` group-room rules (mirrors Slack channel behavior). `NO_REPLY` to stay quiet.
+- **Group room behavior.** Once paired, the agent only answers when addressed — `m.mentions`, its mxid/localpart/display name in the body, or a reply to something it sent (see [Mentions-only](#mentions-only)). Other messages are observed and folded into the next addressed turn. A room with 2 or fewer joined members counts as a DM and is never gated. With `mentionsOnly: false`, every message runs a turn and `NO_REPLY` keeps the agent quiet.
 - **Agents in shared rooms**: first-class — two kern agents can DM each other or coexist in a group room. Pairing codes auto-issue; operator approves via CLI.
 
 ### Limitations (MVP)
@@ -391,7 +447,7 @@ Multiple networks: whitespace-separate whole URLs (commas already separate chann
 ### Behavior
 
 - **DMs are gated by pairing**, like Telegram/Slack/Nostr. Channels are open.
-- **Channels deliver all messages.** Just like Slack and Matrix rooms, the agent receives every message in configured channels so it maintains context. The agent prompt instructs it to only respond when addressed, mentioned, or when it has something useful to say, and use `NO_REPLY` otherwise. A leading `nick:` address is stripped before the message reaches the model.
+- **Channels only answer on a nick mention.** The agent sees every message in configured channels, but only takes a turn when its nick appears as a word (`vega: status?`, `hey vega`) — see [Mentions-only](#mentions-only). A leading `nick:` address is stripped before the message reaches the model; unaddressed lines are observed and folded into the next addressed turn. With `mentionsOnly: false` every channel line runs a turn and the prompt's `NO_REPLY` convention is the only brake.
 - **Identity is the account, not the nick.** See below.
 - **Markdown is converted** to IRC control codes — bold, italic, monospace. Headers become bold, tables lose their separator rows, code fences are unwrapped, links render as `label <url>`.
 - **Lines are wrapped** to stay under the 512-byte protocol limit (splitting on word boundaries, never mid-codepoint) and sent about 4/sec so the server doesn't flood-kick. Very long replies are truncated with a notice.
