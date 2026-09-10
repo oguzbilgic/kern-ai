@@ -1,3 +1,4 @@
+import { DiscordInterface } from "./interfaces/discord.js";
 import { Runtime, type StreamEvent } from "./runtime.js";
 import { updateKernel } from "./kernel.js";
 import { TelegramInterface } from "./interfaces/telegram.js";
@@ -478,6 +479,20 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     });
   }
 
+  // Start Discord if configured
+  const discordToken = process.env.DISCORD_TOKEN;
+  let discordBot: DiscordInterface | null = null;
+  if (!forceCli && discordToken) {
+    discordBot = new DiscordInterface(discordToken, pairing);
+    discordBot.start({
+      onMessage: async (msg, onEvent) => {
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
+      },
+    }).catch((err) => {
+      // logged internally
+    });
+  }
+
   // Start IRC if configured — IRC_URL overrides config.irc
   initIrcTool(agentDir);
   const ircUrls = parseIrcUrls(process.env.IRC_URL || config.irc);
@@ -508,6 +523,9 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
     if (nostrBot) {
       statuses.push({ name: "nostr", status: nostrBot.status, detail: nostrBot.statusDetail });
+    }
+    if (discordBot) {
+      statuses.push({ name: "discord", status: discordBot.status, detail: discordBot.statusDetail });
     }
     if (ircBot) {
       statuses.push({ name: "irc", status: ircBot.status, detail: ircBot.statusDetail });
@@ -558,6 +576,19 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
     if (iface === "nostr" && nostrBot) {
       const sent = await nostrBot.sendToUser(userId, text);
+      if (sent) {
+        server.broadcast({
+          type: "outgoing" as any,
+          text,
+          fromInterface: iface,
+          fromUserId: userId,
+        });
+      }
+      return sent;
+    }
+    if (iface === "discord" && discordBot) {
+      const chatId = pairing.getChatId(userId) || userId;
+      const sent = await discordBot.sendToUser(chatId, text);
       if (sent) {
         server.broadcast({
           type: "outgoing" as any,
@@ -632,6 +663,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     if (slackBot) await slackBot.stop().catch(() => {});
     if (matrixBot) await matrixBot.stop().catch(() => {});
     if (nostrBot) await nostrBot.stop().catch(() => {});
+    if (discordBot) await discordBot.stop().catch(() => {});
     if (ircBot) await ircBot.stop().catch(() => {});
     await plugins.shutdown(pluginCtx);
     server.stop();

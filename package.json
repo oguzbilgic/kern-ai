@@ -49,6 +49,7 @@
     "@slack/bolt": "^4.6.0",
     "ai": "^6.0.0",
     "better-sqlite3": "^12.8.0",
+    "discord.js": "^14.27.0",
     "dotenv": "^16.4.0",
     "glob": "^11.0.0",
     "grammy": "^1.35.0",

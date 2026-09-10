@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- **Discord interface** — connect your agent directly to Discord via bot gateway. Add `DISCORD_TOKEN` to `.kern/.env` to enable. Supports pairing-gated Direct Messages, server/guild channels with @mention gating, automatic message chunking for Discord's 2,000-character limit, typing indicators, media attachment ingestion (up to 25 MB), and proactive messaging via `message` tool.
+
 ## 0.34.1 (2026-09-09)
 
 ### Improvements
