@@ -111,16 +111,28 @@ export class DiscordInterface implements Interface {
         if (message.author.bot || message.author.id === this.botUserId) return;
 
         const isDM = message.channel.type === ChannelType.DM;
-        const isMentioned = message.mentions.users.has(this.botUserId);
+        const mentionsUser = this.botUserId ? message.mentions.users.has(this.botUserId) : false;
+        // Check if any role mentioned is a role the bot has in this guild
+        const botMember = message.guild?.members.me;
+        const mentionsRole = botMember && message.mentions.roles.size > 0
+          ? message.mentions.roles.some((_, roleId) => botMember.roles.cache.has(roleId))
+          : false;
+        const isMentioned = mentionsUser || mentionsRole;
+
+        log.debug("discord", `msg received (dm=${isDM}, mentioned=${isMentioned}, channel=${message.channel.id}, author=${message.author.id}): "${message.content}"`);
 
         // In channels/guilds, only reply when explicitly mentioned or in DMs
         if (!isDM && !isMentioned) return;
 
-        // Clean text: strip bot mention prefix like <@123456789>
+        // Clean text: strip bot mention prefix like <@123456789> or role mentions
         let cleanText = message.content;
         if (this.botUserId) {
-          const mentionRegex = new RegExp(`<@!?${this.botUserId}>`, "g");
-          cleanText = cleanText.replace(mentionRegex, "").trim();
+          cleanText = cleanText.replace(new RegExp(`<@!?${this.botUserId}>`, "g"), "").trim();
+        }
+        if (botMember) {
+          for (const roleId of botMember.roles.cache.keys()) {
+            cleanText = cleanText.replace(new RegExp(`<@&${roleId}>`, "g"), "").trim();
+          }
         }
 
         // Process attachments
