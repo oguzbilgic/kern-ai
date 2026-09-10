@@ -1,5 +1,10 @@
 # Changelog
 
+## next
+
+### Features
+- **Slack inspection and interaction tool (`slack`)** — built-in tool that allows the agent to inspect Slack workspaces on-demand without sending unsolicited messages: read channel history (`history`), read thread replies (`thread`), list public and private channels (`channels`), look up user profiles (`user`), list pinned messages (`pins`), view channel bookmarks (`bookmarks`), and add emoji reactions (`react`).
+
 ## 0.35.0 (2026-09-10)
 
 ### Features

@@ -49,6 +49,7 @@ export class SlackInterface implements Interface {
 
   get status() { return this._status; }
   get statusDetail() { return this._statusDetail; }
+  get client() { return this.app.client; }
 
   async start({ onMessage }: StartOptions): Promise<void> {
     // Get bot's own user ID so we can detect @mentions and ignore own messages

@@ -13,6 +13,7 @@ import { audioTool } from "./audio.js";
 import { kernTool } from "./kern.js";
 import { messageTool } from "./message.js";
 import { ircTool } from "./irc.js";
+import { slackTool } from "./slack.js";
 
 const isWindows = process.platform === "win32";
 
@@ -32,6 +33,7 @@ export const allTools = {
   kern: kernTool,
   message: messageTool,
   irc: ircTool,
+  slack: slackTool,
 };
 
 export type ToolName = keyof typeof allTools;
