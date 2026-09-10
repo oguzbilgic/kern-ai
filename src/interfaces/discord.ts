@@ -219,10 +219,12 @@ export class DiscordInterface implements Interface {
           }
         } catch (err: any) {
           clearInterval(typingInterval);
-          log.error("discord", `turn failed: ${err.message || err}`);
-          const errorMsg = { content: "Error processing message.", allowedMentions: { repliedUser: false } };
+          const reason = String(err?.message || err || "Error processing message.");
+          log.error("discord", `turn failed: ${reason}`);
+          const displayErr = `⚠️ ${reason.slice(0, 300)}`;
+          const errorMsg = { content: displayErr, allowedMentions: { repliedUser: false } };
           if (isDM) {
-            await (message.channel as any).send({ content: "Error processing message." }).catch(() => {});
+            await (message.channel as any).send({ content: displayErr }).catch(() => {});
           } else {
             await message.reply(errorMsg).catch(() => {});
           }

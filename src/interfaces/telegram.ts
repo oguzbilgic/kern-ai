@@ -340,7 +340,23 @@ export class TelegramInterface implements Interface {
         }
       } catch (error: any) {
         clearInterval(typingInterval);
-        await this.editMessage(ctx, reply.message_id, `Error: ${error.message}`);
+        const reason = String(error?.message || error || "Error processing message.");
+        log.error("telegram", `turn failed: ${reason}`);
+        // Edit active placeholder message or reply if it was deleted
+        const errText = `⚠️ ${reason.slice(0, 300)}`;
+        try {
+          await this.editMessage(ctx, activeMessageId, errText);
+        } catch {
+          if (activeMessageId !== reply.message_id) {
+            try {
+              await this.editMessage(ctx, reply.message_id, errText);
+            } catch {
+              await ctx.reply(errText).catch(() => {});
+            }
+          } else {
+            await ctx.reply(errText).catch(() => {});
+          }
+        }
       }
     });
 

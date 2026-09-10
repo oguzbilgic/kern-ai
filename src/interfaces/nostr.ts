@@ -338,8 +338,9 @@ export class NostrInterface implements Interface {
       if (isNoReply(reply)) return;
       await this.sendDM(senderPk, reply, mode);
     } catch (err: any) {
-      log.error("nostr", `turn failed for ${sender}: ${err.message || err}`);
-      await this.sendDM(senderPk, "Error processing message.", mode).catch(() => {});
+      const reason = String(err?.message || err || "Error processing message.");
+      log.error("nostr", `turn failed for ${sender}: ${reason}`);
+      await this.sendDM(senderPk, `⚠️ ${reason.slice(0, 300)}`, mode).catch(() => {});
     }
   }
 
