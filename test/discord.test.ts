@@ -69,3 +69,76 @@ test("DiscordInterface: start() is non-blocking and stop() halts retry loop clea
   assert.strictEqual(discord.status, "disconnected");
   assert.strictEqual((discord as any).retryTimeout, undefined);
 });
+
+test("DiscordInterface: send in DMs and reply in guild channels", async () => {
+  const { DiscordInterface } = await import("../src/interfaces/discord.js");
+  const discord = new DiscordInterface("fake-token");
+
+  let dmReplied = false;
+  let dmSentMessage = "";
+  const mockDMMessage = {
+    author: { id: "user1", username: "oguz" },
+    channel: {
+      id: "dm-channel-1",
+      type: 1, // ChannelType.DM
+      send: async (payload: any) => {
+        dmSentMessage = payload.content;
+      },
+    },
+    guild: null,
+    mentions: { users: new Map(), roles: new Map() },
+    attachments: new Map(),
+    content: "hello agent in dm",
+    reply: async () => {
+      dmReplied = true;
+    },
+  };
+
+  let guildReplied = false;
+  let guildReplyContent = "";
+  const mockGuildMessage = {
+    author: { id: "user2", username: "someone" },
+    channel: {
+      id: "guild-channel-1",
+      type: 0, // ChannelType.GuildText
+      name: "general",
+      send: async () => {},
+    },
+    guild: {
+      id: "guild-1",
+      members: { me: { roles: { cache: new Map() } } },
+    },
+    mentions: { users: new Map([["fake-bot-id", {}]]), roles: new Map() },
+    attachments: new Map(),
+    content: "hello agent in channel",
+    reply: async (payload: any) => {
+      guildReplied = true;
+      guildReplyContent = payload.content;
+    },
+  };
+
+  // Trigger message handler directly
+  let messageCreateHandler: any;
+  (discord as any).botUserId = "fake-bot-id";
+  (discord as any).client.on = (event: string, handler: any) => {
+    if (event === "messageCreate") messageCreateHandler = handler;
+  };
+  (discord as any).client.login = async () => {};
+
+  await discord.start({
+    onMessage: async (msg) => `Reply to: ${msg.text}`,
+  });
+
+  // 1. DM message should use channel.send, NOT message.reply
+  await messageCreateHandler(mockDMMessage);
+  assert.strictEqual(dmReplied, false, "Should not reply() in DMs");
+  assert.strictEqual(dmSentMessage, "Reply to: hello agent in dm");
+
+  // 2. Guild message should use message.reply for the first chunk
+  await messageCreateHandler(mockGuildMessage);
+  assert.strictEqual(guildReplied, true, "Should reply() in guild channels");
+  assert.strictEqual(guildReplyContent, "Reply to: hello agent in channel");
+
+  await discord.stop();
+});
+
