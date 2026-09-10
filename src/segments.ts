@@ -508,9 +508,17 @@ export class SegmentIndex {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
               ).run(sessionId, msgStart, msgEnd, startTime, endTime, parentLevel, summaryText, totalTokens, summaryTokens);
 
-              if (info.changes === 0) return; // already exists
+              let parentId: number | bigint = info.lastInsertRowid;
+              if (info.changes === 0) {
+                // Already exists — find existing parent ID so children don't loop endlessly as orphans
+                const existing = this.db.prepare(
+                  `SELECT id FROM semantic_segments
+                   WHERE session_id = ? AND level = ? AND msg_start = ? AND msg_end = ?`
+                ).get(sessionId, parentLevel, msgStart, msgEnd) as { id: number } | undefined;
+                if (!existing) return;
+                parentId = existing.id;
+              }
 
-              const parentId = info.lastInsertRowid;
               const setParent = this.db.prepare(
                 "UPDATE semantic_segments SET parent_id = ? WHERE id = ?"
               );
