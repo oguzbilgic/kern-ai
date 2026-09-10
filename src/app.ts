@@ -487,13 +487,12 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
       ? process.env.DISCORD_MENTION_ONLY === "true" || process.env.DISCORD_MENTION_ONLY === "1"
       : config.discordMentionOnly ?? true;
     discordBot = new DiscordInterface(discordToken, pairing, mentionOnly);
-    discordBot.start({
+    // start() is non-blocking — retries login with backoff on failure
+    await discordBot.start({
       onMessage: async (msg, onEvent) => {
         return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
       },
-    }).catch((err) => {
-      // logged internally
-    });
+    }).catch(() => {});
   }
 
   // Start IRC if configured — IRC_URL overrides config.irc
