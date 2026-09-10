@@ -12,7 +12,6 @@ import { imageTool } from "./image.js";
 import { audioTool } from "./audio.js";
 import { kernTool } from "./kern.js";
 import { messageTool } from "./message.js";
-import { ircTool } from "./irc.js";
 
 const isWindows = process.platform === "win32";
 
@@ -31,7 +30,6 @@ export const allTools = {
   audio: audioTool,
   kern: kernTool,
   message: messageTool,
-  irc: ircTool,
 };
 
 export type ToolName = keyof typeof allTools;
