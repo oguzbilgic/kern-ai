@@ -350,9 +350,10 @@ Direct integration via Discord Bot API gateway.
 ### Behavior
 
 - **Direct Messages (DMs)**: Gated by pairing (same flow as Telegram/Slack). Unpaired users receive a pairing code.
-- **Guild / Server Channels**: The agent listens in channels it has access to, responding when @mentioned.
+- **Guild / Server Channels**: Responds when @mentioned (either direct user mention or via bot role). Set `"discordMentionOnly": false` in config or `DISCORD_MENTION_ONLY=false` in `.env` to receive all channel messages.
 - **Message Chunking**: Discord's 2,000-character limit is automatically split across clean message boundaries (newlines/spaces).
 - **Attachments**: Supports images, audio, video, and document uploads up to 25 MB.
+- **Outbound Messaging**: Send to Discord users or channels via the `message` tool with `interface: "discord"`.
 
 ## IRC
 

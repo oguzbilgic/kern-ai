@@ -25,6 +25,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `maxContextTokens` | `100000` | Token budget for context window. Messages beyond this are trimmed oldest-first. Full history stays in session JSONL files. |
 | `maxToolResultChars` | `20000` | Max characters per tool result in context. Oversized results are truncated in context only. Full results stay in session storage. Set to `0` to disable. |
 | `telegramTools` | `false` | Show tool call progress lines (⚙ bash, etc.) in Telegram messages. |
+| `discordMentionOnly` | `true` | In Discord server channels, only respond when @mentioned. Set `false` to process all channel messages (overridable via `DISCORD_MENTION_ONLY`). |
 | `nostrRelays` | `[]` | Nostr relay URLs. Empty = built-in public defaults (damus, nos.lol, primal). `NOSTR_RELAYS` env (comma-separated) overrides. See [Interfaces § Nostr](interfaces.md#nostr). |
 | `irc` | `""` | IRC connection URL: `irc://nick@host:6667/#chan` or `ircs://nick:pass@host:6697/#a,#b`. Channels are comma-separated inside the URL; whitespace-separate whole URLs to join several networks. Empty = IRC disabled. `IRC_URL` env overrides. See [Interfaces § IRC](interfaces.md#irc). |
 | `heartbeatInterval` | `60` | Minutes between heartbeat prompts. Agent reviews notes, updates knowledge. 0 to disable. |
