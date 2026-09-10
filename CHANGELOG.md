@@ -7,6 +7,7 @@
 
 ### Improvements
 - **Extract IRC tool to plugin (`src/plugins/irc/`)** — moves IRC management and inspection tool (`irc`) out of core runtime tools into a modular plugin, keeping core tool definitions, scopes, and context assembly clean.
+- **Retry on `EADDRINUSE` during server boot and restarts** — handles socket bind collisions during fast process restarts where the previous process has not yet released the port. `AgentServer.start()` now retries binding with backoff (up to 10 attempts, 500ms intervals) before failing, preventing unhandled crash events during agent reboots.
 - **Surface turn and provider errors across interfaces** ([#344](https://github.com/oguzbilgic/kern-ai/issues/344)) — unwraps provider error chains (JSON `responseBody`, `cause`, HTTP status codes) so rate limits (429), billing issues (402), authentication failures (401), and upstream errors surface with their real API messages instead of generic `"Provider returned error"`. Interfaces (Telegram, Discord, Matrix, Nostr) now notify users with formatted error messages (`⚠️ Rate limit hit (429): ...`) instead of silently dropping turns or sending generic placeholders.
 
 ## 0.35.0 (2026-09-10)
