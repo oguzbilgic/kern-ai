@@ -219,10 +219,9 @@ export class MatrixInterface implements Interface {
     } catch (err: any) {
       clearInterval(typingInterval);
       await this.setTyping(roomId, false).catch(() => {});
-      // Log details server-side; send a generic message to the room to avoid
-      // leaking HTTP response fragments or stack traces to room members.
-      log.error("matrix", `turn failed in ${roomId}: ${err.message || err}`);
-      await this.sendMessage(roomId, "Error processing message.").catch(() => {});
+      const reason = String(err?.message || err || "Error processing message.");
+      log.error("matrix", `turn failed in ${roomId}: ${reason}`);
+      await this.sendMessage(roomId, `⚠️ ${reason.slice(0, 300)}`).catch(() => {});
     }
   }
 

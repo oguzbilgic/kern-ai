@@ -482,23 +482,64 @@ export class Runtime {
 }
 
 /** Clean error categorization from provider error chains */
-function parseProviderError(
+export function parseProviderError(
   streamError: unknown,
   caughtError: any
 ): { message: string; category: string } {
   const realError: any = streamError || caughtError;
   const lastErr = realError?.lastError || realError;
   const cause: any = lastErr?.cause || realError?.cause;
-  const status = lastErr?.statusCode || lastErr?.data?.error?.code;
-  const rawApiMsg = lastErr?.data?.error?.message || lastErr?.responseBody;
 
-  // Detect HTML error pages
+  // Extract HTTP status code across common error shapes
+  const status =
+    lastErr?.statusCode ??
+    realError?.statusCode ??
+    cause?.statusCode ??
+    lastErr?.status ??
+    realError?.status ??
+    lastErr?.data?.error?.code;
+
+  // Helper to test for HTML strings
   const isHtml = (s: unknown): boolean =>
     typeof s === "string" && s.includes("<html");
 
-  const apiMsg = isHtml(rawApiMsg)
-    ? null // discard HTML, fall through to status-based matching
-    : rawApiMsg;
+  // Attempt to parse JSON response body if string
+  let parsedBody: any = null;
+  const rawBody = lastErr?.responseBody ?? realError?.responseBody ?? cause?.responseBody;
+  if (typeof rawBody === "string" && !isHtml(rawBody)) {
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch {
+      // not JSON
+    }
+  } else if (typeof rawBody === "object" && rawBody !== null) {
+    parsedBody = rawBody;
+  }
+
+  // Extract raw API error message if available
+  const rawApiMsg =
+    lastErr?.data?.error?.message ||
+    parsedBody?.error?.message ||
+    parsedBody?.message ||
+    parsedBody?.detail ||
+    (typeof rawBody === "string" && !isHtml(rawBody) ? rawBody : null);
+
+  const apiMsg = isHtml(rawApiMsg) ? null : rawApiMsg;
+
+  // Detect generic "Provider returned error" string without details
+  const isGenericProviderError = (msg: unknown): boolean =>
+    typeof msg === "string" && (msg === "Provider returned error" || msg.startsWith("APICallError: Provider returned error"));
+
+  // Clean, non-generic message from lastErr or realError
+  const lastMsg = !isGenericProviderError(lastErr?.message) && !isHtml(lastErr?.message) && !lastErr?.message?.includes("No output generated")
+    ? lastErr?.message
+    : null;
+  const causeMsg = !isGenericProviderError(cause?.message) && !isHtml(cause?.message)
+    ? cause?.message
+    : null;
+
+  // Detailed error explanation extracted from provider
+  const detailMsg = apiMsg || lastMsg || causeMsg;
 
   // Priority-ordered matchers: first match wins
   const matchers: Array<{
@@ -514,45 +555,54 @@ function parseProviderError(
     {
       test: () => status === 401 || status === 403,
       category: "auth",
-      message: "API authentication failed — check your API key in .kern/.env",
+      message: detailMsg && detailMsg !== "Provider returned error"
+        ? `API authentication failed (${status}): ${detailMsg}`
+        : "API authentication failed — check your API key in .kern/.env",
     },
     {
-      test: () => status === 429 || apiMsg?.includes?.("rate limit"),
+      test: () => status === 429 || detailMsg?.toLowerCase?.().includes("rate limit"),
       category: "rate_limit",
-      message: "Rate limit hit — wait a moment and try again",
+      message: detailMsg && !isGenericProviderError(detailMsg)
+        ? `Rate limit hit (429): ${detailMsg}`
+        : "Rate limit hit (429) — wait a moment and try again",
     },
     {
       test: () =>
         status === 402 ||
-        apiMsg?.includes?.("credit") ||
-        apiMsg?.includes?.("insufficient"),
+        detailMsg?.toLowerCase?.().includes("credit") ||
+        detailMsg?.toLowerCase?.().includes("insufficient"),
       category: "billing",
-      message:
-        "API credits exhausted — check your OpenRouter/provider balance",
+      message: detailMsg && !isGenericProviderError(detailMsg)
+        ? `API credits exhausted (402): ${detailMsg}`
+        : "API credits exhausted (402) — check your OpenRouter/provider balance",
     },
     {
-      test: () => status === 502 || isHtml(rawApiMsg),
+      test: () => status === 502 || isHtml(rawBody) || isHtml(lastErr?.message),
       category: "provider",
       message:
         "Provider returned 502 Bad Gateway — the upstream model may be temporarily unavailable",
     },
     {
-      test: () => !!apiMsg,
+      test: () => status === 503 || status === 504,
       category: "provider",
-      message: apiMsg,
+      message: detailMsg && !isGenericProviderError(detailMsg)
+        ? `Provider unavailable (${status}): ${detailMsg}`
+        : `Provider unavailable (${status}) — upstream service is overloaded or timed out`,
     },
     {
-      test: () =>
-        !!lastErr?.message &&
-        !lastErr.message.includes("No output generated") &&
-        !isHtml(lastErr.message),
+      test: () => !!detailMsg && !isGenericProviderError(detailMsg),
       category: "provider",
-      message: lastErr?.message,
+      message: status ? `Provider error (${status}): ${detailMsg}` : detailMsg,
     },
     {
       test: () => caughtError?.message?.includes?.("No output generated"),
       category: "no_output",
       message: `No response from model (${cause?.message || cause || lastErr?.message || "unknown cause"})`,
+    },
+    {
+      test: () => status !== undefined && status !== null,
+      category: "provider",
+      message: `Provider returned HTTP status ${status}`,
     },
   ];
 
