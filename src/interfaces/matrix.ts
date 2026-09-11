@@ -1,17 +1,27 @@
-import type { Interface, StartOptions } from "./types.js";
+import type { Interface, StartOptions, Attachment } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
 
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+
+export function mimeToType(mime: string): Attachment["type"] {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  return "document";
+}
+
 /**
  * Matrix interface — long-polls /sync, accepts invites, replies via /send.
  *
- * MVP scope:
+ * Scope:
  * - Text messages in/out
  * - Typing indicators while the agent is thinking
+ * - Inbound media attachments (images, audio, video, files)
  * - Auto-accept invites (any inviter; pairing still gates message handling)
  * - Pairing enforced in every room (DM and group) before messages are processed
- * - No E2E encryption, no media, no reactions
+ * - No E2E encryption, no reactions
  *
  * Config via env:
  *   MATRIX_HOMESERVER     e.g. http://matrix:8008
@@ -132,11 +142,14 @@ export class MatrixInterface implements Interface {
           for (const ev of events) {
             if (ev.type !== "m.room.message") continue;
             if (ev.sender === this.userId) continue; // our own sends
-            if (ev.content?.msgtype !== "m.text") continue; // skip media for MVP
-            const body = ev.content.body || "";
-            if (!body) continue;
+            const content = ev.content || {};
+            const msgtype = typeof content.msgtype === "string" ? content.msgtype : "";
+            const supportedMsgTypes = ["m.text", "m.image", "m.file", "m.audio", "m.video"];
+            if (!supportedMsgTypes.includes(msgtype)) continue;
+
+            const body = content.body || "";
             // Fire and forget — don't block the sync loop on a long turn
-            this.handleIncoming(roomId, ev.sender, body, onMessage).catch((err) => {
+            this.handleIncoming(roomId, ev.sender, body, content, onMessage).catch((err) => {
               log.error("matrix", `handle incoming failed: ${err.message || err}`);
             });
           }
@@ -168,9 +181,24 @@ export class MatrixInterface implements Interface {
     roomId: string,
     sender: string,
     text: string,
+    content: Record<string, any>,
     onMessage: StartOptions["onMessage"],
   ): Promise<void> {
-    log("matrix", `message from ${sender} in ${roomId}: ${text.slice(0, 80)}`);
+    const attachments: Attachment[] = [];
+
+    // If message is a media event with an MXC URL, download the attachment
+    if (content.url && typeof content.url === "string") {
+      const att = await this.downloadMediaAttachment(content);
+      if (att) attachments.push(att);
+    }
+
+    const hasText = Boolean(text.trim());
+    if (!hasText && attachments.length === 0) return;
+
+    log(
+      "matrix",
+      `message from ${sender} in ${roomId}: ${(text || "[media]").slice(0, 80)}${attachments.length ? ` +${attachments.length} file(s)` : ""}`,
+    );
 
     // Pairing: auto-pair first user, gate others
     if (this.pairing && !this.pairing.isPaired(sender)) {
@@ -192,10 +220,10 @@ export class MatrixInterface implements Interface {
     }
 
     // Keep typing indicator alive while the turn runs. Matrix clients like Cinny
-    // clear the typing indicator if not refreshed within ~10 seconds.
+    // expire typing state after 5 seconds, so refresh every 3 seconds.
     const typingInterval = setInterval(() => {
       this.setTyping(roomId, true).catch(() => {});
-    }, 6000);
+    }, 3000);
     await this.setTyping(roomId, true).catch(() => {});
 
     try {
@@ -206,6 +234,7 @@ export class MatrixInterface implements Interface {
           chatId: roomId,
           interface: "matrix",
           channel: `matrix:${roomId}`,
+          attachments: attachments.length > 0 ? attachments : undefined,
         },
         // Ignore stream events for MVP — reply with final text only
         () => {},
@@ -223,6 +252,59 @@ export class MatrixInterface implements Interface {
       const reason = String(err?.message || err || "Error processing message.");
       log.error("matrix", `turn failed in ${roomId}: ${reason}`);
       await this.sendMessage(roomId, `⚠️ ${reason.slice(0, 300)}`).catch(() => {});
+    }
+  }
+
+  private async downloadMediaAttachment(content: Record<string, any>): Promise<Attachment | null> {
+    const mxc = content.url;
+    const match = typeof mxc === "string" ? mxc.match(/^mxc:\/\/([^/]+)\/(.+)$/) : null;
+    if (!match) return null;
+
+    const [, serverName, mediaId] = match;
+    const info = content.info || {};
+    const size = typeof info.size === "number" ? info.size : 0;
+    if (size > MAX_FILE_SIZE) {
+      log.warn("matrix", `attachment ${content.body || mediaId} exceeds max file size (${size} bytes)`);
+      return null;
+    }
+
+    const mimeType = info.mimetype || "application/octet-stream";
+    const filename = content.body || mediaId;
+
+    try {
+      // Try modern media endpoint first, falling back to legacy endpoint if needed
+      const paths = [
+        `/_matrix/media/v3/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`,
+        `/_matrix/client/v3/media/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`,
+      ];
+
+      for (const path of paths) {
+        try {
+          const res = await fetch(`${this.homeserver}${path}`, {
+            headers: {
+              Authorization: `Bearer ${this.token}`,
+            },
+          });
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length > MAX_FILE_SIZE) return null;
+            return {
+              type: mimeToType(mimeType),
+              data: buf,
+              mimeType,
+              filename,
+              size: buf.length,
+            };
+          }
+        } catch {
+          // try next path
+        }
+      }
+      log.warn("matrix", `failed to download media from ${mxc}`);
+      return null;
+    } catch (err: any) {
+      log.warn("matrix", `download error for ${mxc}: ${err.message || err}`);
+      return null;
     }
   }
 
