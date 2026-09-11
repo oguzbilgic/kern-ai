@@ -40,6 +40,16 @@ test("mdToMatrixHtml: lists and blockquotes", () => {
   assert.ok(result.includes("<ul>\n<li>item 1</li>\n<li>item 2</li>\n</ul>"));
 });
 
+test("mdToMatrixHtml: cleans redundant line breaks around block elements", () => {
+  const input = "### Header\n\nParagraph 1\n\n- item 1\n- item 2\n\nParagraph 2";
+  const result = mdToMatrixHtml(input);
+  assert.ok(result);
+  assert.ok(!result.includes("</h3><br />"));
+  assert.ok(!result.includes("<br /><ul>"));
+  assert.ok(!result.includes("</ul><br />"));
+  assert.ok(!result.includes("<br /><br /><br />"));
+});
+
 test("mdToMatrixHtml: links and strikethrough", () => {
   const input = "Visit [Matrix](https://matrix.org) or ~~old link~~";
   const result = mdToMatrixHtml(input);
