@@ -457,6 +457,14 @@ export function mdToMatrixHtml(text: string): string | undefined {
     })
     .join("");
 
+  // 13. Strip redundant <br /> before and after block elements
+  html = html.replace(/(?:<br \/>\s*)+(<(?:h[1-6]|pre|ul|ol|blockquote|hr|table)[^>]*>)/gi, "$1");
+  html = html.replace(/(<\/(?:h[1-6]|pre|ul|ol|blockquote|table)>|<hr\s*\/?>)(?:<br \/>\s*)+/gi, "$1");
+  // Collapse 3 or more consecutive <br /> into at most 2
+  html = html.replace(/(?:<br \/>\s*){3,}/g, "<br /><br />");
+  // Trim leading/trailing <br />
+  html = html.replace(/^(?:<br \/>\s*)+|(?:<br \/>\s*)+$/gi, "").trim();
+
   return html;
 }
 
