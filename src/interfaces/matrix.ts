@@ -227,10 +227,20 @@ export class MatrixInterface implements Interface {
 
   private async sendMessage(roomId: string, body: string): Promise<void> {
     const txnId = `kern-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const formatted = mdToMatrixHtml(body);
+    const payload: Record<string, unknown> = {
+      msgtype: "m.text",
+      body,
+    };
+    if (formatted) {
+      payload.format = "org.matrix.custom.html";
+      payload.formatted_body = formatted;
+    }
+
     await this.api(
       "PUT",
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
-      { msgtype: "m.text", body },
+      payload,
     );
   }
 
@@ -267,6 +277,104 @@ export class MatrixInterface implements Interface {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Convert markdown to Matrix-compliant HTML (`org.matrix.custom.html`).
+ * Returns undefined if no markdown constructs are detected.
+ */
+export function mdToMatrixHtml(text: string): string | undefined {
+  if (!/[*_`~#\[\]>-]/.test(text)) {
+    return undefined;
+  }
+
+  // 1. Extract and protect code blocks
+  const codeBlocks: string[] = [];
+  let html = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const escapedCode = escapeHtml(code.replace(/\n$/, ""));
+    const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+    const placeholder = `\x00BLOCK_${codeBlocks.length}\x00`;
+    codeBlocks.push(`<pre><code${langAttr}>${escapedCode}</code></pre>`);
+    return placeholder;
+  });
+
+  // 2. Extract and protect inline code
+  const inlineCodes: string[] = [];
+  html = html.replace(/`([^`\n]+)`/g, (_, code) => {
+    const placeholder = `\x00INLINE_${inlineCodes.length}\x00`;
+    inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
+    return placeholder;
+  });
+
+  // 3. Escape raw HTML entities in remaining text
+  html = escapeHtml(html);
+
+  // 4. Headers: # Heading -> <h1>Heading</h1>
+  html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
+  html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
+  html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
+  html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
+
+  // 5. Blockquotes: &gt; line (since &gt; was escaped from >)
+  html = html.replace(/^&gt;\s*(.+)$/gm, "<blockquote>$1</blockquote>");
+  html = html.replace(/<\/blockquote>\n<blockquote>/g, "<br />");
+
+  // 6. Links: [text](url)
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+
+  // 7. Bold: **text** or __text__
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
+
+  // 8. Italic: *text* or _text_
+  html = html.replace(/(?<![*<])\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
+  html = html.replace(/\b_([^_]+)_\b/g, "<em>$1</em>");
+
+  // 9. Strikethrough: ~~text~~
+  html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
+
+  // 10. Unordered lists: - item or * item
+  html = html.replace(/^[*-]\s+(.+)$/gm, "<li>$1</li>");
+  html = html.replace(/(<li>.*<\/li>(\n|$))+/g, (match) => `<ul>\n${match.trimEnd()}\n</ul>\n`);
+
+  // 11. Restore inline code and code blocks
+  inlineCodes.forEach((code, i) => {
+    html = html.replace(`\x00INLINE_${i}\x00`, code);
+  });
+  codeBlocks.forEach((block, i) => {
+    html = html.replace(`\x00BLOCK_${i}\x00`, block);
+  });
+
+  // 12. Convert newlines to <br /> outside pre/ul/blockquote/h1-6 tags
+  const parts = html.split(
+    /(<pre>[\s\S]*?<\/pre>|<ul>[\s\S]*?<\/ul>|<h[1-6]>[\s\S]*?<\/h[1-6]>|<blockquote>[\s\S]*?<\/blockquote>)/g,
+  );
+  html = parts
+    .map((part) => {
+      if (
+        part.startsWith("<pre>") ||
+        part.startsWith("<ul>") ||
+        part.startsWith("<h") ||
+        part.startsWith("<blockquote>")
+      ) {
+        return part;
+      }
+      return part.replace(/\n/g, "<br />");
+    })
+    .join("");
+
+  return html;
 }
 
 // Minimal typings for the parts of /sync we care about

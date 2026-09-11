@@ -7,6 +7,9 @@
 - **Telegram inspection and interaction tool (`telegram`)** — built-in plugin that allows the agent to inspect and manage Telegram groups, channels, and chats: fetch chat details (`chat`), inspect chat administrators (`admins`), check member status (`member`), pin and unpin messages (`pin`, `unpin`), set emoji reactions (`react`), and execute arbitrary Telegram Bot API methods (`raw`).
 - **OpenRouter inspection tool (`openrouter`)** — built-in plugin that allows the agent to inspect its own OpenRouter API key limits, daily/weekly/monthly credit usage, and rate limits (`key`), search available models by query and category with pricing per million tokens and context lengths (`models`), and query detailed token generation stats and cost for specific generation IDs (`generation`).
 
+### Improvements
+- **Matrix markdown to HTML formatting (`org.matrix.custom.html`)** — Matrix messages now format markdown text into compliant HTML with `formatted_body`, enabling rich rendering for headers, code blocks with language tags, inline code, bold/italic, blockquotes, unordered lists, links, and strikethroughs across Matrix web and desktop clients like Cinny and Element. Plain text `body` is preserved for terminal/bridge clients.
+
 ## 0.36.0 (2026-09-10)
 
 ### Features
