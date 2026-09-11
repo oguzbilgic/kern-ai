@@ -221,6 +221,7 @@ Long polling bot. Works behind NAT, no public URL needed.
 - Markdown converted to Telegram HTML
 - Graceful shutdown: polling stops cleanly on SIGTERM
 - 409 conflicts auto-retry after 5 seconds
+- **Telegram Tool**: Agents with Telegram active have access to the `telegram` tool to view chat details (`chat`), list chat administrators (`admins`), check member status (`member`), pin or unpin messages (`pin`, `unpin`), add emoji reactions (`react`), or execute arbitrary Telegram Bot API methods (`raw`).
 
 ## Slack
 

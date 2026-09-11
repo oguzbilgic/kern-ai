@@ -9,6 +9,8 @@ import { subagentsPlugin } from "./subagents/plugin.js";
 import { slackPlugin } from "./slack/plugin.js";
 import { ircPlugin } from "./irc/plugin.js";
 import { discordPlugin } from "./discord/plugin.js";
+import { telegramPlugin } from "./telegram/plugin.js";
+import { openrouterPlugin } from "./openrouter/plugin.js";
 import { log } from "../log.js";
 
 export type { KernPlugin, PluginContext, RouteHandler, ContextInjection, BeforeContextInfo } from "./types.js";
@@ -28,6 +30,8 @@ const availablePlugins: KernPlugin[] = [
   slackPlugin,
   ircPlugin,
   discordPlugin,
+  telegramPlugin,
+  openrouterPlugin,
 ];
 
 /** Active plugin instances after loading */

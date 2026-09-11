@@ -4,6 +4,7 @@ import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
+import { setTelegramBot } from "../plugins/telegram/plugin.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -83,6 +84,8 @@ export class TelegramInterface implements Interface {
   get statusDetail() { return this._statusDetail; }
 
   async start({ onMessage }: StartOptions): Promise<void> {
+    setTelegramBot(this.bot);
+
     // Register bot commands with Telegram
     this.bot.api.setMyCommands([
       { command: "status", description: "Show agent status" },
@@ -392,6 +395,7 @@ export class TelegramInterface implements Interface {
   }
 
   async stop(): Promise<void> {
+    setTelegramBot(null);
     await this.bot.stop();
   }
 
