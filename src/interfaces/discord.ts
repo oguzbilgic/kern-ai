@@ -10,6 +10,7 @@ import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { setDiscordClient } from "../plugins/discord/plugin.js";
 
 const MAX_DISCORD_MSG_LENGTH = 2000;
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
@@ -96,6 +97,7 @@ export class DiscordInterface implements Interface {
       this.botUserId = c.user.id;
       this._status = "connected";
       this._statusDetail = undefined;
+      setDiscordClient(this.client);
       if (this.retryTimeout) {
         clearTimeout(this.retryTimeout);
         this.retryTimeout = undefined;
@@ -254,6 +256,7 @@ export class DiscordInterface implements Interface {
       this.retryTimeout = undefined;
     }
     this._status = "disconnected";
+    setDiscordClient(null);
     try {
       this.client.destroy();
     } catch {}
