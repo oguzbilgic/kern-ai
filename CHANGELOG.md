@@ -8,7 +8,8 @@
 - **OpenRouter inspection tool (`openrouter`)** — built-in plugin that allows the agent to inspect its own OpenRouter API key limits, daily/weekly/monthly credit usage, and rate limits (`key`), search available models by query and category with pricing per million tokens and context lengths (`models`), and query detailed token generation stats and cost for specific generation IDs (`generation`).
 
 ### Improvements
-- **Matrix markdown to HTML formatting (`org.matrix.custom.html`)** — Matrix messages now format markdown text into compliant HTML with `formatted_body`, enabling rich rendering for headers, code blocks with language tags, inline code, bold/italic, blockquotes, unordered lists, links, and strikethroughs across Matrix web and desktop clients like Cinny and Element. Plain text `body` is preserved for terminal/bridge clients.
+- **Matrix typing indicator refresh interval** — reduced Matrix typing notification refresh interval from 20s to 6s. Matrix clients (such as Cinny and Element) auto-clear typing indicators if not refreshed within ~10 seconds; the shorter refresh interval keeps the typing indicator continuously visible during multi-tool execution and longer model responses.
+- **Matrix markdown to HTML formatting (`org.matrix.custom.html`)** ([#351](https://github.com/oguzbilgic/kern-ai/pull/351)) — Matrix messages now format markdown text into compliant HTML with `formatted_body`, enabling rich rendering for headers, code blocks with language tags, inline code, bold/italic, blockquotes, unordered lists, links, and strikethroughs across Matrix web and desktop clients like Cinny and Element. Plain text `body` is preserved for terminal/bridge clients.
 
 ## 0.36.0 (2026-09-10)
 

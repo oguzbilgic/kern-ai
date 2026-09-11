@@ -191,10 +191,11 @@ export class MatrixInterface implements Interface {
       }
     }
 
-    // Keep typing indicator alive while the turn runs (Matrix times out at ~30s)
+    // Keep typing indicator alive while the turn runs. Matrix clients like Cinny
+    // clear the typing indicator if not refreshed within ~10 seconds.
     const typingInterval = setInterval(() => {
       this.setTyping(roomId, true).catch(() => {});
-    }, 20000);
+    }, 6000);
     await this.setTyping(roomId, true).catch(() => {});
 
     try {
