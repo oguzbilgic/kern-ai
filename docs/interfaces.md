@@ -356,6 +356,7 @@ Direct integration via Discord Bot API gateway.
 - **Message Chunking**: Discord's 2,000-character limit is automatically split across clean message boundaries (newlines/spaces).
 - **Attachments**: Supports images, audio, video, and document uploads up to 25 MB.
 - **Outbound Messaging**: Send to Discord users or channels via the `message` tool with `interface: "discord"`.
+- **Discord Tool**: Agents with Discord active have access to the `discord` tool to read channel or DM history (`history`), add reactions (`react`), inspect pinned messages (`pins`), fetch user info (`user`), or execute arbitrary REST requests (`raw`).
 
 ## IRC
 

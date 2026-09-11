@@ -1,5 +1,10 @@
 # Changelog
 
+## next
+
+### Features
+- **Discord inspection and interaction tool (`discord`)** — built-in plugin that allows the agent to inspect and interact with Discord: read channel or DM history (`history`), add emoji reactions (`react`), inspect pinned messages (`pins`), fetch user profiles (`user`), and execute arbitrary Discord REST API calls (`raw`).
+
 ## 0.36.0 (2026-09-10)
 
 ### Features
