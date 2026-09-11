@@ -4,6 +4,8 @@
 
 ### Features
 - **Discord inspection and interaction tool (`discord`)** — built-in plugin that allows the agent to inspect and interact with Discord: read channel or DM history (`history`), add emoji reactions (`react`), inspect pinned messages (`pins`), fetch user profiles (`user`), and execute arbitrary Discord REST API calls (`raw`).
+- **Telegram inspection and interaction tool (`telegram`)** — built-in plugin that allows the agent to inspect and manage Telegram groups, channels, and chats: fetch chat details (`chat`), inspect chat administrators (`admins`), check member status (`member`), pin and unpin messages (`pin`, `unpin`), set emoji reactions (`react`), and execute arbitrary Telegram Bot API methods (`raw`).
+- **OpenRouter inspection tool (`openrouter`)** — built-in plugin that allows the agent to inspect its own OpenRouter API key limits, daily/weekly/monthly credit usage, and rate limits (`key`), search available models by query and category with pricing per million tokens and context lengths (`models`), and query detailed token generation stats and cost for specific generation IDs (`generation`).
 
 ## 0.36.0 (2026-09-10)
 
