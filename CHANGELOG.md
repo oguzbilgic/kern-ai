@@ -3,12 +3,13 @@
 ## next
 
 ### Features
+- **Matrix inbound media attachment support** — support for inbound images (`m.image`), files/documents (`m.file`), audio (`m.audio`), and video (`m.video`) uploaded by users in Matrix rooms and direct chats. Attachments are downloaded from the homeserver via Matrix media download endpoints and fed directly into the runtime's media pipeline for vision analysis, pre-digest summaries, and tool access.
 - **Discord inspection and interaction tool (`discord`)** — built-in plugin that allows the agent to inspect and interact with Discord: read channel or DM history (`history`), add emoji reactions (`react`), inspect pinned messages (`pins`), fetch user profiles (`user`), and execute arbitrary Discord REST API calls (`raw`).
 - **Telegram inspection and interaction tool (`telegram`)** — built-in plugin that allows the agent to inspect and manage Telegram groups, channels, and chats: fetch chat details (`chat`), inspect chat administrators (`admins`), check member status (`member`), pin and unpin messages (`pin`, `unpin`), set emoji reactions (`react`), and execute arbitrary Telegram Bot API methods (`raw`).
 - **OpenRouter inspection tool (`openrouter`)** — built-in plugin that allows the agent to inspect its own OpenRouter API key limits, daily/weekly/monthly credit usage, and rate limits (`key`), search available models by query and category with pricing per million tokens and context lengths (`models`), and query detailed token generation stats and cost for specific generation IDs (`generation`).
 
 ### Improvements
-- **Matrix typing indicator refresh interval** — reduced Matrix typing notification refresh interval from 20s to 6s. Matrix clients (such as Cinny and Element) auto-clear typing indicators if not refreshed within ~10 seconds; the shorter refresh interval keeps the typing indicator continuously visible during multi-tool execution and longer model responses.
+- **Matrix typing indicator refresh interval** ([#352](https://github.com/oguzbilgic/kern-ai/pull/352)) — reduced Matrix typing notification refresh interval to 3s (down from 20s). Matrix clients like Cinny hardcode a 5-second client-side typing indicator timeout; refreshing every 3s prevents the typing bubble from flickering or disappearing during multi-step tool calls and longer responses.
 - **Matrix markdown to HTML formatting (`org.matrix.custom.html`)** ([#351](https://github.com/oguzbilgic/kern-ai/pull/351)) — Matrix messages now format markdown text into compliant HTML with `formatted_body`, enabling rich rendering for headers, code blocks with language tags, inline code, bold/italic, blockquotes, unordered lists, links, and strikethroughs across Matrix web and desktop clients like Cinny and Element. Plain text `body` is preserved for terminal/bridge clients.
 
 ## 0.36.0 (2026-09-10)

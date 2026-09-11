@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mdToMatrixHtml } from "../src/interfaces/matrix.ts";
+import { mdToMatrixHtml, mimeToType } from "../src/interfaces/matrix.ts";
+
+test("mimeToType: categorizes mime types correctly", () => {
+  assert.equal(mimeToType("image/png"), "image");
+  assert.equal(mimeToType("image/jpeg"), "image");
+  assert.equal(mimeToType("audio/ogg"), "audio");
+  assert.equal(mimeToType("audio/mp3"), "audio");
+  assert.equal(mimeToType("video/mp4"), "video");
+  assert.equal(mimeToType("application/pdf"), "document");
+  assert.equal(mimeToType("text/plain"), "document");
+  assert.equal(mimeToType("application/octet-stream"), "document");
+});
 
 test("mdToMatrixHtml: plain text returns undefined", () => {
   assert.equal(mdToMatrixHtml("Hello world!"), undefined);
