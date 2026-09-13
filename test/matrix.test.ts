@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mdToMatrixHtml, mimeToType } from "../src/interfaces/matrix.ts";
+import { MatrixInterface, mdToMatrixHtml, mimeToType } from "../src/interfaces/matrix.ts";
 
 test("mimeToType: categorizes mime types correctly", () => {
   assert.equal(mimeToType("image/png"), "image");
@@ -92,3 +92,64 @@ test("mdToMatrixHtml: renders tables with alignments and cell formatting", () =>
   assert.ok(result.includes('<td align="right"><code>OK</code></td>'));
   assert.ok(result.includes("</table>"));
 });
+
+test("sendToUser: sends directly to room ID", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    return {};
+  };
+
+  const sent = await iface.sendToUser("!room1:matrix", "Hello room");
+  assert.equal(sent, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PUT");
+  assert.ok(calls[0].path.includes("/send/m.room.message/"));
+  assert.ok(calls[0].path.includes("room1"));
+  assert.equal(calls[0].body.body, "Hello room");
+});
+
+test("sendToUser: resolves existing DM room from m.direct when target is a user ID", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    if (path.includes("/account_data/m.direct")) {
+      return { "@alice:matrix": ["!existing-dm:matrix"] };
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@alice:matrix", "Hello Alice");
+  assert.equal(sent, true);
+  // Checked m.direct, then sent to !existing-dm:matrix
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, "GET");
+  assert.ok(calls[0].path.includes("/account_data/m.direct"));
+  assert.equal(calls[1].method, "PUT");
+  assert.ok(calls[1].path.includes("/send/m.room.message/"));
+  assert.ok(calls[1].path.includes("existing-dm"));
+});
+
+test("sendToUser: creates DM room and updates m.direct when no existing room exists", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      return { room_id: "!new-dm:matrix" };
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@bob:matrix", "Hello Bob");
+  assert.equal(sent, true);
+  assert.ok(calls.some((c) => c.method === "POST" && c.path === "/_matrix/client/v3/createRoom" && c.body.is_direct === true));
+  assert.ok(calls.some((c) => c.method === "PUT" && c.path.includes("/account_data/m.direct")));
+  assert.ok(calls.some((c) => c.method === "PUT" && c.path.includes("new-dm") && c.path.includes("/send/m.room.message/")));
+});
+
