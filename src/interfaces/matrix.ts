@@ -132,7 +132,7 @@ export class MatrixInterface implements Interface {
       }
     } catch (err: any) {
       // 404 is normal if no DMs tracked yet; rethrow other errors (e.g. 500, network failure)
-      if (!String(err.message || err).includes("404")) {
+      if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
         throw err;
       }
     }
@@ -157,7 +157,7 @@ export class MatrixInterface implements Interface {
         `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
       );
     } catch (err: any) {
-      if (!String(err.message || err).includes("404")) {
+      if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
         throw err;
       }
     }
@@ -441,7 +441,9 @@ export class MatrixInterface implements Interface {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`matrix ${method} ${path} ${res.status}: ${text.slice(0, 200)}`);
+      const error: any = new Error(`matrix ${method} ${path} ${res.status}: ${text.slice(0, 200)}`);
+      error.status = res.status;
+      throw error;
     }
     return res.json() as Promise<T>;
   }
