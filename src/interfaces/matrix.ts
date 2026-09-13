@@ -91,14 +91,72 @@ export class MatrixInterface implements Interface {
     this._status = "disconnected";
   }
 
-  async sendToUser(roomId: string, text: string): Promise<boolean> {
+  async sendToUser(target: string, text: string): Promise<boolean> {
     try {
+      let roomId = target;
+      // If target is a Matrix user ID (@user:server), resolve or create a DM room
+      if (target.startsWith("@")) {
+        roomId = await this.getOrCreateDmRoom(target);
+      }
       await this.sendMessage(roomId, text);
       return true;
     } catch (err: any) {
       log.warn("matrix", `sendToUser failed: ${err.message || err}`);
       return false;
     }
+  }
+
+  private async getOrCreateDmRoom(userId: string): Promise<string> {
+    // 1. Check m.direct account data
+    try {
+      const directData = await this.api<Record<string, string[]>>(
+        "GET",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+      );
+      const existingRooms = directData?.[userId];
+      if (Array.isArray(existingRooms) && existingRooms.length > 0) {
+        // Return the first room ID from m.direct
+        return existingRooms[0];
+      }
+    } catch (err: any) {
+      // 404 or missing account data is normal if no DMs tracked yet
+    }
+
+    // 2. Create a new direct chat room
+    const createRes = await this.api<{ room_id: string }>(
+      "POST",
+      "/_matrix/client/v3/createRoom",
+      {
+        is_direct: true,
+        invite: [userId],
+        preset: "trusted_private_chat",
+      },
+    );
+    const roomId = createRes.room_id;
+
+    // 3. Update m.direct account data
+    try {
+      let directData: Record<string, string[]> = {};
+      try {
+        directData = await this.api<Record<string, string[]>>(
+          "GET",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        );
+      } catch {}
+      const rooms = directData[userId] || [];
+      if (!rooms.includes(roomId)) {
+        directData[userId] = [...rooms, roomId];
+        await this.api(
+          "PUT",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+          directData,
+        );
+      }
+    } catch (err: any) {
+      log.warn("matrix", `failed to update m.direct for ${userId}: ${err.message || err}`);
+    }
+
+    return roomId;
   }
 
   private async syncLoop(
