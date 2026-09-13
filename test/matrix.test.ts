@@ -57,3 +57,19 @@ test("mdToMatrixHtml: links and strikethrough", () => {
   assert.ok(result.includes('<a href="https://matrix.org">Matrix</a>'));
   assert.ok(result.includes("<del>old link</del>"));
 });
+
+test("mdToMatrixHtml: renders tables with alignments and cell formatting", () => {
+  const input = `
+| Feature | Matrix | Status |
+| :--- | :---: | ---: |
+| **Markdown** | Full HTML | *Active* |
+| Tables | Native | \`OK\` |
+`;
+  const result = mdToMatrixHtml(input);
+  assert.ok(result);
+  assert.ok(result.includes("<table>"));
+  assert.ok(result.includes('<tr><th align="left">Feature</th><th align="center">Matrix</th><th align="right">Status</th></tr>'));
+  assert.ok(result.includes('<tr><td align="left"><strong>Markdown</strong></td><td align="center">Full HTML</td><td align="right"><em>Active</em></td></tr>'));
+  assert.ok(result.includes('<tr><td align="left">Tables</td><td align="center">Native</td><td align="right"><code>OK</code></td></tr>'));
+  assert.ok(result.includes("</table>"));
+});
