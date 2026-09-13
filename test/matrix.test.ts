@@ -352,12 +352,49 @@ test("sendToUser: propagates non-403/404 errors during candidate room check rath
   assert.equal(createCalled, false);
 });
 
+test("sendToUser: revalidates cached DM room membership and evicts stale cache before sending", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  let sentToRoom = "";
+  (iface as any).dmRoomCache.set("@user:matrix", "!cached-room:matrix");
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!cached-room")) {
+        return { membership: "leave" }; // recipient left previously cached room
+      }
+      return { membership: "join" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!new-room:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@user:matrix", "Hello after leave");
+  assert.equal(sent, true);
+  assert.equal(createCalled, true);
+  assert.ok(sentToRoom.includes("!new-room"));
+  assert.equal((iface as any).dmRoomCache.get("@user:matrix"), "!new-room:matrix");
+});
+
 test("sendToUser: retains created DM in memory cache if m.direct persistence fails", async () => {
   const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
   let createCount = 0;
   (iface as any).api = async (method: string, path: string, body?: any) => {
     if (method === "GET" && path.includes("/account_data/m.direct")) {
       return {};
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      return { membership: "join" };
     }
     if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
       createCount++;

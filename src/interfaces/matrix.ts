@@ -141,11 +141,34 @@ export class MatrixInterface implements Interface {
     return promise;
   }
 
+  private async isRoomUsableForUser(roomId: string, userId: string): Promise<boolean> {
+    try {
+      const targetMember = await this.api<{ membership?: string }>(
+        "GET",
+        `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.member/${encodeURIComponent(userId)}`,
+      );
+      return targetMember?.membership === "join" || targetMember?.membership === "invite";
+    } catch (err: any) {
+      if (
+        err.status === 403 ||
+        err.status === 404 ||
+        String(err.message || err).includes(" 403") ||
+        String(err.message || err).includes(" 404")
+      ) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
   private async resolveOrCreateDmRoom(userId: string): Promise<string> {
-    // 1. Check in-memory cache first
+    // 1. Check in-memory cache first (validate recipient membership)
     const cached = this.dmRoomCache.get(userId);
     if (cached) {
-      return cached;
+      if (await this.isRoomUsableForUser(cached, userId)) {
+        return cached;
+      }
+      this.dmRoomCache.delete(userId);
     }
 
     // 2. Check m.direct account data
@@ -158,23 +181,9 @@ export class MatrixInterface implements Interface {
       if (Array.isArray(existingRooms) && existingRooms.length > 0) {
         // Iterate mapped rooms and verify whether one is usable
         for (const candidateRoom of existingRooms) {
-          try {
-            // Check that the recipient user is currently in the room (join or invite)
-            const targetMember = await this.api<{ membership?: string }>(
-              "GET",
-              `/_matrix/client/v3/rooms/${encodeURIComponent(candidateRoom)}/state/m.room.member/${encodeURIComponent(userId)}`,
-            );
-            if (targetMember?.membership === "join" || targetMember?.membership === "invite") {
-              this.dmRoomCache.set(userId, candidateRoom);
-              return candidateRoom;
-            }
-          } catch (err: any) {
-            // If 403 (bot not in room) or 404 (room/member event not found), candidate is stale; try next
-            if (err.status === 403 || err.status === 404 || String(err.message || err).includes(" 403") || String(err.message || err).includes(" 404")) {
-              continue;
-            }
-            // Propagate network/5xx server errors rather than creating duplicate rooms
-            throw err;
+          if (await this.isRoomUsableForUser(candidateRoom, userId)) {
+            this.dmRoomCache.set(userId, candidateRoom);
+            return candidateRoom;
           }
         }
       }
