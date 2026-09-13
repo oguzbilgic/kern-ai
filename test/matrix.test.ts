@@ -217,7 +217,7 @@ test("sendToUser: serializes m.direct updates across different users without dro
   assert.deepEqual(storedDirectData["@bob:matrix"], ["!room-bob:matrix"]);
 });
 
-test("sendToUser: tries next mapped room or falls back to createRoom when first room is stale", async () => {
+test("sendToUser: tries next mapped room when candidate is stale and falls back to createRoom when all candidates are unusable", async () => {
   const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
   let sentToRoom = "";
   (iface as any).api = async (method: string, path: string, body?: any) => {
@@ -245,6 +245,87 @@ test("sendToUser: tries next mapped room or falls back to createRoom when first 
   const sent = await iface.sendToUser("@stale:matrix", "Hello via valid room");
   assert.equal(sent, true);
   assert.ok(sentToRoom.includes("!valid-dm-3"));
+
+  // Now test all-stale fallback: every mapped candidate is unusable -> creates new room
+  const ifaceAllStale = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  let sentToCreatedRoom = "";
+  (ifaceAllStale as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@allstale:matrix": ["!stale-1:matrix", "!stale-2:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!stale-1")) {
+        const err: any = new Error("matrix GET 404: Not Found");
+        err.status = 404;
+        throw err;
+      }
+      return { membership: "leave" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!replacement-dm:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToCreatedRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sentReplacement = await ifaceAllStale.sendToUser("@allstale:matrix", "Hello via replacement");
+  assert.equal(sentReplacement, true);
+  assert.equal(createCalled, true);
+  assert.ok(sentToCreatedRoom.includes("!replacement-dm"));
+});
+
+test("sendToUser: invalidates cached DM room and re-resolves when send returns 403/404", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let sendAttempts = 0;
+  let createdCount = 0;
+  let mDirectRooms = ["!cached-dm:matrix"];
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@alice:matrix": mDirectRooms };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!cached-dm")) {
+        // Initially member is in room
+        return { membership: "join" };
+      }
+      return { membership: "join" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createdCount++;
+      return { room_id: "!newly-created-dm:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sendAttempts++;
+      if (path.includes("!cached-dm")) {
+        // Simulate cached room becoming unusable (e.g. 403 Forbidden after ban/leave)
+        const err: any = new Error("matrix PUT 403: Forbidden");
+        err.status = 403;
+        throw err;
+      }
+      return {};
+    }
+    return {};
+  };
+
+  // Prime cache by sending first message (will succeed if cached-dm accepted, but here first send fails and invalidates)
+  // Let's set up the cache directly on iface
+  (iface as any).dmRoomCache.set("@alice:matrix", "!cached-dm:matrix");
+
+  // When sending to @alice:matrix, cached room is used, fails with 403, cache invalidated,
+  // re-resolve checks m.direct (which still has !cached-dm), member check fails or let's simulate mDirectRooms updated or empty
+  mDirectRooms = []; // now m.direct has no valid rooms so createRoom is called
+
+  const sent = await iface.sendToUser("@alice:matrix", "Retry message");
+  assert.equal(sent, true);
+  assert.equal(sendAttempts, 2); // 1 on !cached-dm, 1 on !newly-created-dm
+  assert.equal(createdCount, 1);
+  assert.equal((iface as any).dmRoomCache.get("@alice:matrix"), "!newly-created-dm:matrix");
 });
 
 test("sendToUser: propagates non-403/404 errors during candidate room check rather than creating duplicate DM", async () => {

@@ -104,8 +104,26 @@ export class MatrixInterface implements Interface {
       if (target.startsWith("@")) {
         roomId = await this.getOrCreateDmRoom(target);
       }
-      await this.sendMessage(roomId, text);
-      return true;
+      try {
+        await this.sendMessage(roomId, text);
+        return true;
+      } catch (sendErr: any) {
+        // If send fails with 403/404 on a resolved DM room, invalidate cache and retry once with fresh resolution
+        if (
+          target.startsWith("@") &&
+          (sendErr.status === 403 ||
+            sendErr.status === 404 ||
+            String(sendErr.message || sendErr).includes(" 403") ||
+            String(sendErr.message || sendErr).includes(" 404"))
+        ) {
+          log.warn("matrix", `cached DM room ${roomId} unusable for ${target}, invalidating cache and re-resolving`);
+          this.dmRoomCache.delete(target);
+          const freshRoomId = await this.getOrCreateDmRoom(target);
+          await this.sendMessage(freshRoomId, text);
+          return true;
+        }
+        throw sendErr;
+      }
     } catch (err: any) {
       log.warn("matrix", `sendToUser failed: ${err.message || err}`);
       return false;
