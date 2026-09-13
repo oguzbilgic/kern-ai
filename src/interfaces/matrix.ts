@@ -178,7 +178,11 @@ export class MatrixInterface implements Interface {
 
     // Ensure the lock recovers from rejections so future resolutions can still proceed
     this.directAccountDataLock = updatePromise.catch(() => {});
-    await updatePromise;
+    try {
+      await updatePromise;
+    } catch (err: any) {
+      log.warn("matrix", `failed to persist m.direct for ${userId}: ${err.message || err}`);
+    }
 
     return roomId;
   }

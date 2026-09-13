@@ -204,8 +204,8 @@ message({ userId: "12345", interface: "telegram", text: "Hello!" })
 ```
 
 - `userId` — from USERS.md or pairing data
-- `interface` — `telegram`, `slack`, or `matrix`
-- Looks up chatId from pairing data
+- `interface` — `telegram`, `slack`, `matrix`, `discord`, `nostr`, `irc`, or `hub`
+- Looks up chatId from pairing data (on Matrix, sending to an `@user:server` MXID resolves directly via `m.direct` or creates a private DM room, falling back to pairing chatId if a room ID is provided)
 - Broadcasts outgoing event to TUI
 
 ## recall

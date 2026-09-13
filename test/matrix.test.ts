@@ -179,4 +179,37 @@ test("sendToUser: deduplicates concurrent resolutions for the same user", async 
   assert.equal(createRoomCount, 1);
 });
 
+test("sendToUser: serializes m.direct updates across different users without dropping mappings", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let storedDirectData: Record<string, string[]> = {};
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      // Simulate network delay to expose race conditions if not serialized
+      await new Promise((r) => setTimeout(r, 20));
+      return { ...storedDirectData };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      const targetUser = body.invite[0];
+      return { room_id: targetUser === "@alice:matrix" ? "!room-alice:matrix" : "!room-bob:matrix" };
+    }
+    if (method === "PUT" && path.includes("/account_data/m.direct")) {
+      await new Promise((r) => setTimeout(r, 10));
+      storedDirectData = { ...body };
+      return {};
+    }
+    return {};
+  };
+
+  const [resAlice, resBob] = await Promise.all([
+    iface.sendToUser("@alice:matrix", "Hi Alice"),
+    iface.sendToUser("@bob:matrix", "Hi Bob"),
+  ]);
+
+  assert.equal(resAlice, true);
+  assert.equal(resBob, true);
+  assert.deepEqual(storedDirectData["@alice:matrix"], ["!room-alice:matrix"]);
+  assert.deepEqual(storedDirectData["@bob:matrix"], ["!room-bob:matrix"]);
+});
+
 
