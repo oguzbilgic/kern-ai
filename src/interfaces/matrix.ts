@@ -42,6 +42,8 @@ export class MatrixInterface implements Interface {
   private _statusDetail?: string;
   // In-flight DM room resolution promises to avoid duplicate createRoom calls concurrently
   private dmResolutions = new Map<string, Promise<string>>();
+  // Promise chain to serialize m.direct read-modify-write across all users
+  private directAccountDataLock: Promise<void> = Promise.resolve();
   // Gate pairing-code messages so we only send once per (user, room) per process.
   // Prevents agent-to-agent loops in shared rooms.
   private sentCodes = new Set<string>();
@@ -149,28 +151,30 @@ export class MatrixInterface implements Interface {
     );
     const roomId = createRes.room_id;
 
-    // 3. Update m.direct account data
-    let directData: Record<string, string[]> = {};
-    try {
-      directData = await this.api<Record<string, string[]>>(
-        "GET",
-        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
-      );
-    } catch (err: any) {
-      if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
-        throw err;
+    // 3. Update m.direct account data (serialized across all users)
+    await (this.directAccountDataLock = this.directAccountDataLock.then(async () => {
+      let directData: Record<string, string[]> = {};
+      try {
+        directData = await this.api<Record<string, string[]>>(
+          "GET",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        );
+      } catch (err: any) {
+        if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
+          throw err;
+        }
       }
-    }
 
-    const rooms = directData[userId] || [];
-    if (!rooms.includes(roomId)) {
-      directData[userId] = [...rooms, roomId];
-      await this.api(
-        "PUT",
-        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
-        directData,
-      );
-    }
+      const rooms = directData[userId] || [];
+      if (!rooms.includes(roomId)) {
+        directData[userId] = [...rooms, roomId];
+        await this.api(
+          "PUT",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+          directData,
+        );
+      }
+    }));
 
     return roomId;
   }
