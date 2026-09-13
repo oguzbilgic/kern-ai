@@ -317,9 +317,11 @@ test("sendToUser: invalidates cached DM room and re-resolves when send returns 4
   // Let's set up the cache directly on iface
   (iface as any).dmRoomCache.set("@alice:matrix", "!cached-dm:matrix");
 
-  // When sending to @alice:matrix, cached room is used, fails with 403, cache invalidated,
-  // re-resolve checks m.direct (which still has !cached-dm), member check fails or let's simulate mDirectRooms updated or empty
-  mDirectRooms = []; // now m.direct has no valid rooms so createRoom is called
+  // When sending to @alice:matrix, cached room is used, fails with 403, cache invalidated.
+  // Note: mDirectRooms STILL contains "!cached-dm:matrix", and member check for !cached-dm still returns "join"
+  // (e.g. Bot lost send permission, but recipient is still joined).
+  // The retry must exclude "!cached-dm:matrix", not select it again!
+  mDirectRooms = ["!cached-dm:matrix"];
 
   const sent = await iface.sendToUser("@alice:matrix", "Retry message");
   assert.equal(sent, true);

@@ -108,7 +108,7 @@ export class MatrixInterface implements Interface {
         await this.sendMessage(roomId, text);
         return true;
       } catch (sendErr: any) {
-        // If send fails with 403/404 on a resolved DM room, invalidate cache and retry once with fresh resolution
+        // If send fails with 403/404 on a resolved DM room, invalidate cache, exclude failed room, and retry once with fresh resolution
         if (
           target.startsWith("@") &&
           (sendErr.status === 403 ||
@@ -118,7 +118,7 @@ export class MatrixInterface implements Interface {
         ) {
           log.warn("matrix", `cached DM room ${roomId} unusable for ${target}, invalidating cache and re-resolving`);
           this.dmRoomCache.delete(target);
-          const freshRoomId = await this.getOrCreateDmRoom(target);
+          const freshRoomId = await this.getOrCreateDmRoom(target, roomId);
           await this.sendMessage(freshRoomId, text);
           return true;
         }
@@ -130,14 +130,15 @@ export class MatrixInterface implements Interface {
     }
   }
 
-  private async getOrCreateDmRoom(userId: string): Promise<string> {
-    const inflight = this.dmResolutions.get(userId);
+  private async getOrCreateDmRoom(userId: string, excludeRoomId?: string): Promise<string> {
+    const key = excludeRoomId ? `${userId}:${excludeRoomId}` : userId;
+    const inflight = this.dmResolutions.get(key);
     if (inflight) return inflight;
 
-    const promise = this.resolveOrCreateDmRoom(userId).finally(() => {
-      this.dmResolutions.delete(userId);
+    const promise = this.resolveOrCreateDmRoom(userId, excludeRoomId).finally(() => {
+      this.dmResolutions.delete(key);
     });
-    this.dmResolutions.set(userId, promise);
+    this.dmResolutions.set(key, promise);
     return promise;
   }
 
@@ -161,11 +162,11 @@ export class MatrixInterface implements Interface {
     }
   }
 
-  private async resolveOrCreateDmRoom(userId: string): Promise<string> {
-    // 1. Check in-memory cache first (validate recipient membership)
+  private async resolveOrCreateDmRoom(userId: string, excludeRoomId?: string): Promise<string> {
+    // 1. Check in-memory cache first (validate recipient membership and exclude failed room)
     const cached = this.dmRoomCache.get(userId);
     if (cached) {
-      if (await this.isRoomUsableForUser(cached, userId)) {
+      if (cached !== excludeRoomId && (await this.isRoomUsableForUser(cached, userId))) {
         return cached;
       }
       this.dmRoomCache.delete(userId);
@@ -179,9 +180,9 @@ export class MatrixInterface implements Interface {
       );
       const existingRooms = directData?.[userId];
       if (Array.isArray(existingRooms) && existingRooms.length > 0) {
-        // Iterate mapped rooms and verify whether one is usable
+        // Iterate mapped rooms and verify whether one is usable (skipping excluded room)
         for (const candidateRoom of existingRooms) {
-          if (await this.isRoomUsableForUser(candidateRoom, userId)) {
+          if (candidateRoom !== excludeRoomId && (await this.isRoomUsableForUser(candidateRoom, userId))) {
             this.dmRoomCache.set(userId, candidateRoom);
             return candidateRoom;
           }
