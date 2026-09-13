@@ -40,6 +40,8 @@ export class MatrixInterface implements Interface {
   private abort: AbortController | null = null;
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
+  // In-flight DM room resolution promises to avoid duplicate createRoom calls concurrently
+  private dmResolutions = new Map<string, Promise<string>>();
   // Gate pairing-code messages so we only send once per (user, room) per process.
   // Prevents agent-to-agent loops in shared rooms.
   private sentCodes = new Set<string>();
@@ -107,6 +109,17 @@ export class MatrixInterface implements Interface {
   }
 
   private async getOrCreateDmRoom(userId: string): Promise<string> {
+    const inflight = this.dmResolutions.get(userId);
+    if (inflight) return inflight;
+
+    const promise = this.resolveOrCreateDmRoom(userId).finally(() => {
+      this.dmResolutions.delete(userId);
+    });
+    this.dmResolutions.set(userId, promise);
+    return promise;
+  }
+
+  private async resolveOrCreateDmRoom(userId: string): Promise<string> {
     // 1. Check m.direct account data
     try {
       const directData = await this.api<Record<string, string[]>>(
@@ -115,11 +128,13 @@ export class MatrixInterface implements Interface {
       );
       const existingRooms = directData?.[userId];
       if (Array.isArray(existingRooms) && existingRooms.length > 0) {
-        // Return the first room ID from m.direct
         return existingRooms[0];
       }
     } catch (err: any) {
-      // 404 or missing account data is normal if no DMs tracked yet
+      // 404 is normal if no DMs tracked yet; rethrow other errors (e.g. 500, network failure)
+      if (!String(err.message || err).includes("404")) {
+        throw err;
+      }
     }
 
     // 2. Create a new direct chat room
@@ -135,25 +150,26 @@ export class MatrixInterface implements Interface {
     const roomId = createRes.room_id;
 
     // 3. Update m.direct account data
+    let directData: Record<string, string[]> = {};
     try {
-      let directData: Record<string, string[]> = {};
-      try {
-        directData = await this.api<Record<string, string[]>>(
-          "GET",
-          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
-        );
-      } catch {}
-      const rooms = directData[userId] || [];
-      if (!rooms.includes(roomId)) {
-        directData[userId] = [...rooms, roomId];
-        await this.api(
-          "PUT",
-          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
-          directData,
-        );
-      }
+      directData = await this.api<Record<string, string[]>>(
+        "GET",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+      );
     } catch (err: any) {
-      log.warn("matrix", `failed to update m.direct for ${userId}: ${err.message || err}`);
+      if (!String(err.message || err).includes("404")) {
+        throw err;
+      }
+    }
+
+    const rooms = directData[userId] || [];
+    if (!rooms.includes(roomId)) {
+      directData[userId] = [...rooms, roomId];
+      await this.api(
+        "PUT",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        directData,
+      );
     }
 
     return roomId;

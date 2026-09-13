@@ -153,3 +153,30 @@ test("sendToUser: creates DM room and updates m.direct when no existing room exi
   assert.ok(calls.some((c) => c.method === "PUT" && c.path.includes("new-dm") && c.path.includes("/send/m.room.message/")));
 });
 
+test("sendToUser: deduplicates concurrent resolutions for the same user", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createRoomCount = 0;
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createRoomCount++;
+      // Simulate small network delay
+      await new Promise((r) => setTimeout(r, 10));
+      return { room_id: "!concurrent-dm:matrix" };
+    }
+    return {};
+  };
+
+  const [res1, res2] = await Promise.all([
+    iface.sendToUser("@charlie:matrix", "Message 1"),
+    iface.sendToUser("@charlie:matrix", "Message 2"),
+  ]);
+
+  assert.equal(res1, true);
+  assert.equal(res2, true);
+  assert.equal(createRoomCount, 1);
+});
+
+
