@@ -284,10 +284,18 @@ test("sendToUser: invalidates cached DM room and re-resolves when send returns 4
   let sendAttempts = 0;
   let createdCount = 0;
   let mDirectRooms = ["!cached-dm:matrix"];
+  let removedFromMDirect = false;
 
   (iface as any).api = async (method: string, path: string, body?: any) => {
     if (method === "GET" && path.includes("/account_data/m.direct")) {
       return { "@alice:matrix": mDirectRooms };
+    }
+    if (method === "PUT" && path.includes("/account_data/m.direct")) {
+      mDirectRooms = body?.["@alice:matrix"] || [];
+      if (!mDirectRooms.includes("!cached-dm:matrix")) {
+        removedFromMDirect = true;
+      }
+      return {};
     }
     if (method === "GET" && path.includes("/state/m.room.member/")) {
       if (path.includes("!cached-dm")) {
@@ -328,6 +336,9 @@ test("sendToUser: invalidates cached DM room and re-resolves when send returns 4
   assert.equal(sendAttempts, 2); // 1 on !cached-dm, 1 on !newly-created-dm
   assert.equal(createdCount, 1);
   assert.equal((iface as any).dmRoomCache.get("@alice:matrix"), "!newly-created-dm:matrix");
+  // Give background m.direct removal a moment to complete
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(removedFromMDirect, true);
 });
 
 test("sendToUser: propagates non-403/404 errors during candidate room check rather than creating duplicate DM", async () => {
@@ -394,13 +405,25 @@ test("isMatrixUserId: matches valid MXIDs including ports and IPv6 and rejects i
   assert.equal(isMatrixUserId("@carol:192.168.1.1:8008"), true);
   assert.equal(isMatrixUserId("@dave:[::1]"), true);
   assert.equal(isMatrixUserId("@eve:[2001:db8::1]:8448"), true);
+  assert.equal(isMatrixUserId("@user_name-1.0:domain.org"), true);
 
+  // Invalid targets
   assert.equal(isMatrixUserId("@alice"), false);
   assert.equal(isMatrixUserId("alice:matrix.org"), false);
   assert.equal(isMatrixUserId("!room:matrix.org"), false);
   assert.equal(isMatrixUserId("@alice:"), false);
   assert.equal(isMatrixUserId("@:matrix.org"), false);
   assert.equal(isMatrixUserId(""), false);
+  // Invalid characters / whitespace
+  assert.equal(isMatrixUserId("@alice space:matrix.org"), false);
+  assert.equal(isMatrixUserId("@alice:matrix .org"), false);
+  assert.equal(isMatrixUserId("@alice:matrix/path"), false);
+  assert.equal(isMatrixUserId("@al/ice:matrix.org"), false);
+  // Invalid ports
+  assert.equal(isMatrixUserId("@alice:matrix.org:0"), false);
+  assert.equal(isMatrixUserId("@alice:matrix.org:65536"), false);
+  assert.equal(isMatrixUserId("@alice:matrix.org:999999"), false);
+  assert.equal(isMatrixUserId("@alice:matrix.org:notaport"), false);
 });
 
 test("sendToUser: treats non-MXID @-prefixed target as room ID without attempting DM resolution", async () => {

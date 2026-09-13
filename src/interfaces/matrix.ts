@@ -32,11 +32,42 @@ export function mimeToType(mime: string): Attachment["type"] {
  */
 /**
  * Validate a Matrix user ID (MXID) according to the Matrix specification:
- * `@localpart:server_name` where server_name can be a domain, hostname,
- * IPv4, or bracketed IPv6, optionally followed by `:port`.
+ * `@localpart:server_name` where:
+ * - localpart consists of lowercase letters, digits, and `.-_=/+` (historical chars allowed)
+ *   not containing whitespace or colons/slashes
+ * - server_name can be a valid hostname/domain (letters, digits, dots, hyphens),
+ *   IPv4 address, or bracketed IPv6 address
+ * - optional port between 1 and 65535
  */
 export function isMatrixUserId(id: string): boolean {
-  return /^@[^:]+:(?:\[[0-9a-fA-F:]+\]|[^:]+)(?::\d+)?$/.test(id);
+  if (typeof id !== "string" || id.length === 0 || id.length > 255) {
+    return false;
+  }
+  const match = /^@([a-z0-9._=\-+]+):(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?$/.exec(id);
+  if (!match) {
+    return false;
+  }
+  const [, localpart, serverName, portStr] = match;
+  if (!localpart || !serverName) {
+    return false;
+  }
+  // Localpart cannot contain slashes or spaces
+  if (localpart.includes("/") || localpart.includes(" ")) {
+    return false;
+  }
+  // Server name hostname/domain cannot start or end with a dot or hyphen
+  if (!serverName.startsWith("[")) {
+    if (serverName.startsWith(".") || serverName.endsWith(".") || serverName.startsWith("-") || serverName.endsWith("-")) {
+      return false;
+    }
+  }
+  if (portStr !== undefined) {
+    const port = Number(portStr);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export class MatrixInterface implements Interface {
@@ -130,6 +161,10 @@ export class MatrixInterface implements Interface {
           if (this.dmRoomCache.get(target) === roomId) {
             this.dmRoomCache.delete(target);
           }
+          // Also remove unusable roomId from m.direct account data under serialized lock so it isn't picked again
+          this.removeRoomFromDirectData(target, roomId).catch((err) => {
+            log.warn("matrix", `failed to remove unusable room ${roomId} from m.direct for ${target}: ${err.message || err}`);
+          });
           const freshRoomId = await this.getOrCreateDmRoom(target, roomId);
           await this.sendMessage(freshRoomId, text);
           return true;
@@ -256,6 +291,41 @@ export class MatrixInterface implements Interface {
     }
 
     return roomId;
+  }
+
+  private async removeRoomFromDirectData(userId: string, roomId: string): Promise<void> {
+    const removePromise = this.directAccountDataLock.then(async () => {
+      let directData: Record<string, string[]> = {};
+      try {
+        directData = await this.api<Record<string, string[]>>(
+          "GET",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        );
+      } catch (err: any) {
+        if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
+          throw err;
+        }
+        return;
+      }
+
+      const rooms = directData[userId];
+      if (Array.isArray(rooms) && rooms.includes(roomId)) {
+        const filtered = rooms.filter((r) => r !== roomId);
+        if (filtered.length === 0) {
+          delete directData[userId];
+        } else {
+          directData[userId] = filtered;
+        }
+        await this.api(
+          "PUT",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+          directData,
+        );
+      }
+    });
+
+    this.directAccountDataLock = removePromise.catch(() => {});
+    await removePromise;
   }
 
   private async syncLoop(
