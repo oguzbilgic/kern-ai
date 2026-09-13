@@ -564,10 +564,11 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
     if (iface === "matrix" && matrixBot) {
       // For Matrix, sendToUser expects either an explicit room ID (!room:server)
-      // or a user ID (@user:server) which resolves to a direct chat room.
+      // or a valid user MXID (@user:server) which resolves to a direct chat room.
       // If chatId in pairing was recorded as a room ID from a group room pairing,
       // prefer resolving the user ID so proactive messages to users go to their DM.
-      const target = userId.startsWith("@") ? userId : (pairing.getChatId(userId) || userId);
+      const isMxid = /^@[^:]+:[^:]+$/.test(userId);
+      const target = isMxid ? userId : (pairing.getChatId(userId) || userId);
       const sent = await matrixBot.sendToUser(target, text);
       if (sent) {
         server.broadcast({

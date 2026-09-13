@@ -388,6 +388,31 @@ test("sendToUser: revalidates cached DM room membership and evicts stale cache b
   assert.equal((iface as any).dmRoomCache.get("@user:matrix"), "!new-room:matrix");
 });
 
+test("sendToUser: treats non-MXID @-prefixed target as room ID without attempting DM resolution", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let sentTo = "";
+  let createCalled = false;
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!new:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentTo = path;
+      return {};
+    }
+    return {};
+  };
+
+  // "@notanmxid" does not match /^@[^:]+:[^:]+$/ so it shouldn't trigger DM resolution
+  // encodeURIComponent("@notanmxid") is "%40notanmxid"
+  const sent = await iface.sendToUser("@notanmxid", "Hello room");
+  assert.equal(sent, true);
+  assert.equal(createCalled, false);
+  assert.ok(sentTo.includes("%40notanmxid"));
+});
+
 test("sendToUser: retains created DM in memory cache if m.direct persistence fails", async () => {
   const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
   let createCount = 0;

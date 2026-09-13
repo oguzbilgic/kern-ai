@@ -100,8 +100,9 @@ export class MatrixInterface implements Interface {
   async sendToUser(target: string, text: string): Promise<boolean> {
     try {
       let roomId = target;
+      const isMxid = /^@[^:]+:[^:]+$/.test(target);
       // If target is a Matrix user ID (@user:server), resolve or create a DM room
-      if (target.startsWith("@")) {
+      if (isMxid) {
         roomId = await this.getOrCreateDmRoom(target);
       }
       try {
@@ -110,14 +111,16 @@ export class MatrixInterface implements Interface {
       } catch (sendErr: any) {
         // If send fails with 403/404 on a resolved DM room, invalidate cache, exclude failed room, and retry once with fresh resolution
         if (
-          target.startsWith("@") &&
+          isMxid &&
           (sendErr.status === 403 ||
             sendErr.status === 404 ||
             String(sendErr.message || sendErr).includes(" 403") ||
             String(sendErr.message || sendErr).includes(" 404"))
         ) {
           log.warn("matrix", `cached DM room ${roomId} unusable for ${target}, invalidating cache and re-resolving`);
-          this.dmRoomCache.delete(target);
+          if (this.dmRoomCache.get(target) === roomId) {
+            this.dmRoomCache.delete(target);
+          }
           const freshRoomId = await this.getOrCreateDmRoom(target, roomId);
           await this.sendMessage(freshRoomId, text);
           return true;
@@ -169,7 +172,9 @@ export class MatrixInterface implements Interface {
       if (cached !== excludeRoomId && (await this.isRoomUsableForUser(cached, userId))) {
         return cached;
       }
-      this.dmRoomCache.delete(userId);
+      if (this.dmRoomCache.get(userId) === cached) {
+        this.dmRoomCache.delete(userId);
+      }
     }
 
     // 2. Check m.direct account data
