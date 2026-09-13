@@ -40,6 +40,8 @@ export class MatrixInterface implements Interface {
   private abort: AbortController | null = null;
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
+  // Cache of known DM room IDs per user ID to retain mapping in-memory even if account_data persistence fails
+  private dmRoomCache = new Map<string, string>();
   // In-flight DM room resolution promises to avoid duplicate createRoom calls concurrently
   private dmResolutions = new Map<string, Promise<string>>();
   // Promise chain to serialize m.direct read-modify-write across all users
@@ -122,7 +124,13 @@ export class MatrixInterface implements Interface {
   }
 
   private async resolveOrCreateDmRoom(userId: string): Promise<string> {
-    // 1. Check m.direct account data
+    // 1. Check in-memory cache first
+    const cached = this.dmRoomCache.get(userId);
+    if (cached) {
+      return cached;
+    }
+
+    // 2. Check m.direct account data
     try {
       const directData = await this.api<Record<string, string[]>>(
         "GET",
@@ -130,7 +138,16 @@ export class MatrixInterface implements Interface {
       );
       const existingRooms = directData?.[userId];
       if (Array.isArray(existingRooms) && existingRooms.length > 0) {
-        return existingRooms[0];
+        // Iterate mapped rooms and verify whether one is usable
+        for (const candidateRoom of existingRooms) {
+          try {
+            await this.api("GET", `/_matrix/client/v3/rooms/${encodeURIComponent(candidateRoom)}/state/m.room.member/${encodeURIComponent(this.userId)}`);
+            this.dmRoomCache.set(userId, candidateRoom);
+            return candidateRoom;
+          } catch {
+            // Bot left or cannot access candidateRoom, try next
+          }
+        }
       }
     } catch (err: any) {
       // 404 is normal if no DMs tracked yet; rethrow other errors (e.g. 500, network failure)
@@ -139,7 +156,7 @@ export class MatrixInterface implements Interface {
       }
     }
 
-    // 2. Create a new direct chat room
+    // 3. Create a new direct chat room
     const createRes = await this.api<{ room_id: string }>(
       "POST",
       "/_matrix/client/v3/createRoom",
@@ -150,8 +167,9 @@ export class MatrixInterface implements Interface {
       },
     );
     const roomId = createRes.room_id;
+    this.dmRoomCache.set(userId, roomId);
 
-    // 3. Update m.direct account data (serialized across all users)
+    // 4. Update m.direct account data (serialized across all users)
     const updatePromise = this.directAccountDataLock.then(async () => {
       let directData: Record<string, string[]> = {};
       try {
