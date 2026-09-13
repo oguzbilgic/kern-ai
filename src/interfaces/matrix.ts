@@ -152,7 +152,7 @@ export class MatrixInterface implements Interface {
     const roomId = createRes.room_id;
 
     // 3. Update m.direct account data (serialized across all users)
-    await (this.directAccountDataLock = this.directAccountDataLock.then(async () => {
+    const updatePromise = this.directAccountDataLock.then(async () => {
       let directData: Record<string, string[]> = {};
       try {
         directData = await this.api<Record<string, string[]>>(
@@ -174,7 +174,11 @@ export class MatrixInterface implements Interface {
           directData,
         );
       }
-    }));
+    });
+
+    // Ensure the lock recovers from rejections so future resolutions can still proceed
+    this.directAccountDataLock = updatePromise.catch(() => {});
+    await updatePromise;
 
     return roomId;
   }
