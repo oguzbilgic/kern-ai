@@ -118,6 +118,9 @@ test("sendToUser: resolves existing DM room from m.direct when target is a user 
     if (path.includes("/account_data/m.direct")) {
       return { "@alice:matrix": ["!existing-dm:matrix"] };
     }
+    if (path.includes("/state/m.room.member/")) {
+      return { membership: "join" };
+    }
     return {};
   };
 
@@ -219,7 +222,7 @@ test("sendToUser: tries next mapped room or falls back to createRoom when first 
   let sentToRoom = "";
   (iface as any).api = async (method: string, path: string, body?: any) => {
     if (method === "GET" && path.includes("/account_data/m.direct")) {
-      return { "@stale:matrix": ["!stale-dm-1:matrix", "!valid-dm-2:matrix"] };
+      return { "@stale:matrix": ["!stale-dm-1:matrix", "!left-dm-2:matrix", "!valid-dm-3:matrix"] };
     }
     if (method === "GET" && path.includes("/state/m.room.member/")) {
       if (path.includes("!stale-dm-1")) {
@@ -227,7 +230,10 @@ test("sendToUser: tries next mapped room or falls back to createRoom when first 
         err.status = 403;
         throw err;
       }
-      return {}; // member state exists for !valid-dm-2:matrix
+      if (path.includes("!left-dm-2")) {
+        return { membership: "leave" }; // recipient left room
+      }
+      return { membership: "join" }; // member state active for !valid-dm-3:matrix
     }
     if (method === "PUT" && path.includes("/send/m.room.message/")) {
       sentToRoom = path;
@@ -238,7 +244,31 @@ test("sendToUser: tries next mapped room or falls back to createRoom when first 
 
   const sent = await iface.sendToUser("@stale:matrix", "Hello via valid room");
   assert.equal(sent, true);
-  assert.ok(sentToRoom.includes("!valid-dm-2"));
+  assert.ok(sentToRoom.includes("!valid-dm-3"));
+});
+
+test("sendToUser: propagates non-403/404 errors during candidate room check rather than creating duplicate DM", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@user:matrix": ["!existing-dm:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      const err: any = new Error("matrix GET 500: Internal Server Error");
+      err.status = 500;
+      throw err;
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!new-dm:matrix" };
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@user:matrix", "Hello");
+  assert.equal(sent, false);
+  assert.equal(createCalled, false);
 });
 
 test("sendToUser: retains created DM in memory cache if m.direct persistence fails", async () => {

@@ -141,11 +141,22 @@ export class MatrixInterface implements Interface {
         // Iterate mapped rooms and verify whether one is usable
         for (const candidateRoom of existingRooms) {
           try {
-            await this.api("GET", `/_matrix/client/v3/rooms/${encodeURIComponent(candidateRoom)}/state/m.room.member/${encodeURIComponent(this.userId)}`);
-            this.dmRoomCache.set(userId, candidateRoom);
-            return candidateRoom;
-          } catch {
-            // Bot left or cannot access candidateRoom, try next
+            // Check that the recipient user is currently in the room (join or invite)
+            const targetMember = await this.api<{ membership?: string }>(
+              "GET",
+              `/_matrix/client/v3/rooms/${encodeURIComponent(candidateRoom)}/state/m.room.member/${encodeURIComponent(userId)}`,
+            );
+            if (targetMember?.membership === "join" || targetMember?.membership === "invite") {
+              this.dmRoomCache.set(userId, candidateRoom);
+              return candidateRoom;
+            }
+          } catch (err: any) {
+            // If 403 (bot not in room) or 404 (room/member event not found), candidate is stale; try next
+            if (err.status === 403 || err.status === 404 || String(err.message || err).includes(" 403") || String(err.message || err).includes(" 404")) {
+              continue;
+            }
+            // Propagate network/5xx server errors rather than creating duplicate rooms
+            throw err;
           }
         }
       }
