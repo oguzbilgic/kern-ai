@@ -29,25 +29,38 @@ test("mdToMatrixHtml: code blocks with language and HTML escaping", () => {
   const input = "Check this:\n```ts\nconst a = 1 < 2 && 3 > 0;\n```";
   const result = mdToMatrixHtml(input);
   assert.ok(result);
-  assert.ok(result.includes('<pre><code class="language-ts">const a = 1 &lt; 2 &amp;&amp; 3 &gt; 0;</code></pre>'));
+  assert.ok(result.includes('<pre><code class="language-ts">const a = 1 &lt; 2 &amp;&amp; 3 &gt; 0;'));
+  assert.ok(result.includes("</code></pre>"));
 });
 
 test("mdToMatrixHtml: lists and blockquotes", () => {
   const input = "> A famous quote\n\n- item 1\n- item 2";
   const result = mdToMatrixHtml(input);
   assert.ok(result);
-  assert.ok(result.includes("<blockquote>A famous quote</blockquote>"));
-  assert.ok(result.includes("<ul>\n<li>item 1</li>\n<li>item 2</li>\n</ul>"));
+  assert.ok(result.includes("<blockquote>"));
+  assert.ok(result.includes("A famous quote"));
+  assert.ok(result.includes("</blockquote>"));
+  assert.ok(result.includes("<ul>"));
+  assert.ok(result.includes("<li>item 1</li>"));
+  assert.ok(result.includes("<li>item 2</li>"));
+  assert.ok(result.includes("</ul>"));
 });
 
-test("mdToMatrixHtml: cleans redundant line breaks around block elements", () => {
-  const input = "### Header\n\nParagraph 1\n\n- item 1\n- item 2\n\nParagraph 2";
+test("mdToMatrixHtml: ordered and nested lists", () => {
+  const input = `
+1. **history**
+   * Fetch recent messages
+   * Supports limit
+2. **react**
+   * Add emoji
+`;
   const result = mdToMatrixHtml(input);
   assert.ok(result);
-  assert.ok(!result.includes("</h3><br />"));
-  assert.ok(!result.includes("<br /><ul>"));
-  assert.ok(!result.includes("</ul><br />"));
-  assert.ok(!result.includes("<br /><br /><br />"));
+  assert.ok(result.includes("<ol>"));
+  assert.ok(result.includes("<strong>history</strong>"));
+  assert.ok(result.includes("<ul>"));
+  assert.ok(result.includes("<li>Fetch recent messages</li>"));
+  assert.ok(result.includes("</ol>"));
 });
 
 test("mdToMatrixHtml: links and strikethrough", () => {
@@ -68,8 +81,14 @@ test("mdToMatrixHtml: renders tables with alignments and cell formatting", () =>
   const result = mdToMatrixHtml(input);
   assert.ok(result);
   assert.ok(result.includes("<table>"));
-  assert.ok(result.includes('<tr><th align="left">Feature</th><th align="center">Matrix</th><th align="right">Status</th></tr>'));
-  assert.ok(result.includes('<tr><td align="left"><strong>Markdown</strong></td><td align="center">Full HTML</td><td align="right"><em>Active</em></td></tr>'));
-  assert.ok(result.includes('<tr><td align="left">Tables</td><td align="center">Native</td><td align="right"><code>OK</code></td></tr>'));
+  assert.ok(result.includes('<th align="left">Feature</th>'));
+  assert.ok(result.includes('<th align="center">Matrix</th>'));
+  assert.ok(result.includes('<th align="right">Status</th>'));
+  assert.ok(result.includes('<td align="left"><strong>Markdown</strong></td>'));
+  assert.ok(result.includes('<td align="center">Full HTML</td>'));
+  assert.ok(result.includes('<td align="right"><em>Active</em></td>'));
+  assert.ok(result.includes('<td align="left">Tables</td>'));
+  assert.ok(result.includes('<td align="center">Native</td>'));
+  assert.ok(result.includes('<td align="right"><code>OK</code></td>'));
   assert.ok(result.includes("</table>"));
 });

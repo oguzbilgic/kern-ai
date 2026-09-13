@@ -2,6 +2,8 @@ import type { Interface, StartOptions, Attachment } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { setMatrixClient } from "../plugins/matrix/plugin.js";
+import { marked } from "marked";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -57,8 +59,20 @@ export class MatrixInterface implements Interface {
 
   get status() { return this._status; }
   get statusDetail() { return this._statusDetail; }
+  getUserId(): string { return this.userId; }
+
+  async callApi<T = any>(
+    method: "GET" | "POST" | "PUT" | "DELETE",
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.api<T>(method, path, body, signal);
+  }
 
   async start({ onMessage }: StartOptions): Promise<void> {
+    // Expose client to matrix plugin
+    setMatrixClient(this);
     // Don't block startup on homeserver availability. The sync loop will
     // prime nextBatch on its first successful poll and recover from any
     // initial outage on its own.
@@ -71,6 +85,7 @@ export class MatrixInterface implements Interface {
   }
 
   async stop(): Promise<void> {
+    setMatrixClient(null);
     this.running = false;
     this.abort?.abort();
     this._status = "disconnected";
@@ -336,7 +351,7 @@ export class MatrixInterface implements Interface {
   }
 
   private async api<T = any>(
-    method: "GET" | "POST" | "PUT",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     body?: unknown,
     signal?: AbortSignal,
@@ -362,15 +377,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 /**
  * Convert markdown to Matrix-compliant HTML (`org.matrix.custom.html`).
  * Returns undefined if no markdown constructs are detected.
@@ -380,165 +386,9 @@ export function mdToMatrixHtml(text: string): string | undefined {
     return undefined;
   }
 
-  // 1. Extract and protect code blocks
-  const codeBlocks: string[] = [];
-  let html = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const escapedCode = escapeHtml(code.replace(/\n$/, ""));
-    const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-    const placeholder = `\x00BLOCK_${codeBlocks.length}\x00`;
-    codeBlocks.push(`<pre><code${langAttr}>${escapedCode}</code></pre>`);
-    return placeholder;
-  });
-
-  // 2. Extract and protect inline code
-  const inlineCodes: string[] = [];
-  html = html.replace(/`([^`\n]+)`/g, (_, code) => {
-    const placeholder = `\x00INLINE_${inlineCodes.length}\x00`;
-    inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
-    return placeholder;
-  });
-
-  // 3. Extract and parse markdown tables
-  const tables: string[] = [];
-  const lines = html.split("\n");
-  const processedLines: string[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    if (trimmed.startsWith("|") && trimmed.endsWith("|") && i + 1 < lines.length) {
-      const nextLine = lines[i + 1].trim();
-      if (nextLine.startsWith("|") && nextLine.endsWith("|") && /^\|(?:\s*:?-+:?\s*\|)+$/.test(nextLine)) {
-        const alignments = nextLine
-          .slice(1, -1)
-          .split("|")
-          .map((col) => {
-            const c = col.trim();
-            const left = c.startsWith(":");
-            const right = c.endsWith(":");
-            if (left && right) return "center";
-            if (right) return "right";
-            if (left) return "left";
-            return null;
-          });
-
-        const headers = trimmed
-          .slice(1, -1)
-          .split("|")
-          .map((col, idx) => {
-            const align = alignments[idx] ? ` align="${alignments[idx]}"` : "";
-            return `<th${align}>${col.trim()}</th>`;
-          });
-
-        const tableRows: string[] = [];
-        tableRows.push(`<tr>${headers.join("")}</tr>`);
-        i += 2;
-
-        while (i < lines.length && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
-          const rowCols = lines[i]
-            .trim()
-            .slice(1, -1)
-            .split("|")
-            .map((col, idx) => {
-              const align = alignments[idx] ? ` align="${alignments[idx]}"` : "";
-              return `<td${align}>${col.trim()}</td>`;
-            });
-          tableRows.push(`<tr>${rowCols.join("")}</tr>`);
-          i++;
-        }
-
-        const placeholder = `\x00TABLE_${tables.length}\x00`;
-        tables.push(`<table>\n${tableRows.join("\n")}\n</table>`);
-        processedLines.push(placeholder);
-        continue;
-      }
-    }
-    processedLines.push(line);
-    i++;
-  }
-  html = processedLines.join("\n");
-
-  // 4. Escape raw HTML entities in remaining text
-  html = escapeHtml(html);
-
-  // 5. Headers: # Heading -> <h1>Heading</h1>
-  html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
-  html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
-  html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-  html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-  html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
-
-  // 6. Blockquotes: &gt; line (since &gt; was escaped from >)
-  html = html.replace(/^&gt;\s*(.+)$/gm, "<blockquote>$1</blockquote>");
-  html = html.replace(/<\/blockquote>\n<blockquote>/g, "<br />");
-
-  // 7. Links: [text](url)
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
-
-  // 8. Bold: **text** or __text__
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
-
-  // 9. Italic: *text* or _text_
-  html = html.replace(/(?<![*<])\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-  html = html.replace(/\b_([^_]+)_\b/g, "<em>$1</em>");
-
-  // 10. Strikethrough: ~~text~~
-  html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
-
-  // 11. Unordered lists: - item or * item
-  html = html.replace(/^[*-]\s+(.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(<li>.*<\/li>(\n|$))+/g, (match) => `<ul>\n${match.trimEnd()}\n</ul>\n`);
-
-  // 12. Restore tables, inline code, and code blocks
-  tables.forEach((tbl, idx) => {
-    // Process formatting inside table cells (bold, italic, links, inline code)
-    let renderedTable = tbl;
-    renderedTable = renderedTable.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    renderedTable = renderedTable.replace(/__(.+?)__/g, "<strong>$1</strong>");
-    renderedTable = renderedTable.replace(/(?<![*<])\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-    renderedTable = renderedTable.replace(/\b_([^_]+)_\b/g, "<em>$1</em>");
-    renderedTable = renderedTable.replace(/~~(.+?)~~/g, "<del>$1</del>");
-    renderedTable = renderedTable.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
-    html = html.replace(`\x00TABLE_${idx}\x00`, renderedTable);
-  });
-  inlineCodes.forEach((code, i) => {
-    html = html.replace(new RegExp(`\x00INLINE_${i}\x00`, "g"), code);
-  });
-  codeBlocks.forEach((block, i) => {
-    html = html.replace(new RegExp(`\x00BLOCK_${i}\x00`, "g"), block);
-  });
-
-  // 13. Convert newlines to <br /> outside pre/ul/blockquote/h1-6/table tags
-  const parts = html.split(
-    /(<pre>[\s\S]*?<\/pre>|<ul>[\s\S]*?<\/ul>|<h[1-6]>[\s\S]*?<\/h[1-6]>|<blockquote>[\s\S]*?<\/blockquote>|<table>[\s\S]*?<\/table>)/g,
-  );
-  html = parts
-    .map((part) => {
-      if (
-        part.startsWith("<pre>") ||
-        part.startsWith("<ul>") ||
-        part.startsWith("<h") ||
-        part.startsWith("<blockquote>") ||
-        part.startsWith("<table>")
-      ) {
-        return part;
-      }
-      return part.replace(/\n/g, "<br />");
-    })
-    .join("");
-
-  // 14. Strip redundant <br /> before and after block elements
-  html = html.replace(/(?:<br \/>\s*)+(<(?:h[1-6]|pre|ul|ol|blockquote|hr|table)[^>]*>)/gi, "$1");
-  html = html.replace(/(<\/(?:h[1-6]|pre|ul|ol|blockquote|table)>|<hr\s*\/?>)(?:<br \/>\s*)+/gi, "$1");
-  // Collapse 3 or more consecutive <br /> into at most 2
-  html = html.replace(/(?:<br \/>\s*){3,}/g, "<br /><br />");
-  // Trim leading/trailing <br />
-  html = html.replace(/^(?:<br \/>\s*)+|(?:<br \/>\s*)+$/gi, "").trim();
-
-  return html;
+  // Parse markdown with marked (GFM tables, tasklists, autolinks, nested lists)
+  const html = marked.parse(text, { gfm: true, breaks: false }) as string;
+  return html.trim() || undefined;
 }
 
 // Minimal typings for the parts of /sync we care about

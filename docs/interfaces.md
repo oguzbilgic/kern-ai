@@ -283,16 +283,17 @@ Long-polled `/sync` against a Matrix homeserver (Synapse, Dendrite, Conduit, etc
 
 - Auto-accepts invites to rooms it's invited to
 - Sends typing indicators while thinking
-- Replies as plain `m.text` messages
+- Replies as formatted HTML (`org.matrix.custom.html`) with GFM tables, lists, and code blocks
+- Inbound media attachments (images, audio, video, files) pass directly into the media digest pipeline
 - **Pairing required everywhere.** Unpaired users (in DMs or group rooms) get a pairing code (same flow as Telegram/Slack). The code is sent once per `(user, room)` pair to avoid spam. This differs from Slack channels, which accept messages from any workspace member — Matrix rooms can span homeservers and federations, so kern treats every unknown sender as untrusted.
 - **Group room behavior.** Once paired, responses follow the `KERN.md` group-room rules (mirrors Slack channel behavior). `NO_REPLY` to stay quiet.
 - **Agents in shared rooms**: first-class — two kern agents can DM each other or coexist in a group room. Pairing codes auto-issue; operator approves via CLI.
+- **Matrix Tool**: Agents with Matrix active have access to the `matrix` tool to inspect room history (`history`), send reactions (`react`), list joined rooms (`rooms`), create rooms/channels (`createRoom`), invite users (`invite`), pin/unpin dashboard widgets (`widget`), manage room state (`state`), or execute arbitrary REST requests (`raw`).
 
 ### Limitations (MVP)
 
 - **No E2E encryption.** Rooms with `m.room.encryption` state are joined but messages are skipped. Create unencrypted rooms for agents (Element: turn off encryption in room create advanced options).
-- **No media.** Images, files, voice messages pass through silently.
-- **No reactions, edits, threads, or replies.** Plain text turns only.
+- **Outbound media.** File and image sending from agent to Matrix is not yet supported (text/HTML only).
 
 ## Nostr
 
