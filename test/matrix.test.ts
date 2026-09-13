@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MatrixInterface, mdToMatrixHtml, mimeToType } from "../src/interfaces/matrix.ts";
+import { MatrixInterface, mdToMatrixHtml, mimeToType, isMatrixUserId } from "../src/interfaces/matrix.ts";
 
 test("mimeToType: categorizes mime types correctly", () => {
   assert.equal(mimeToType("image/png"), "image");
@@ -386,6 +386,21 @@ test("sendToUser: revalidates cached DM room membership and evicts stale cache b
   assert.equal(createCalled, true);
   assert.ok(sentToRoom.includes("!new-room"));
   assert.equal((iface as any).dmRoomCache.get("@user:matrix"), "!new-room:matrix");
+});
+
+test("isMatrixUserId: matches valid MXIDs including ports and IPv6 and rejects invalid formats", () => {
+  assert.equal(isMatrixUserId("@alice:matrix.org"), true);
+  assert.equal(isMatrixUserId("@bob:example.com:8448"), true);
+  assert.equal(isMatrixUserId("@carol:192.168.1.1:8008"), true);
+  assert.equal(isMatrixUserId("@dave:[::1]"), true);
+  assert.equal(isMatrixUserId("@eve:[2001:db8::1]:8448"), true);
+
+  assert.equal(isMatrixUserId("@alice"), false);
+  assert.equal(isMatrixUserId("alice:matrix.org"), false);
+  assert.equal(isMatrixUserId("!room:matrix.org"), false);
+  assert.equal(isMatrixUserId("@alice:"), false);
+  assert.equal(isMatrixUserId("@:matrix.org"), false);
+  assert.equal(isMatrixUserId(""), false);
 });
 
 test("sendToUser: treats non-MXID @-prefixed target as room ID without attempting DM resolution", async () => {

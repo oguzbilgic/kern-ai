@@ -30,6 +30,15 @@ export function mimeToType(mime: string): Attachment["type"] {
  *   MATRIX_USER_ID        e.g. @vega:matrix
  *   MATRIX_ACCESS_TOKEN   from login/register
  */
+/**
+ * Validate a Matrix user ID (MXID) according to the Matrix specification:
+ * `@localpart:server_name` where server_name can be a domain, hostname,
+ * IPv4, or bracketed IPv6, optionally followed by `:port`.
+ */
+export function isMatrixUserId(id: string): boolean {
+  return /^@[^:]+:(?:\[[0-9a-fA-F:]+\]|[^:]+)(?::\d+)?$/.test(id);
+}
+
 export class MatrixInterface implements Interface {
   private homeserver: string;
   private userId: string;
@@ -100,7 +109,7 @@ export class MatrixInterface implements Interface {
   async sendToUser(target: string, text: string): Promise<boolean> {
     try {
       let roomId = target;
-      const isMxid = /^@[^:]+:[^:]+$/.test(target);
+      const isMxid = isMatrixUserId(target);
       // If target is a Matrix user ID (@user:server), resolve or create a DM room
       if (isMxid) {
         roomId = await this.getOrCreateDmRoom(target);

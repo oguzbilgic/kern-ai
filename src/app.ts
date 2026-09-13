@@ -3,7 +3,7 @@ import { Runtime, type StreamEvent } from "./runtime.js";
 import { updateKernel } from "./kernel.js";
 import { TelegramInterface } from "./interfaces/telegram.js";
 import { SlackInterface } from "./interfaces/slack.js";
-import { MatrixInterface } from "./interfaces/matrix.js";
+import { MatrixInterface, isMatrixUserId } from "./interfaces/matrix.js";
 import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
@@ -567,7 +567,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
       // or a valid user MXID (@user:server) which resolves to a direct chat room.
       // If chatId in pairing was recorded as a room ID from a group room pairing,
       // prefer resolving the user ID so proactive messages to users go to their DM.
-      const isMxid = /^@[^:]+:[^:]+$/.test(userId);
+      const isMxid = isMatrixUserId(userId);
       const target = isMxid ? userId : (pairing.getChatId(userId) || userId);
       const sent = await matrixBot.sendToUser(target, text);
       if (sent) {
