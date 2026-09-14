@@ -79,6 +79,16 @@ export function isNoReply(text: string | null | undefined): boolean {
 }
 
 /**
+ * Strip ANSI escape codes and terminal control sequences from text.
+ * Prevents provider JSON recursion errors (e.g. Gemini 400 "Message too deep")
+ * and saves tokens from colored CLI / tool outputs.
+ */
+export function stripAnsi(text: string): string {
+  // Matches standard CSI sequences (\x1b[...m/K/etc) and OSC sequences (\x1b]...\x07)
+  return text.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]|(?:\u001b\][^\u0007\u001b]*[\u0007\u001b\\])/g, "");
+}
+
+/**
  * Extract plain text from message content (string or array).
  * Used for embeddings, search, summaries — strips media parts.
  */

@@ -34,7 +34,7 @@ export const grepTool = tool({
     const recursive = isFile ? "" : "-r";
     const includeArg = !isFile && include ? `--include='${include}'` : "";
     const excludeDirs = isFile ? "" : "--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist";
-    const cmd = `grep ${recursive} -n --color=always ${excludeDirs} ${includeArg} ${extra} '${escapedPattern}' '${target}' 2>/dev/null`;
+    const cmd = `grep ${recursive} -n ${excludeDirs} ${includeArg} ${extra} '${escapedPattern}' '${target}' 2>/dev/null`;
 
     const result = await shellExec(cmd);
     const stdout = result.stdout.trim();

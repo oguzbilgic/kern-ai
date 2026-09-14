@@ -11,7 +11,7 @@ import type { MemoryDB } from "./memory.js";
 import { prepareContext, loadSystemPrompt, buildSystemMessage, addCacheBreakpoints, type PrepareContextOptions } from "./context.js";
 import type { ContextInjection, BeforeContextInfo } from "./plugins/types.js";
 import type { Attachment } from "./interfaces/types.js";
-import { extractText } from "./util.js";
+import { extractText, stripAnsi } from "./util.js";
 export type { SessionStats } from "./context.js";
 
 
@@ -294,6 +294,20 @@ export class Runtime {
                 part.type === "text" ? { ...part, text: part.text.replace(/^\n+/, "") } : part
               )};
             }
+            if (msg.role === "tool" && Array.isArray(msg.content)) {
+              return {
+                ...msg,
+                content: msg.content.map((part: any) => {
+                  if (part.type === "tool-result" && part.output?.type === "text" && typeof part.output.value === "string") {
+                    return {
+                      ...part,
+                      output: { ...part.output, value: stripAnsi(part.output.value) },
+                    };
+                  }
+                  return part;
+                }),
+              };
+            }
             return msg;
           });
           if (newMsgs.length > 0) {
@@ -392,7 +406,8 @@ export class Runtime {
           onEvent({ type: "tool-call", toolName: part.toolName, toolDetail: detail, toolInput: args });
         } else if (part.type === "tool-result") {
           const output = (part as any).output;
-          const resultText = typeof output === "string" ? output : JSON.stringify(output);
+          const rawResultText = typeof output === "string" ? output : JSON.stringify(output);
+          const resultText = stripAnsi(rawResultText);
           onEvent({ type: "tool-result", toolName: part.toolName, toolResult: resultText });
 
           // Dispatch to plugins for custom event emission
