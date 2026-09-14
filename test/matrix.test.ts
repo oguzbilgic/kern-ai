@@ -126,15 +126,17 @@ test("sendToUser: resolves existing DM room from m.direct when target is a user 
 
   const sent = await iface.sendToUser("@alice:matrix", "Hello Alice");
   assert.equal(sent, true);
-  // Checked m.direct, verified membership in !existing-dm:matrix, then sent message
-  assert.equal(calls.length, 3);
+  // Checked m.direct, verified membership, checked encryption, then sent message
+  assert.equal(calls.length, 4);
   assert.equal(calls[0].method, "GET");
   assert.ok(calls[0].path.includes("/account_data/m.direct"));
   assert.equal(calls[1].method, "GET");
   assert.ok(calls[1].path.includes("/state/m.room.member/"));
-  assert.equal(calls[2].method, "PUT");
-  assert.ok(calls[2].path.includes("/send/m.room.message/"));
-  assert.ok(calls[2].path.includes("existing-dm"));
+  assert.equal(calls[2].method, "GET");
+  assert.ok(calls[2].path.includes("/state/m.room.encryption"));
+  assert.equal(calls[3].method, "PUT");
+  assert.ok(calls[3].path.includes("/send/m.room.message/"));
+  assert.ok(calls[3].path.includes("existing-dm"));
 });
 
 test("sendToUser: creates DM room and updates m.direct when no existing room exists", async () => {
@@ -279,6 +281,39 @@ test("sendToUser: tries next mapped room when candidate is stale and falls back 
   assert.ok(sentToCreatedRoom.includes("!replacement-dm"));
 });
 
+test("sendToUser: skips candidate room if E2EE encryption is enabled and falls back to createRoom", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  let sentToRoom = "";
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@alice:matrix": ["!encrypted-dm:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      return { membership: "join" };
+    }
+    if (method === "GET" && path.includes("/state/m.room.encryption")) {
+      // Room has encryption enabled
+      return { algorithm: "m.megolm.v1.aes-sha2" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!unencrypted-replacement:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@alice:matrix", "Plaintext message");
+  assert.equal(sent, true);
+  assert.equal(createCalled, true);
+  assert.ok(sentToRoom.includes("!unencrypted-replacement"));
+});
+
 test("sendToUser: invalidates cached DM room and re-resolves when send returns 403/404", async () => {
   const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
   let sendAttempts = 0;
@@ -415,11 +450,15 @@ test("isMatrixUserId: matches valid MXIDs including ports and IPv6 and rejects i
   assert.equal(isMatrixUserId("@alice:"), false);
   assert.equal(isMatrixUserId("@:matrix.org"), false);
   assert.equal(isMatrixUserId(""), false);
-  // Invalid characters / whitespace
+  // Invalid characters / whitespace / invalid hostname labels
   assert.equal(isMatrixUserId("@alice space:matrix.org"), false);
   assert.equal(isMatrixUserId("@alice:matrix .org"), false);
   assert.equal(isMatrixUserId("@alice:matrix/path"), false);
   assert.equal(isMatrixUserId("@alice:matrix:extra:colon"), false);
+  assert.equal(isMatrixUserId("@alice:matrix..org"), false);
+  assert.equal(isMatrixUserId("@alice:foo.-bar"), false);
+  assert.equal(isMatrixUserId("@alice:-foo.bar"), false);
+  assert.equal(isMatrixUserId("@alice:foo-.bar"), false);
   // Invalid ports
   assert.equal(isMatrixUserId("@alice:matrix.org:0"), false);
   assert.equal(isMatrixUserId("@alice:matrix.org:65536"), false);

@@ -51,10 +51,18 @@ export function isMatrixUserId(id: string): boolean {
   if (!localpart || !serverName) {
     return false;
   }
-  // Server name hostname/domain cannot start or end with a dot or hyphen
-  if (!serverName.startsWith("[")) {
-    if (serverName.startsWith(".") || serverName.endsWith(".") || serverName.startsWith("-") || serverName.endsWith("-")) {
+  // Validate server_name (bracketed IPv6 or domain name with valid labels)
+  if (serverName.startsWith("[")) {
+    if (!serverName.endsWith("]")) {
       return false;
+    }
+  } else {
+    // Domain labels cannot be empty and cannot start or end with a hyphen
+    const labels = serverName.split(".");
+    for (const label of labels) {
+      if (label.length === 0 || label.startsWith("-") || label.endsWith("-")) {
+        return false;
+      }
     }
   }
   if (portStr !== undefined) {
@@ -211,11 +219,36 @@ export class MatrixInterface implements Interface {
 
   private async isRoomUsableForUser(roomId: string, userId: string): Promise<boolean> {
     try {
+      // 1. Verify recipient membership
       const targetMember = await this.api<{ membership?: string }>(
         "GET",
         `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.member/${encodeURIComponent(userId)}`,
       );
-      return targetMember?.membership === "join" || targetMember?.membership === "invite";
+      if (targetMember?.membership !== "join" && targetMember?.membership !== "invite") {
+        return false;
+      }
+      // 2. Reject encrypted rooms since kern does not support E2EE and sending plaintext would violate room expectations
+      try {
+        const encryption = await this.api<{ algorithm?: string }>(
+          "GET",
+          `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
+        );
+        if (encryption && encryption.algorithm) {
+          log.warn("matrix", `skipping DM room ${roomId} because it has E2EE enabled (not supported)`);
+          return false;
+        }
+      } catch (encErr: any) {
+        // 403 or 404 means either no encryption state event exists or cannot read it
+        if (
+          encErr.status !== 403 &&
+          encErr.status !== 404 &&
+          !String(encErr.message || encErr).includes(" 403") &&
+          !String(encErr.message || encErr).includes(" 404")
+        ) {
+          throw encErr;
+        }
+      }
+      return true;
     } catch (err: any) {
       if (
         err.status === 403 ||
@@ -242,6 +275,7 @@ export class MatrixInterface implements Interface {
     }
 
     // 2. Check m.direct account data
+    const staleRoomsToRemove: string[] = [];
     try {
       const directData = await this.api<Record<string, string[]>>(
         "GET",
@@ -254,6 +288,8 @@ export class MatrixInterface implements Interface {
           if (candidateRoom !== excludeRoomId && (await this.isRoomUsableForUser(candidateRoom, userId))) {
             this.dmRoomCache.set(userId, candidateRoom);
             return candidateRoom;
+          } else {
+            staleRoomsToRemove.push(candidateRoom);
           }
         }
       }
@@ -277,7 +313,7 @@ export class MatrixInterface implements Interface {
     const roomId = createRes.room_id;
     this.dmRoomCache.set(userId, roomId);
 
-    // 4. Update m.direct account data (serialized across all users)
+    // 4. Update m.direct account data (serialized across all users, removing stale candidates and adding new room)
     const updatePromise = this.directAccountDataLock.then(async () => {
       let directData: Record<string, string[]> = {};
       try {
@@ -292,14 +328,14 @@ export class MatrixInterface implements Interface {
       }
 
       const rooms = directData[userId] || [];
-      if (!rooms.includes(roomId)) {
-        directData[userId] = [...rooms, roomId];
-        await this.api(
-          "PUT",
-          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
-          directData,
-        );
-      }
+      const filtered = rooms.filter((r) => !staleRoomsToRemove.includes(r) && r !== roomId);
+      filtered.push(roomId);
+      directData[userId] = filtered;
+      await this.api(
+        "PUT",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        directData,
+      );
     });
 
     // Ensure the lock recovers from rejections so future resolutions can still proceed
