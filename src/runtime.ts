@@ -299,11 +299,19 @@ export class Runtime {
               return {
                 ...msg,
                 content: msg.content.map((part: any) => {
-                  if (shouldStrip && part.type === "tool-result" && part.output?.type === "text" && typeof part.output.value === "string") {
-                    return {
-                      ...part,
-                      output: { ...part.output, value: stripAnsi(part.output.value) },
-                    };
+                  if (shouldStrip && part.type === "tool-result") {
+                    if ((part.output?.type === "text" || part.output?.type === "error-text") && typeof part.output.value === "string") {
+                      return {
+                        ...part,
+                        output: { ...part.output, value: stripAnsi(part.output.value) },
+                      };
+                    }
+                    if (typeof part.output === "string") {
+                      return {
+                        ...part,
+                        output: stripAnsi(part.output),
+                      };
+                    }
                   }
                   return part;
                 }),
