@@ -47,6 +47,7 @@ export interface KernConfig {
   irc: string;
 
   // Runtime
+  stripAnsi: boolean;
   heartbeatInterval: number;
 
   // Timezone — IANA zone used when rendering the `time:` field in the envelope
@@ -101,6 +102,7 @@ export const configDefaults: KernConfig = {
   discordMentionOnly: true,
   nostrRelays: [],
   irc: "",
+  stripAnsi: true,
   heartbeatInterval: 60,
   timezone: "",
 };
@@ -127,6 +129,7 @@ const FIELD_TYPES: Record<string, string> = {
   discordMentionOnly: "boolean",
   nostrRelays: "string[]",
   irc: "string",
+  stripAnsi: "boolean",
   heartbeatInterval: "number",
   timezone: "string",
   mcpServers: "object",

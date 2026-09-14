@@ -295,10 +295,11 @@ export class Runtime {
               )};
             }
             if (msg.role === "tool" && Array.isArray(msg.content)) {
+              const shouldStrip = this.config.stripAnsi ?? true;
               return {
                 ...msg,
                 content: msg.content.map((part: any) => {
-                  if (part.type === "tool-result" && part.output?.type === "text" && typeof part.output.value === "string") {
+                  if (shouldStrip && part.type === "tool-result" && part.output?.type === "text" && typeof part.output.value === "string") {
                     return {
                       ...part,
                       output: { ...part.output, value: stripAnsi(part.output.value) },
@@ -407,7 +408,7 @@ export class Runtime {
         } else if (part.type === "tool-result") {
           const output = (part as any).output;
           const rawResultText = typeof output === "string" ? output : JSON.stringify(output);
-          const resultText = stripAnsi(rawResultText);
+          const resultText = (this.config.stripAnsi ?? true) ? stripAnsi(rawResultText) : rawResultText;
           onEvent({ type: "tool-result", toolName: part.toolName, toolResult: resultText });
 
           // Dispatch to plugins for custom event emission

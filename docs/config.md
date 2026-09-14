@@ -28,6 +28,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `discordMentionOnly` | `true` | In Discord server channels, only respond when @mentioned. Set `false` to process all channel messages (overridable via `DISCORD_MENTION_ONLY`). |
 | `nostrRelays` | `[]` | Nostr relay URLs. Empty = built-in public defaults (damus, nos.lol, primal). `NOSTR_RELAYS` env (comma-separated) overrides. See [Interfaces § Nostr](interfaces.md#nostr). |
 | `irc` | `""` | IRC connection URL: `irc://nick@host:6667/#chan` or `ircs://nick:pass@host:6697/#a,#b`. Channels are comma-separated inside the URL; whitespace-separate whole URLs to join several networks. Empty = IRC disabled. `IRC_URL` env overrides. See [Interfaces § IRC](interfaces.md#irc). |
+| `stripAnsi` | `true` | Strip ANSI escape codes from tool outputs before saving to session history and event streams. Set `false` to preserve raw escape sequences. |
 | `heartbeatInterval` | `60` | Minutes between heartbeat prompts. Agent reviews notes, updates knowledge. 0 to disable. |
 | `timezone` | `""` | IANA timezone (e.g. `"America/Los_Angeles"`) used for the `time:` field in the envelope the model reads. Empty = autoresolve to host. Storage (logs, recall, session metadata) stays UTC regardless. |
 | `recall` | `true` | Enable recall and segments (embedding-based features). Set to `false` to disable. Requires an embedding API key. Session storage and notes summaries work regardless. |
