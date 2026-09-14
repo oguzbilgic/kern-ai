@@ -34,7 +34,7 @@ export function mimeToType(mime: string): Attachment["type"] {
  * Validate a Matrix user ID (MXID) according to the Matrix specification:
  * `@localpart:server_name` where:
  * - localpart consists of lowercase letters, digits, and `.-_=/+` (historical chars allowed)
- *   not containing whitespace or colons/slashes
+ *   not containing whitespace or colons
  * - server_name can be a valid hostname/domain (letters, digits, dots, hyphens),
  *   IPv4 address, or bracketed IPv6 address
  * - optional port between 1 and 65535
@@ -43,16 +43,12 @@ export function isMatrixUserId(id: string): boolean {
   if (typeof id !== "string" || id.length === 0 || id.length > 255) {
     return false;
   }
-  const match = /^@([a-z0-9._=\-+]+):(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?$/.exec(id);
+  const match = /^@([a-z0-9._=\-/+]+):(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?$/.exec(id);
   if (!match) {
     return false;
   }
   const [, localpart, serverName, portStr] = match;
   if (!localpart || !serverName) {
-    return false;
-  }
-  // Localpart cannot contain slashes or spaces
-  if (localpart.includes("/") || localpart.includes(" ")) {
     return false;
   }
   // Server name hostname/domain cannot start or end with a dot or hyphen
@@ -84,6 +80,8 @@ export class MatrixInterface implements Interface {
   private dmRoomCache = new Map<string, string>();
   // In-flight DM room resolution promises to avoid duplicate createRoom calls concurrently
   private dmResolutions = new Map<string, Promise<string>>();
+  // Promise chain per user to serialize room resolution/creation operations per user while preserving exclusions
+  private userResolutionLocks = new Map<string, Promise<void>>();
   // Promise chain to serialize m.direct read-modify-write across all users
   private directAccountDataLock: Promise<void> = Promise.resolve();
   // Gate pairing-code messages so we only send once per (user, room) per process.
@@ -178,15 +176,37 @@ export class MatrixInterface implements Interface {
   }
 
   private async getOrCreateDmRoom(userId: string, excludeRoomId?: string): Promise<string> {
-    const key = excludeRoomId ? `${userId}:${excludeRoomId}` : userId;
-    const inflight = this.dmResolutions.get(key);
-    if (inflight) return inflight;
+    // If there is an existing resolution in-flight for this exact resolution request, reuse it
+    const inflight = this.dmResolutions.get(userId);
+    if (inflight && !excludeRoomId) {
+      return inflight;
+    }
 
-    const promise = this.resolveOrCreateDmRoom(userId, excludeRoomId).finally(() => {
-      this.dmResolutions.delete(key);
-    });
-    this.dmResolutions.set(key, promise);
-    return promise;
+    // Serialize resolution/creation operations per user so retries (with excludeRoomId)
+    // and subsequent concurrent sends do not race m.direct reads or duplicate createRoom
+    const prior = this.userResolutionLocks.get(userId) || Promise.resolve();
+    const resolutionPromise = prior
+      .catch(() => {})
+      .then(() => this.resolveOrCreateDmRoom(userId, excludeRoomId));
+
+    if (!excludeRoomId) {
+      this.dmResolutions.set(userId, resolutionPromise);
+    }
+
+    const lockPromise = resolutionPromise
+      .then(() => {})
+      .catch(() => {})
+      .finally(() => {
+        if (!excludeRoomId && this.dmResolutions.get(userId) === resolutionPromise) {
+          this.dmResolutions.delete(userId);
+        }
+        if (this.userResolutionLocks.get(userId) === lockPromise) {
+          this.userResolutionLocks.delete(userId);
+        }
+      });
+
+    this.userResolutionLocks.set(userId, lockPromise);
+    return resolutionPromise;
   }
 
   private async isRoomUsableForUser(roomId: string, userId: string): Promise<boolean> {

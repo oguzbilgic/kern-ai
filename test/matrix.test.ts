@@ -406,6 +406,7 @@ test("isMatrixUserId: matches valid MXIDs including ports and IPv6 and rejects i
   assert.equal(isMatrixUserId("@dave:[::1]"), true);
   assert.equal(isMatrixUserId("@eve:[2001:db8::1]:8448"), true);
   assert.equal(isMatrixUserId("@user_name-1.0:domain.org"), true);
+  assert.equal(isMatrixUserId("@alice/bot:example.org"), true);
 
   // Invalid targets
   assert.equal(isMatrixUserId("@alice"), false);
@@ -418,7 +419,7 @@ test("isMatrixUserId: matches valid MXIDs including ports and IPv6 and rejects i
   assert.equal(isMatrixUserId("@alice space:matrix.org"), false);
   assert.equal(isMatrixUserId("@alice:matrix .org"), false);
   assert.equal(isMatrixUserId("@alice:matrix/path"), false);
-  assert.equal(isMatrixUserId("@al/ice:matrix.org"), false);
+  assert.equal(isMatrixUserId("@alice:matrix:extra:colon"), false);
   // Invalid ports
   assert.equal(isMatrixUserId("@alice:matrix.org:0"), false);
   assert.equal(isMatrixUserId("@alice:matrix.org:65536"), false);
