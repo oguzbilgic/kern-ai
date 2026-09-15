@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.37.2 (unreleased)
+
+### Improvements
+- **Native glob implementation and zero-dependency file matching** ([#360](https://github.com/oguzbilgic/kern-ai/pull/360)) — replaced external `glob` package in `globTool` with Node.js built-in `node:fs/promises` `glob`. Eliminates the deprecated `glob@11` warning, drops 7 transitive npm packages, and sets `engines.node` to `>=22`.
+- **Bump `better-sqlite3` to 13.0.3** ([#360](https://github.com/oguzbilgic/kern-ai/pull/360)) — upgraded `better-sqlite3` to v13 (migrated upstream to Node-API), removing the deprecated `prebuild-install` transitive dependency and providing cleaner cross-platform prebuilt binaries.
+
 ## 0.37.1 (2026-09-15)
 
 ### Improvements
