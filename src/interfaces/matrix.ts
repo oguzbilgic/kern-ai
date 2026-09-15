@@ -263,6 +263,7 @@ export class MatrixInterface implements Interface {
             if (intermediate && !isNoReply(intermediate)) {
               currentText = "";
               await this.sendMessage(roomId, intermediate).catch(() => {});
+              this.setTyping(roomId, true).catch(() => {});
             }
           }
         },

@@ -227,6 +227,7 @@ export class DiscordInterface implements Interface {
                 if (intermediate && !isNoReply(intermediate)) {
                   currentText = "";
                   await sendDiscordMessage(intermediate).catch(() => {});
+                  sendTyping();
                 }
               }
             },
