@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert";
-import { chunkMessage } from "../src/interfaces/discord.js";
+import { DiscordInterface, chunkMessage } from "../src/interfaces/discord.js";
 
 test("chunkMessage: returns single chunk if within limit", () => {
   const msg = "Hello world";
@@ -138,6 +138,65 @@ test("DiscordInterface: send in DMs and reply in guild channels", async () => {
   await messageCreateHandler(mockGuildMessage);
   assert.strictEqual(guildReplied, true, "Should reply() in guild channels");
   assert.strictEqual(guildReplyContent, "Reply to: hello agent in channel");
+
+  await discord.stop();
+});
+
+test("DiscordInterface: emits intermediate text on tool-call event (per-step)", async () => {
+  const discord = new DiscordInterface({
+    token: "fake-token",
+    pairing: {
+      isPaired: () => true,
+      hasAnyPairedUsers: () => true,
+      autoPairFirst: async () => {},
+      getOrCreateCode: async () => "code",
+    } as any,
+  });
+
+  let messageCreateHandler: any;
+  (discord as any).client = {
+    on: (event: string, handler: any) => {
+      if (event === "messageCreate") messageCreateHandler = handler;
+    },
+    once: () => {},
+    login: async () => {},
+    destroy: () => {},
+    user: { id: "bot-id" },
+    channels: { fetch: async () => null },
+    users: { fetch: async () => null },
+  };
+
+  const sentMessages: string[] = [];
+  const mockMessage = {
+    author: { id: "user1", username: "oguz" },
+    channel: {
+      id: "dm-channel-1",
+      type: 1, // DM
+      send: async (payload: any) => {
+        sentMessages.push(payload.content);
+      },
+    },
+    guild: null,
+    mentions: { users: new Map(), roles: new Map() },
+    attachments: new Map(),
+    content: "search for me",
+    reply: async () => {},
+  };
+
+  await discord.start({
+    onMessage: async (_env, onEvent) => {
+      onEvent?.({ type: "text-delta", text: "Starting search..." });
+      await onEvent?.({ type: "tool-call", toolName: "websearch" });
+      onEvent?.({ type: "text-delta", text: "Here are the results." });
+      return "Here are the results.";
+    },
+  });
+
+  await messageCreateHandler(mockMessage);
+
+  assert.strictEqual(sentMessages.length, 2);
+  assert.strictEqual(sentMessages[0], "Starting search...");
+  assert.strictEqual(sentMessages[1], "Here are the results.");
 
   await discord.stop();
 });

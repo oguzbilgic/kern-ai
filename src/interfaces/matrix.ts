@@ -241,6 +241,8 @@ export class MatrixInterface implements Interface {
     }, 3000);
     await this.setTyping(roomId, true).catch(() => {});
 
+    let currentText = "";
+
     try {
       const response = await onMessage(
         {
@@ -251,16 +253,29 @@ export class MatrixInterface implements Interface {
           channel: `matrix:${roomId}`,
           attachments: attachments.length > 0 ? attachments : undefined,
         },
-        // Ignore stream events for MVP — reply with final text only
-        () => {},
+        async (event) => {
+          if (event.type === "text-delta") {
+            currentText += event.text || "";
+          } else if (event.type === "tool-call") {
+            // If the model emitted intermediate text before calling a tool,
+            // send it immediately so the user sees progress instead of waiting.
+            const intermediate = currentText.trim();
+            if (intermediate && !isNoReply(intermediate)) {
+              currentText = "";
+              await this.sendMessage(roomId, intermediate).catch(() => {});
+            }
+          }
+        },
       );
 
       clearInterval(typingInterval);
       await this.setTyping(roomId, false).catch(() => {});
 
-      const reply = (response || "").trim();
-      if (isNoReply(reply)) return;
-      await this.sendMessage(roomId, reply);
+      // Send any remaining or final response text
+      const remaining = currentText.trim() || (response || "").trim();
+      if (remaining && !isNoReply(remaining)) {
+        await this.sendMessage(roomId, remaining);
+      }
     } catch (err: any) {
       clearInterval(typingInterval);
       await this.setTyping(roomId, false).catch(() => {});

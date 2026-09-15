@@ -193,6 +193,21 @@ export class DiscordInterface implements Interface {
         sendTyping();
         const typingInterval = setInterval(sendTyping, 8000);
 
+        let currentText = "";
+        let isFirstReply = true;
+
+        const sendDiscordMessage = async (content: string) => {
+          const chunks = chunkMessage(content);
+          for (let i = 0; i < chunks.length; i++) {
+            if (isFirstReply && !isDM) {
+              isFirstReply = false;
+              await message.reply({ content: chunks[i], allowedMentions: { repliedUser: false } });
+            } else {
+              await (message.channel as any).send({ content: chunks[i] });
+            }
+          }
+        };
+
         try {
           const response = await onMessage(
             {
@@ -203,21 +218,25 @@ export class DiscordInterface implements Interface {
               channel: channelLabel,
               attachments: attachments.length > 0 ? attachments : undefined,
             },
-            () => {},
+            async (event) => {
+              if (event.type === "text-delta") {
+                currentText += event.text || "";
+              } else if (event.type === "tool-call") {
+                // If text was emitted before a tool call, send it as a step output
+                const intermediate = currentText.trim();
+                if (intermediate && !isNoReply(intermediate)) {
+                  currentText = "";
+                  await sendDiscordMessage(intermediate).catch(() => {});
+                }
+              }
+            },
           );
 
           clearInterval(typingInterval);
 
-          const reply = (response || "").trim();
-          if (isNoReply(reply)) return;
-
-          const chunks = chunkMessage(reply);
-          for (let i = 0; i < chunks.length; i++) {
-            if (i === 0 && !isDM) {
-              await message.reply({ content: chunks[i], allowedMentions: { repliedUser: false } });
-            } else {
-              await (message.channel as any).send({ content: chunks[i] });
-            }
+          const remaining = currentText.trim() || (response || "").trim();
+          if (remaining && !isNoReply(remaining)) {
+            await sendDiscordMessage(remaining);
           }
         } catch (err: any) {
           clearInterval(typingInterval);

@@ -92,3 +92,41 @@ test("mdToMatrixHtml: renders tables with alignments and cell formatting", () =>
   assert.ok(result.includes('<td align="right"><code>OK</code></td>'));
   assert.ok(result.includes("</table>"));
 });
+
+test("MatrixInterface: emits intermediate text on tool-call event (per-step)", async () => {
+  const { MatrixInterface } = await import("../src/interfaces/matrix.js");
+  const matrix = new MatrixInterface(
+    "http://localhost:8008",
+    "@agent:matrix",
+    "fake-token",
+    {
+      isPaired: () => true,
+      hasAnyPairedUsers: () => true,
+      autoPairFirst: async () => {},
+      getOrCreateCode: async () => "code",
+    } as any,
+  );
+
+  const sentMessages: string[] = [];
+  (matrix as any).sendMessage = async (_roomId: string, text: string) => {
+    sentMessages.push(text);
+  };
+  (matrix as any).setTyping = async () => {};
+
+  await (matrix as any).handleIncoming(
+    "!room:matrix",
+    "@oguz:matrix",
+    "do research",
+    {},
+    async (_env: any, onEvent: any) => {
+      onEvent({ type: "text-delta", text: "Searching knowledge base..." });
+      await onEvent({ type: "tool-call", toolName: "read" });
+      onEvent({ type: "text-delta", text: "Found the info!" });
+      return "Found the info!";
+    },
+  );
+
+  assert.strictEqual(sentMessages.length, 2);
+  assert.strictEqual(sentMessages[0], "Searching knowledge base...");
+  assert.strictEqual(sentMessages[1], "Found the info!");
+});
