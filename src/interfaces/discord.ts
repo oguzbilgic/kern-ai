@@ -195,17 +195,26 @@ export class DiscordInterface implements Interface {
 
         let currentText = "";
         let isFirstReply = true;
+        let hasToolCalls = false;
+        let sendQueue = Promise.resolve();
 
-        const sendDiscordMessage = async (content: string) => {
-          const chunks = chunkMessage(content);
-          for (let i = 0; i < chunks.length; i++) {
-            if (isFirstReply && !isDM) {
-              isFirstReply = false;
-              await message.reply({ content: chunks[i], allowedMentions: { repliedUser: false } });
-            } else {
-              await (message.channel as any).send({ content: chunks[i] });
-            }
-          }
+        const queueSend = (content: string) => {
+          sendQueue = sendQueue
+            .then(async () => {
+              const chunks = chunkMessage(content);
+              for (let i = 0; i < chunks.length; i++) {
+                if (isFirstReply && !isDM) {
+                  isFirstReply = false;
+                  await message.reply({ content: chunks[i], allowedMentions: { repliedUser: false } });
+                } else {
+                  await (message.channel as any).send({ content: chunks[i] });
+                }
+              }
+            })
+            .catch((err) => {
+              log.error("discord", `failed to send message: ${err?.message || err}`);
+            });
+          return sendQueue;
         };
 
         try {
@@ -222,11 +231,11 @@ export class DiscordInterface implements Interface {
               if (event.type === "text-delta") {
                 currentText += event.text || "";
               } else if (event.type === "tool-call") {
-                // If text was emitted before a tool call, send it as a step output
+                hasToolCalls = true;
                 const intermediate = currentText.trim();
+                currentText = "";
                 if (intermediate && !isNoReply(intermediate)) {
-                  currentText = "";
-                  await sendDiscordMessage(intermediate).catch(() => {});
+                  queueSend(intermediate);
                   sendTyping();
                 }
               }
@@ -235,10 +244,11 @@ export class DiscordInterface implements Interface {
 
           clearInterval(typingInterval);
 
-          const remaining = currentText.trim() || (response || "").trim();
+          const remaining = currentText.trim() || (!hasToolCalls ? (response || "").trim() : "");
           if (remaining && !isNoReply(remaining)) {
-            await sendDiscordMessage(remaining);
+            queueSend(remaining);
           }
+          await sendQueue;
         } catch (err: any) {
           clearInterval(typingInterval);
           const reason = String(err?.message || err || "Error processing message.");

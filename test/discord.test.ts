@@ -143,15 +143,15 @@ test("DiscordInterface: send in DMs and reply in guild channels", async () => {
 });
 
 test("DiscordInterface: emits intermediate text on tool-call event (per-step)", async () => {
-  const discord = new DiscordInterface({
-    token: "fake-token",
-    pairing: {
+  const discord = new DiscordInterface(
+    "fake-token",
+    {
       isPaired: () => true,
       hasAnyPairedUsers: () => true,
       autoPairFirst: async () => {},
       getOrCreateCode: async () => "code",
     } as any,
-  });
+  );
 
   let messageCreateHandler: any;
   (discord as any).client = {

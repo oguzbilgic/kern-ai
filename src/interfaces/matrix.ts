@@ -242,6 +242,17 @@ export class MatrixInterface implements Interface {
     await this.setTyping(roomId, true).catch(() => {});
 
     let currentText = "";
+    let hasToolCalls = false;
+    let sendQueue = Promise.resolve();
+
+    const queueSend = (content: string) => {
+      sendQueue = sendQueue
+        .then(() => this.sendMessage(roomId, content))
+        .catch((err) => {
+          log.error("matrix", `failed to send message in ${roomId}: ${err?.message || err}`);
+        });
+      return sendQueue;
+    };
 
     try {
       const response = await onMessage(
@@ -257,12 +268,11 @@ export class MatrixInterface implements Interface {
           if (event.type === "text-delta") {
             currentText += event.text || "";
           } else if (event.type === "tool-call") {
-            // If the model emitted intermediate text before calling a tool,
-            // send it immediately so the user sees progress instead of waiting.
+            hasToolCalls = true;
             const intermediate = currentText.trim();
+            currentText = "";
             if (intermediate && !isNoReply(intermediate)) {
-              currentText = "";
-              await this.sendMessage(roomId, intermediate).catch(() => {});
+              queueSend(intermediate);
               this.setTyping(roomId, true).catch(() => {});
             }
           }
@@ -273,10 +283,11 @@ export class MatrixInterface implements Interface {
       await this.setTyping(roomId, false).catch(() => {});
 
       // Send any remaining or final response text
-      const remaining = currentText.trim() || (response || "").trim();
+      const remaining = currentText.trim() || (!hasToolCalls ? (response || "").trim() : "");
       if (remaining && !isNoReply(remaining)) {
-        await this.sendMessage(roomId, remaining);
+        queueSend(remaining);
       }
+      await sendQueue;
     } catch (err: any) {
       clearInterval(typingInterval);
       await this.setTyping(roomId, false).catch(() => {});
