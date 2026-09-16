@@ -288,12 +288,14 @@ export class MatrixInterface implements Interface {
       if (remaining && !isNoReply(remaining)) {
         const voiceIn = attachments.some((a) => a.type === "audio");
         if (voiceIn && ttsAvailable()) {
-          try {
-            await this.sendVoiceReply(roomId, remaining);
-          } catch (err: any) {
-            log.warn("matrix", `voice reply failed, falling back to text: ${err?.message || err}`);
-            queueSend(remaining);
-          }
+          sendQueue = sendQueue.then(async () => {
+            try {
+              await this.sendVoiceReply(roomId, remaining);
+            } catch (err: any) {
+              log.warn("matrix", `voice reply failed, falling back to text: ${err?.message || err}`);
+              await this.sendMessage(roomId, remaining);
+            }
+          });
         } else {
           queueSend(remaining);
         }
