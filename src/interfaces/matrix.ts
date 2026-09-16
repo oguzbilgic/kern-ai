@@ -4,6 +4,7 @@ import { log } from "../log.js";
 import { isNoReply } from "../util.js";
 import { setMatrixClient } from "../plugins/matrix/plugin.js";
 import { marked } from "marked";
+import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -285,7 +286,19 @@ export class MatrixInterface implements Interface {
       // Send any remaining or final response text
       const remaining = currentText.trim() || (!hasToolCalls ? (response || "").trim() : "");
       if (remaining && !isNoReply(remaining)) {
-        queueSend(remaining);
+        const voiceIn = attachments.some((a) => a.type === "audio");
+        if (voiceIn && ttsAvailable()) {
+          sendQueue = sendQueue.then(async () => {
+            try {
+              await this.sendVoiceReply(roomId, remaining);
+            } catch (err: any) {
+              log.warn("matrix", `voice reply failed, falling back to text: ${err?.message || err}`);
+              await this.sendMessage(roomId, remaining);
+            }
+          });
+        } else {
+          queueSend(remaining);
+        }
       }
       await sendQueue;
     } catch (err: any) {
@@ -314,8 +327,9 @@ export class MatrixInterface implements Interface {
     const filename = content.body || mediaId;
 
     try {
-      // Try modern media endpoint first, falling back to legacy endpoint if needed
+      // Modern MSC3916 authenticated media endpoint, standard v3, and legacy endpoints
       const paths = [
+        `/_matrix/client/v1/media/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`,
         `/_matrix/media/v3/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`,
         `/_matrix/client/v3/media/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`,
       ];
@@ -361,6 +375,60 @@ export class MatrixInterface implements Interface {
       payload.format = "org.matrix.custom.html";
       payload.formatted_body = formatted;
     }
+
+    await this.api(
+      "PUT",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
+      payload,
+    );
+  }
+
+  private async uploadMedia(data: Buffer, filename: string, mimeType: string): Promise<string> {
+    const endpoints = [
+      `/_matrix/media/v3/upload?filename=${encodeURIComponent(filename)}`,
+      `/_matrix/client/v1/media/upload?filename=${encodeURIComponent(filename)}`,
+    ];
+
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(`${this.homeserver}${ep}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            "Content-Type": mimeType,
+          },
+          body: new Uint8Array(data),
+        });
+        if (res.ok) {
+          const json = await res.json() as { content_uri?: string };
+          if (json.content_uri) return json.content_uri;
+        } else {
+          lastError = new Error(`upload to ${ep} status ${res.status}`);
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error("matrix media upload failed");
+  }
+
+  private async sendVoiceReply(roomId: string, text: string): Promise<void> {
+    const audio = await synthesizeSpeech(stripForSpeech(text));
+    if (!audio) throw new Error("speech synthesis unavailable");
+
+    const contentUri = await this.uploadMedia(audio.data, audio.filename, audio.mimeType);
+    const txnId = `kern-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const payload: Record<string, unknown> = {
+      msgtype: "m.audio",
+      body: audio.filename || "voice-message.ogg",
+      url: contentUri,
+      info: {
+        mimetype: audio.mimeType,
+        size: audio.data.length,
+      },
+      "org.matrix.msc3245.voice": {},
+    };
 
     await this.api(
       "PUT",

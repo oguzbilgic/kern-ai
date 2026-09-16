@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mdToMatrixHtml, mimeToType } from "../src/interfaces/matrix.ts";
+import { mdToMatrixHtml, mimeToType, MatrixInterface } from "../src/interfaces/matrix.ts";
 
 test("mimeToType: categorizes mime types correctly", () => {
   assert.equal(mimeToType("image/png"), "image");
@@ -144,3 +144,42 @@ test("MatrixInterface: emits intermediate text on tool-call event (per-step)", a
   assert.strictEqual(sentMessages[0], "Searching knowledge base...");
   assert.strictEqual(sentMessages[1], "Found the info!");
 });
+
+test("MatrixInterface: downloads media with MSC3916 authenticated endpoint fallback", async () => {
+  const matrix = new MatrixInterface(
+    "http://matrix.test",
+    "@agent:matrix",
+    "fake-token",
+  );
+
+  const attemptedPaths: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: any) => {
+    const urlStr = String(url);
+    attemptedPaths.push(urlStr);
+    if (urlStr.includes("/_matrix/client/v1/media/download/")) {
+      return new Response(Buffer.from("fake-audio-content"), {
+        status: 200,
+        headers: { "Content-Type": "audio/ogg" },
+      });
+    }
+    return new Response("Not Found", { status: 404 });
+  }) as any;
+
+  try {
+    const att = await (matrix as any).downloadMediaAttachment({
+      url: "mxc://matrix.test/media123",
+      body: "audio.ogg",
+      info: { mimetype: "audio/ogg", size: 18 },
+    });
+
+    assert.ok(att);
+    assert.strictEqual(att.type, "audio");
+    assert.strictEqual(att.mimeType, "audio/ogg");
+    assert.strictEqual(att.data.toString(), "fake-audio-content");
+    assert.ok(attemptedPaths.some((p) => p.includes("/_matrix/client/v1/media/download/matrix.test/media123")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+

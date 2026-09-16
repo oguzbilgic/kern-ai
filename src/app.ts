@@ -458,7 +458,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // auth failures internally and reports via status/statusDetail.
     await matrixBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
       },
     });
   }
