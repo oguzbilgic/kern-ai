@@ -2,7 +2,11 @@
 
 ## 0.37.2 (unreleased)
 
+### Features
+- **Matrix voice replies and MSC3245 audio messaging** — replies to voice messages with synthesized speech voice notes (`m.audio`) using the speech synthesis pipeline (`synthesizeSpeech`), matching Telegram and Slack behavior. Voice notes are uploaded via Matrix media endpoints (`/_matrix/media/v3/upload`) and tagged with `org.matrix.msc3245.voice` so Matrix clients render inline waveform audio players.
+
 ### Improvements
+- **MSC3916 authenticated media download support for Matrix** — added modern Matrix authenticated media endpoints (`/_matrix/client/v1/media/download/...`) to `MatrixInterface.downloadMediaAttachment`, with automatic fallback to standard and legacy routes. Fixes inbound voice notes, photos, and file attachments failing to download on modern homeservers like Conduit.
 - **Native glob implementation and zero-dependency file matching** ([#360](https://github.com/oguzbilgic/kern-ai/pull/360)) — replaced external `glob` package in `globTool` with Node.js built-in `node:fs/promises` `glob`. Eliminates the deprecated `glob@11` warning, drops 7 transitive npm packages, and sets `engines.node` to `>=22`.
 - **Bump `better-sqlite3` to 13.0.3** ([#360](https://github.com/oguzbilgic/kern-ai/pull/360)) — upgraded `better-sqlite3` to v13 (migrated upstream to Node-API), removing the deprecated `prebuild-install` transitive dependency and providing cleaner cross-platform prebuilt binaries.
 
