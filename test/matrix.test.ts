@@ -63,6 +63,20 @@ test("mdToMatrixHtml: ordered and nested lists", () => {
   assert.ok(result.includes("</ol>"));
 });
 
+test("mdToMatrixHtml: unwraps <p> inside <li> in loose lists", () => {
+  const input = `1. **Item One**:
+   - detail A
+   - detail B
+
+2. **Item Two**:
+   - detail C`;
+  const result = mdToMatrixHtml(input);
+  assert.ok(result);
+  // Ensure <li> does not contain immediate <p> block which forces a line break after list numbers
+  assert.ok(!result.includes("<li><p>"));
+  assert.ok(result.includes("<li><strong>Item One</strong>:"));
+});
+
 test("mdToMatrixHtml: links and strikethrough", () => {
   const input = "Visit [Matrix](https://matrix.org) or ~~old link~~";
   const result = mdToMatrixHtml(input);

@@ -3,6 +3,7 @@
 ## 0.37.2 (unreleased)
 
 ### Improvements
+- **Unwrap `<p>` tags inside `<li>` in Matrix HTML formatting** ([#361](https://github.com/oguzbilgic/kern-ai/pull/361)) — in CommonMark/GFM loose lists (where list items contain nested lists or blank lines), `marked` wraps the item text in `<p>...</p>`. In Matrix clients like Cinny and Element, `<p>` is a block element that introduces a line break immediately after the list item number (rendering `1.` on one line and the text on the next). Stripping leading `<p>` tags directly inside `<li>` keeps list numbering and text on the same line.
 - **Native glob implementation and zero-dependency file matching** ([#360](https://github.com/oguzbilgic/kern-ai/pull/360)) — replaced external `glob` package in `globTool` with Node.js built-in `node:fs/promises` `glob`. Eliminates the deprecated `glob@11` warning, drops 7 transitive npm packages, and sets `engines.node` to `>=22`.
 - **Bump `better-sqlite3` to 13.0.3** ([#360](https://github.com/oguzbilgic/kern-ai/pull/360)) — upgraded `better-sqlite3` to v13 (migrated upstream to Node-API), removing the deprecated `prebuild-install` transitive dependency and providing cleaner cross-platform prebuilt binaries.
 

@@ -414,7 +414,14 @@ export function mdToMatrixHtml(text: string): string | undefined {
   }
 
   // Parse markdown with marked (GFM tables, tasklists, autolinks, nested lists)
-  const html = marked.parse(text, { gfm: true, breaks: false }) as string;
+  let html = marked.parse(text, { gfm: true, breaks: false }) as string;
+
+  // Unwrap <p> directly inside <li> so list markers and text remain inline
+  // (CommonMark loose lists wrap <li> text in <p>, which introduces line breaks in Matrix clients)
+  html = html
+    .replace(/<li>(\s*)<p>([\s\S]*?)<\/p>/gi, "<li>$1$2")
+    .replace(/<li>(\s*)<p>/gi, "<li>$1");
+
   return html.trim() || undefined;
 }
 
