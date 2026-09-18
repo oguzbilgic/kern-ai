@@ -259,3 +259,17 @@ test("segment-prune: applyPrune deletes matching vec_segments rows when the tabl
   const left = (db.prepare("SELECT rowid FROM vec_segments ORDER BY rowid").all() as Array<{ rowid: number }>).map(r => r.rowid);
   assert.deepEqual(left, [1, 2, 3]);
 });
+
+test("segment-prune: a child whose parent row is missing is detached (dangling parent_id)", () => {
+  const db = makeDb(80, [{ id: 1, start: 0, end: 40 }, { id: 2, start: 40, end: 80 }]);
+  // Production never enables foreign_keys, so a legacy DB can hold a parent_id with no row behind it.
+  db.pragma("foreign_keys = OFF");
+  db.prepare("UPDATE semantic_segments SET parent_id = 999 WHERE id = 1").run();
+  db.pragma("foreign_keys = ON");
+  const plan = planPrune(loadSegmentRows(db, SID), SID);
+  assert.equal(plan.deletions.length, 0);
+  assert.deepEqual(plan.orphans.map(o => [o.id, o.formerParent]), [[1, 999]]);
+  applyPrune(db, plan);
+  const row = db.prepare("SELECT parent_id FROM semantic_segments WHERE id = 1").get() as { parent_id: number | null };
+  assert.equal(row.parent_id, null);
+});

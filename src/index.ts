@@ -295,7 +295,7 @@ async function main() {
       console.error("Usage:");
       console.error("  kern scripts recover-session <recall.db> [--list] [--session <id>]");
       console.error("  kern scripts segment-health <recall.db> [--session <id>] [--budget <tokens>] [--limit <n>] [--json]");
-      console.error("  kern scripts segment-prune <recall.db> [--session <id>] [--apply] [--no-backup] [--limit <n>] [--json]");
+      console.error("  kern scripts segment-prune <recall.db> [--session <id>] [--budget <tokens>] [--apply] [--no-backup] [--limit <n>] [--json]");
       process.exit(1);
     }
     return;

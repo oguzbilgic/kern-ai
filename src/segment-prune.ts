@@ -192,16 +192,23 @@ export function planPrune(rows: SegRow[], sessionId: string, opts: PlanOptions =
   // Children as recorded in the DB (before any prune) — a parent is judged
   // against the children it actually had, not just the survivors.
   const childrenOf = new Map<number, Node[]>();
-  for (const n of nodes) {
-    if (n.parent_id != null) {
-      const arr = childrenOf.get(n.parent_id) || [];
-      arr.push(n);
-      childrenOf.set(n.parent_id, arr);
-    }
-  }
-
   const deletions: PruneDeletion[] = [];
   const orphans: PruneOrphan[] = [];
+  for (const n of nodes) {
+    if (n.parent_id == null) continue;
+    if (!byId.has(n.parent_id)) {
+      // Dangling reference: the parent row is gone (FKs are not enforced on the production
+      // connection). rollUpLevels only re-batches `parent_id IS NULL`, so this child would
+      // never be re-rolled — detach it now so it becomes a real orphan.
+      orphans.push({ id: n.id, level: n.level, msg_start: n.msg_start, msg_end: n.msg_end, formerParent: n.parent_id });
+      n.parent_id = null;
+      continue;
+    }
+    const arr = childrenOf.get(n.parent_id) || [];
+    arr.push(n);
+    childrenOf.set(n.parent_id, arr);
+  }
+
   const residual: ResidualOverlap[] = [];
   const levels: LevelPlan[] = [];
   // One floor for every level, on purpose: the invariant is that each level tiles the

@@ -10,7 +10,7 @@ const USAGE = "Usage: kern scripts segment-health <recall.db> [--session <id>] [
  * .kern/config.json sitting next to recall.db, so the injection simulation
  * uses the same budget the agent does. Falls back to runtime defaults.
  */
-function budgetFromConfig(dbPath: string): { budget: number; source: string } {
+export function budgetFromConfig(dbPath: string): { budget: number; source: string } {
   const cfgPath = join(dirname(dbPath), "config.json");
   const defaults = { maxContextTokens: 100_000, summaryBudget: 0.75 };
   try {

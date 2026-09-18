@@ -3,6 +3,7 @@ import * as sqliteVec from "sqlite-vec";
 import { existsSync, rmSync } from "fs";
 import { resolve } from "path";
 import { analyzeSegmentHealth, listSessions } from "../segment-health.js";
+import { budgetFromConfig } from "./segment-health.js";
 import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune, sessionStart } from "../segment-prune.js";
 
 const USAGE = "Usage: kern scripts segment-prune <recall.db> [--session <id>] [--budget <tokens>] [--apply] [--no-backup] [--limit <n>] [--json]";
@@ -51,7 +52,10 @@ export async function segmentPrune(args: string[]): Promise<void> {
 
   const db = new Database(dbPath, { readonly: !apply, fileMustExist: true });
   sqliteVec.load(db);
-  const healthOpts = budget ? { budgetTokens: budget } : {};
+  const { budget: budgetTokens, source: budgetSource } = budget != null && !Number.isNaN(budget)
+    ? { budget, source: "--budget" }
+    : budgetFromConfig(dbPath);
+  const healthOpts = { budgetTokens };
   let scratch: Database.Database | null = null;
   const scratchPath = `${dbPath}.prune-dryrun-${process.pid}`;
   try {
@@ -90,12 +94,13 @@ export async function segmentPrune(args: string[]): Promise<void> {
     }
 
     if (json) {
-      console.log(JSON.stringify({ dbPath, sessionId, dryRun: !apply, backupPath, plan, applied, health: { before, after } }, null, 2));
+      console.log(JSON.stringify({ dbPath, sessionId, dryRun: !apply, backupPath, budget: { tokens: budgetTokens, source: budgetSource }, plan, applied, health: { before, after } }, null, 2));
       return;
     }
 
     console.log(`${dbPath}`);
     console.log(`Session ${sessionId.slice(0, 8)}  ${apply ? "APPLY" : "DRY RUN"}${backupPath ? `  backup → ${backupPath}` : ""}`);
+    console.log(`Budget ${budgetTokens} tokens (${budgetSource})`);
     console.log("");
     console.log(formatPrunePlan(plan, { limit }));
     console.log("");
