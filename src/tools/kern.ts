@@ -293,7 +293,13 @@ export function formatStatus(data: StatusData): string {
         lines.push(`  ${k}: ${v}`);
       } else if (v && typeof v === "object") {
         // Format specific known plugin stats cleanly as one-liners
-        if (k === "recall") {
+        if (k === "skills") {
+          const sk = v as any;
+          lines.push(`  skills: ${sk.active ?? 0} active / ${sk.total ?? 0} total`);
+        } else if (k === "mcp") {
+          const m = v as any;
+          lines.push(`  mcp: ${m.connected ?? 0}/${m.configured ?? 0} server(s), ${m.tools ?? 0} tool(s)`);
+        } else if (k === "recall") {
           const r = v as any;
           const buildingStr = r.building ? " (building)" : "";
           lines.push(`  recall: ${r.chunks ?? 0} chunks${buildingStr}`);

@@ -143,8 +143,12 @@ export const skillsPlugin: KernPlugin = {
   },
 
   onStatus(_ctx) {
+    const active = getActiveSkills();
     return {
-      skills: `${getActiveSkills().size} active / ${catalog.length} total`,
+      skills: {
+        active: active.size,
+        total: catalog.length,
+      },
     };
   },
 };

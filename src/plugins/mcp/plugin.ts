@@ -145,7 +145,11 @@ export const mcpPlugin: KernPlugin = {
     if (configured === 0) return {};
     const total = active.reduce((sum, s) => sum + s.tools.length, 0);
     return {
-      mcp: `${active.length}/${configured} server(s), ${total} tool(s)`,
+      mcp: {
+        connected: active.length,
+        configured,
+        tools: total,
+      },
     };
   },
 

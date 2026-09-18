@@ -64,10 +64,12 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
         if (typeof val === "object" && val !== null) {
           lines.push(`  ${name}:`);
           for (const [subKey, subVal] of Object.entries(val)) {
-            lines.push(`    ${subKey}: ${JSON.stringify(subVal)}`);
+            const formatted = typeof subVal === "string" ? subVal : JSON.stringify(subVal);
+            lines.push(`    ${subKey}: ${formatted}`);
           }
         } else {
-          lines.push(`  ${name}: ${JSON.stringify(val)}`);
+          const formatted = typeof val === "string" ? val : JSON.stringify(val);
+          lines.push(`  ${name}: ${formatted}`);
         }
       }
       lines.push("```");
