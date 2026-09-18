@@ -90,7 +90,7 @@ export const subagentsPlugin: KernPlugin = {
         if (!registry) return "Sub-agents plugin not loaded.";
         const records = registry.list();
         if (records.length === 0) {
-          return "No sub-agents. The agent can use the spawn tool to delegate a task.";
+          return "```yaml\nsubagents: {}\n```";
         }
 
         // running first, then by finishedAt desc (most recent on top)
@@ -102,30 +102,23 @@ export const subagentsPlugin: KernPlugin = {
           return bFin.localeCompare(aFin);
         });
 
-        const running = records.filter((r) => r.status === "running").length;
-        const lines = [`Sub-agents (${running} running, ${records.length} total)`, ""];
-
+        const lines = ["```yaml", "subagents:"];
         for (const r of sorted) {
-          const icon =
-            r.status === "running" ? "⟳" :
-            r.status === "done"    ? "✓" :
-            r.status === "failed"  ? "✗" :
-            /* cancelled */          "⊘";
-
-          const prompt = r.prompt.length > 40
-            ? r.prompt.slice(0, 40) + "..."
-            : r.prompt;
-
           const end = r.finishedAt ? new Date(r.finishedAt) : new Date();
           const dur = `${Math.round((+end - +new Date(r.startedAt)) / 1000)}s`;
-          const calls = `${r.toolCalls} tool call${r.toolCalls === 1 ? "" : "s"}`;
+          const cleanPrompt = r.prompt.replace(/\r?\n/g, " ").trim();
+          const prompt = cleanPrompt.length > 50 ? cleanPrompt.slice(0, 50) + "..." : cleanPrompt;
 
-          const parts = [`"${prompt}"`, dur, calls];
-          if (r.status === "failed" || r.status === "cancelled") parts.push(r.status);
-
-          lines.push(`  ${icon} ${r.id} — ${parts.join(" · ")}`);
+          lines.push(`  ${r.id}:`);
+          lines.push(`    status: ${r.status}`);
+          lines.push(`    runtime: ${dur}`);
+          lines.push(`    toolCalls: ${r.toolCalls}`);
+          lines.push(`    prompt: "${prompt.replace(/"/g, '\\"')}"`);
+          if (r.error) {
+            lines.push(`    error: "${r.error.replace(/"/g, '\\"')}"`);
+          }
         }
-
+        lines.push("```");
         return lines.join("\n");
       },
     },

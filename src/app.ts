@@ -57,16 +57,23 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
     }
 
     case "/help": {
-      const builtins = [
-        "/status   — show agent status, uptime, token usage",
-        "/restart  — restart the agent process",
-      ];
+      const cmds: Record<string, string> = {
+        status: "show agent status, uptime, token usage",
+        restart: "restart the agent process",
+      };
       const pluginCmds = plugins.collectCommandDescriptions();
       for (const [cmd, desc] of Object.entries(pluginCmds)) {
-        builtins.push(`${cmd.padEnd(10)} — ${desc}`);
+        const cleanCmd = cmd.replace(/^\//, "");
+        cmds[cleanCmd] = desc;
       }
-      builtins.push("/help     — show this help");
-      return builtins.join("\n");
+      cmds["help"] = "show this help";
+
+      const lines = ["```yaml", "commands:"];
+      for (const [name, desc] of Object.entries(cmds)) {
+        lines.push(`  ${name}: ${desc}`);
+      }
+      lines.push("```");
+      return lines.join("\n");
     }
 
     default: {
