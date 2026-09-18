@@ -282,10 +282,15 @@ export function planRollupGroups(rows: RollupRow[]): RollupRow[][] {
   // stream: any parented or pending row ends the current run, so a run can never
   // straddle a row that already belongs to a parent (possible only in pre-prune
   // trees where a parented row overlaps its neighbours).
+  // An orphan that itself overlaps a parented row (≥2 msgs; legacy fencepost tolerated)
+  // is likewise ineligible — that ground already belongs to a parent, and rolling it up
+  // would recreate an overlapping branch (pre-prune trees only; prune removes such rows).
+  const overlapsParented = (r: RollupRow) =>
+    parented.some(p => Math.min(p.msg_end, r.msg_end) - Math.max(p.msg_start, r.msg_start) >= 2);
   const runs: RollupRow[][] = [];
   let run: RollupRow[] | null = null;
   for (const r of rows) {
-    const eligible = r.parent_id == null && r.summarized === 1;
+    const eligible = r.parent_id == null && r.summarized === 1 && !overlapsParented(r);
     if (!eligible) { run = null; continue; }
     if (run && isAdjacent(run[run.length - 1].msg_end, r.msg_start)) run.push(r);
     else { run = [r]; runs.push(run); }

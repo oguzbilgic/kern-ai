@@ -217,8 +217,18 @@ test("A2: a parented row overlapping its neighbours (pre-prune tree) breaks the 
   ];
   const groups = planRollupGroups(rows);
   for (const g of groups) assert.ok(!(g.some(r => r.id === 1) && g.some(r => r.id === 3)), "run must not straddle the parented row");
-  // [10,20) restarts the run and joins the ten tiles after it → one full group starting at id 3.
-  assert.ok(groups.some(g => g.length === 10 && g[0].id === 3));
+  // [0,10) and [10,20) both overlap the parented row → ineligible; the ten tiles after form the only group.
+  assert.ok(groups.some(g => g.length === 10 && g[0].id === 4));
+});
+
+test("A2: an orphan overlapping a parented row (not positionally between) is ineligible — no overlapping parent is recreated", () => {
+  // Ten orphans tile [0,100); an existing L1 child [95,200) sorts after all of them.
+  const rows = [...tiles(10, 0, 10, 1), row({ id: 11, msg_start: 95, msg_end: 200, parent_id: 99 })];
+  const groups = planRollupGroups(rows);
+  for (const g of groups) assert.ok(!g.some(r => r.id === 10), "[90,100) overlaps the parented row and must not roll up");
+  // The remaining nine [0,90) are not bounded on the right by a parented row (the ineligible
+  // orphan is not a boundary) → they stay orphan roots; prune sorts this stretch out later.
+  assert.deepEqual(groups, []);
 });
 
 test("A2: unsummarized orphan breaks a run and is never grouped", () => {
