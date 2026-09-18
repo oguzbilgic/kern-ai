@@ -182,7 +182,7 @@ export function selectHistorySegments(
   allSegments: HistorySegment[],
   trimmedBeforeMsg: number,
   budgetTokens: number,
-): { selected: HistorySegment[]; tokens: number; snappedBoundary: number } | null {
+): { selected: HistorySegment[]; tokens: number; snappedBoundary: number; shadowed: HistorySegment[] } | null {
   if (allSegments.length === 0) return null;
 
   const l0Boundaries = allSegments
@@ -211,9 +211,10 @@ export function selectHistorySegments(
   // shadow — inject only the covering one. Children tile their parent exactly, so
   // deduping the roots is enough; expansion below cannot reintroduce an overlap.
   const selected: HistorySegment[] = [];
+  const shadowed: HistorySegment[] = [];
   for (const r of roots) {
     const covered = selected.some(s => s.msg_start <= r.msg_start && r.msg_end <= s.msg_end);
-    if (!covered) selected.push(r);
+    if (covered) shadowed.push(r); else selected.push(r);
   }
   if (selected.length === 0) return null;
 
@@ -243,7 +244,7 @@ export function selectHistorySegments(
     }
   }
 
-  return { selected, tokens: usedTokens, snappedBoundary };
+  return { selected, tokens: usedTokens, snappedBoundary, shadowed };
 }
 
 export const ROLLUP_SIZE = 10;
@@ -1032,7 +1033,11 @@ export class SegmentIndex {
 
     const picked = selectHistorySegments(allSegments, trimmedBeforeMsg, budgetTokens);
     if (!picked) return null;
-    const { selected, tokens: usedTokens } = picked;
+    const { selected, tokens: usedTokens, shadowed } = picked;
+    if (shadowed.length > 0) {
+      const ranges = shadowed.map(s => `#${s.id} L${s.level} [${s.msg_start},${s.msg_end})`).join(", ");
+      log.warn("segments", `composeHistory dropped ${shadowed.length} shadowed root(s) for ${sessionId.slice(0, 8)} (${shadowed.reduce((n, s) => n + s.summary_token_count, 0)} tokens): ${ranges}`);
+    }
 
     // Count per level
     const levelCounts: Record<number, number> = {};

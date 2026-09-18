@@ -250,6 +250,7 @@ test("A4: a root shadowed by another root is not injected", () => {
   const picked = selectHistorySegments(all, 200, 10_000)!;
   assert.deepEqual(picked.selected.map(s => s.id), [1, 3]);
   assert.equal(picked.tokens, 20);
+  assert.deepEqual(picked.shadowed.map(s => s.id), [2], "dropped roots are reported so composeHistory can log them");
 });
 
 // ── e2e: prune → rollup plan leaves no stragglers ────────────────────────────
