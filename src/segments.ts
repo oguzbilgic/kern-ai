@@ -278,13 +278,17 @@ export function planRollupGroups(rows: RollupRow[]): RollupRow[][] {
   const hasParentedEndingAt = (pos: number) => parented.some(p => isAdjacent(p.msg_end, pos));
   const hasParentedStartingAt = (pos: number) => parented.some(p => isAdjacent(pos, p.msg_start));
 
-  // Contiguous runs of summarized orphans.
-  const orphans = rows.filter(r => r.parent_id == null && r.summarized === 1);
+  // Contiguous runs of summarized orphans, walked over the full position-ordered
+  // stream: any parented or pending row ends the current run, so a run can never
+  // straddle a row that already belongs to a parent (possible only in pre-prune
+  // trees where a parented row overlaps its neighbours).
   const runs: RollupRow[][] = [];
-  for (const o of orphans) {
-    const run = runs[runs.length - 1];
-    if (run && isAdjacent(run[run.length - 1].msg_end, o.msg_start)) run.push(o);
-    else runs.push([o]);
+  let run: RollupRow[] | null = null;
+  for (const r of rows) {
+    const eligible = r.parent_id == null && r.summarized === 1;
+    if (!eligible) { run = null; continue; }
+    if (run && isAdjacent(run[run.length - 1].msg_end, r.msg_start)) run.push(r);
+    else { run = [r]; runs.push(run); }
   }
 
   const groups: RollupRow[][] = [];
@@ -355,19 +359,26 @@ export class SegmentIndex {
     // (inclusive). Resume strictly after it — re-including it made every chunk
     // boundary a 1-message overlap (#364 A1).
     let resumeFrom = state ? state.last_segmented_msg + 1 : 0;
-    if (!state) {
-      // No cursor but segments exist: the cursor was reset (pre-#364 embedding-dimension
-      // change did this). Fast-forward to the tree instead of re-segmenting from 0 —
-      // that re-embedded the whole history and laid a shifted second tiling next to
-      // the first one.
-      const tree = this.db.prepare(
-        "SELECT MAX(msg_end) AS m FROM semantic_segments WHERE session_id = ? AND level = 0"
-      ).get(sessionId) as { m: number | null };
-      if (tree.m != null && tree.m > 0) {
-        resumeFrom = tree.m;
-        this.db.prepare("INSERT OR REPLACE INTO segment_state (session_id, last_segmented_msg) VALUES (?, ?)").run(sessionId, tree.m - 1);
-        log.warn("segments", `segment_state missing for ${sessionId.slice(0, 8)} but L0 covers [0, ${tree.m}) — cursor fast-forwarded`);
-      }
+    // Cursor missing or behind the tree (pre-#364 embedding-dimension change reset it;
+    // a restored DB can leave it stale): fast-forward to the end of the *contiguous* L0
+    // coverage that starts at the cursor, instead of re-segmenting covered messages.
+    // Re-indexing covered ground re-embedded the whole history and laid a shifted second
+    // tiling next to the first one; with a stale cursor a candidate straddling the
+    // coverage edge would be rejected by the overlap guard below and its uncovered tail
+    // lost. A stray segment further ahead with a hole before it does not move the cursor —
+    // the hole gets indexed and the stray is handled by the overlap guard.
+    const ahead = this.db.prepare(
+      "SELECT msg_start, msg_end FROM semantic_segments WHERE session_id = ? AND level = 0 AND msg_end > ? ORDER BY msg_start"
+    ).all(sessionId, resumeFrom) as Array<{ msg_start: number; msg_end: number }>;
+    let frontier = resumeFrom;
+    for (const seg of ahead) {
+      if (seg.msg_start > frontier) break;
+      frontier = Math.max(frontier, seg.msg_end);
+    }
+    if (frontier > resumeFrom) {
+      log.warn("segments", `segment_state ${state ? `at ${state.last_segmented_msg}` : "missing"} for ${sessionId.slice(0, 8)} but L0 covers through ${frontier} — cursor fast-forwarded`);
+      resumeFrom = frontier;
+      this.db.prepare("INSERT OR REPLACE INTO segment_state (session_id, last_segmented_msg) VALUES (?, ?)").run(sessionId, frontier - 1);
     }
 
     // Load new messages from the messages table — chunked to prevent OOM

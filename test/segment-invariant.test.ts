@@ -127,6 +127,26 @@ test("A3: a new L0 segment overlapping existing coverage is rejected at insert, 
   assert.equal(state.last_segmented_msg, 399);
 });
 
+test("A3: a cursor behind contiguous coverage fast-forwards; a candidate straddling the edge is never dropped", async () => {
+  const db = new Database(":memory:");
+  schema(db);
+  seedMessages(db, 400);
+  const idx = makeIndex(db);
+  const ins = db.prepare("INSERT INTO semantic_segments (session_id, msg_start, msg_end, level, summary, token_count, summarized, created_at) VALUES (?, ?, ?, 0, 's', 100, 1, '2026-09-01')");
+  for (let s = 0; s < 200; s += 50) ins.run(SID, s, s + 50);
+  // Stale cursor: tree covers [0,200) but state says 149 (e.g. restored DB).
+  db.prepare("INSERT INTO segment_state VALUES (?, ?)").run(SID, 149);
+
+  const created = await idx.indexSession(SID);
+  assert.equal(created, 4);
+  const health = analyzeSegmentHealth(db, SID);
+  assert.equal(health.overlaps.length, 0);
+  assert.equal(health.gaps.length, 0);
+  assert.equal(health.levels[0].fenceposts, 0);
+  const state = db.prepare("SELECT last_segmented_msg FROM segment_state").get() as { last_segmented_msg: number };
+  assert.equal(state.last_segmented_msg, 399);
+});
+
 // ── A2: planRollupGroups ─────────────────────────────────────────────────────
 
 test("A2: only contiguous runs are grouped; a discontinuity breaks the group", () => {
@@ -185,6 +205,20 @@ test("A2: interior remainder folds into the last full group (10–19 children)",
   const groups = planRollupGroups([...left, ...run, ...right]);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].length, 13);
+});
+
+test("A2: a parented row overlapping its neighbours (pre-prune tree) breaks the run — no group straddles it", () => {
+  // Orphans [0,10) and [10,20) are adjacent to each other, but parented [5,15) sits between them in position order.
+  const rows = [
+    row({ id: 1, msg_start: 0, msg_end: 10 }),
+    row({ id: 2, msg_start: 5, msg_end: 15, parent_id: 99 }),
+    row({ id: 3, msg_start: 10, msg_end: 20 }),
+    ...tiles(10, 20, 10, 4),
+  ];
+  const groups = planRollupGroups(rows);
+  for (const g of groups) assert.ok(!(g.some(r => r.id === 1) && g.some(r => r.id === 3)), "run must not straddle the parented row");
+  // [10,20) restarts the run and joins the ten tiles after it → one full group starting at id 3.
+  assert.ok(groups.some(g => g.length === 10 && g[0].id === 3));
 });
 
 test("A2: unsummarized orphan breaks a run and is never grouped", () => {
