@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.40.0 (unreleased)
+
+### Features
+- **`/plugins` slash command** — inspect detailed plugin status and metrics in a structured view. Reports per-plugin breakdowns including active and total skills, connected MCP servers and available tools, sub-agent execution counts and run states, semantic recall chunk metrics and timestamp spans, and media attachment counts and storage footprint.
+
+### Improvements
+- **Clean YAML code block formatting for slash commands** — slash command responses (`/status`, `/help`, `/skills`, `/subagents`, `/mcp`, `/plugins`) are now rendered inside clean ````yaml` code blocks. This guarantees monospaced alignment, consistent syntax highlighting, and uniform readability across all chat clients (Matrix, Telegram, Discord, Slack, Nostr, IRC) without broken markdown formatting or escaped characters:
+  - `/status` formats runtime health, token breakdown (system, messages, summary rollups), segments, channel connections, and plugin metrics as scannable key-value pairs.
+  - `/help` presents available slash commands without leading slash keys for crisp dictionary highlighting.
+  - `/skills`, `/subagents`, and `/mcp` display clean YAML mappings with status, durations, error descriptions, and tool listings.
+  - Fixed `[object Object]` leak in `/status` by formatting plugin statistics into concise one-line summaries.
+
 ## 0.39.0 (2026-09-17)
 
 ### Fixes
