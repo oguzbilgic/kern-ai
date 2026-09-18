@@ -3,6 +3,7 @@
 ## 0.40.0 (unreleased)
 
 ### Features
+- **Bang command prefix (`!command`) support** — commands like `!status`, `!help`, `!plugins`, `!restart`, `!skills`, `!subagents`, `!mcp` can now be triggered with a leading `!` prefix in addition to `/`. This allows seamless command execution in clients like Matrix (Element, Cinny) and Slack, where leading `/` is intercepted by native client-side command dispatchers.
 - **`/plugins` slash command** — inspect detailed plugin status and metrics in a structured view. Reports per-plugin breakdowns including active and total skills, connected MCP servers and available tools, sub-agent execution counts and run states, semantic recall chunk metrics and timestamp spans, and media attachment counts and storage footprint.
 
 ### Improvements

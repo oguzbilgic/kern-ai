@@ -303,15 +303,16 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
 
   // Helper to enqueue from any interface
   const enqueueMessage = async (text: string, userId: string, iface: string, channel: string, onEvent?: (e: StreamEvent) => void, attachments?: import("./interfaces/types.js").Attachment[]) => {
-    // Slash commands bypass the queue — instant response even if queue is busy
-    const cmd = text.trim();
-    if (cmd.startsWith("/")) {
-      const result = await handleSlashCommand(cmd, userId, iface, agentName, agentDir);
+    // Commands (/ or !) bypass the queue — instant response even if queue is busy
+    const trimmed = text.trim();
+    if (trimmed.startsWith("/") || trimmed.startsWith("!")) {
+      const canonicalCmd = trimmed.startsWith("!") ? "/" + trimmed.slice(1) : trimmed;
+      const result = await handleSlashCommand(canonicalCmd, userId, iface, agentName, agentDir);
       if (result !== null) {
         server.broadcast({
           type: "command-result" as any,
           text: result,
-          command: cmd,
+          command: trimmed,
         });
         return result;
       }

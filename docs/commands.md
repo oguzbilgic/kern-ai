@@ -310,9 +310,11 @@ Output: a per-level table (before / kept / deleted / orphaned / remaining overla
 
 Verified on six fleet databases: before → after health 3→90, 21→100, 45→90, 77→90, 98→100, 100→100; zero overlaps remain anywhere. Remaining deductions are stragglers/gaps at L1+ that the next rollup pass clears.
 
-## Slash commands
+## Slash & Bang commands
 
-Type these in any channel (TUI, Web, Telegram, Slack). Handled by the runtime at the queue level — never sent to the LLM. Instant, zero tokens. Results are broadcast to all connected clients via SSE.
+Type these in any channel (Matrix, Slack, Discord, Telegram, IRC, Nostr, TUI, Web). Both `/` and `!` prefixes are supported (`/status` or `!status`). Handled by the runtime at the queue level — never sent to the LLM. Instant, zero tokens. Results are broadcast to all connected clients via SSE.
+
+The `!` prefix is especially useful in clients like Matrix and Slack where leading `/` triggers native client commands.
 
 ### /status
 
