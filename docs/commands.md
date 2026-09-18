@@ -283,6 +283,30 @@ Then detail lists (truncated at `--limit`): overlaps with both `created_at` stam
 
 The unsegmented tail (messages after the last L0 end) is reported separately — it is pending, not a gap. Never writes to the DB.
 
+## kern scripts segment-prune
+
+Recovery for a summary tree that `segment-health` shows to be violating the tiling invariant — parallel tilings from a re-index, straggler rollups spanning siblings they never summarized, shadowed duplicates. Prune is pure selection: it decides which existing segments form the one true branch and deletes the rest. **Zero LLM calls.** Dry-run by default.
+
+```bash
+kern scripts segment-prune .kern/recall.db                       # dry run: plan + before/after health, nothing written
+kern scripts segment-prune .kern/recall.db --session <id>        # specific session (prefix ok)
+kern scripts segment-prune .kern/recall.db --apply               # execute; copies recall.db → recall.db.pre-prune-<ts> first
+kern scripts segment-prune .kern/recall.db --apply --no-backup   # skip the backup copy
+kern scripts segment-prune .kern/recall.db --json                # plan + health as JSON
+```
+
+Per level, bottom-up:
+
+1. **Parent validation** (L1+). A parent survives only if the children still alive tile its range exactly (a legacy 1-msg fencepost is tolerated). A hole means the parent summarizes content it never saw or claims a range it doesn't own → deleted, its surviving children detached (`parent_id = NULL`). Losing a shadowed duplicate child is fine as long as what's left still tiles — invalidation only cascades where it has to.
+2. **Tiling selection.** Min-cost chain of segments covering the level's span. Every pair of adjacent segments costs its overlap (fencepost free) or its gap. At **L0 gaps outrank overlaps** — a hole at L0 never heals (`indexSession` only moves forward), an overlap only wastes tokens, so an unavoidable L0 overlap is kept and listed as *residual*. At **L1+ overlaps outrank gaps** — a hole there is just orphans below, and the next `rollUpLevels` refills it. Ties: prefer summarized, then segments that already have a parent, then oldest `created_at` (the original tiling is what the tree above was built on; the re-index is the intruder).
+3. **Delete** everything at the level not on the chain. Pending (unsummarized) rows take part too, so a fresh re-index intruder goes before it costs a summarizer call; a genuine new tail chunk is on the chain and stays.
+
+Output: a per-level table (before / kept / deleted / orphaned / remaining overlap / remaining gap / coverage), deletions grouped by reason (`off-path`, `invalid-parent`, `childless-parent`) with `created_at` so a re-index is recognizable, orphan counts per level, residual overlaps, and `segment-health` scores before and (with `--apply`) after.
+
+**Run it with the agent stopped.** Upper levels regrow on their own: the next turn's `indexSession → rollUpLevels` re-batches the orphans into parents. This requires the rollup contiguity fix (#364) to be live first — the old rollup groups orphans in tens by `msg_start` with no adjacency check, and would rebuild the very mega-parents prune just removed. Runs shorter than 10 orphans stay as roots; `composeHistory` injects roots directly, so nothing is lost from the prompt.
+
+Verified on six fleet databases: before → after health 3→90, 21→100, 45→90, 77→90, 98→100, 100→100; zero overlaps remain anywhere. Remaining deductions are stragglers/gaps at L1+ that the next rollup pass clears.
+
 ## Slash commands
 
 Type these in any channel (TUI, Web, Telegram, Slack). Handled by the runtime at the queue level — never sent to the LLM. Instant, zero tokens. Results are broadcast to all connected clients via SSE.
