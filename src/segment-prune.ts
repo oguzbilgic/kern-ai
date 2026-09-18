@@ -235,7 +235,6 @@ export function planPrune(rows: SegRow[], sessionId: string, opts: PlanOptions =
 
   for (const level of levelsPresent) {
     const all = byLevel.get(level)!;
-    const summarized = all.filter(s => s.summarized === 1);
     const before = all.length;
 
     // 1. Parent validation (level ≥ 1). Judged against surviving children only:
@@ -243,7 +242,9 @@ export function planPrune(rows: SegRow[], sessionId: string, opts: PlanOptions =
     //    the parent's range exactly. A hole means the parent summarizes content
     //    it never saw (or claims a range it doesn't own) → delete.
     if (level > 0) {
-      for (const p of summarized) {
+      // Every parent row, summarized or pending: rollUpLevels assigns children at
+      // creation, so the tiling invariant holds from the moment the row exists.
+      for (const p of all) {
         const had = childrenOf.get(p.id) || [];
         const kids = had.filter(k => k.alive).sort((a, b) => a.msg_start - b.msg_start);
         if (had.length === 0) { kill(p, "childless-parent"); continue; }

@@ -290,7 +290,7 @@ Recovery for a summary tree that `segment-health` shows to be violating the tili
 ```bash
 kern scripts segment-prune .kern/recall.db                       # dry run: plan + before/after health (after = plan applied to a scratch snapshot), nothing written
 kern scripts segment-prune .kern/recall.db --session <id>        # specific session (prefix ok)
-kern scripts segment-prune .kern/recall.db --budget 50000        # summary budget for the health simulation (default: config.json next to the DB, else 15k)
+kern scripts segment-prune .kern/recall.db --budget 50000        # summary budget for the health simulation (default: config.json next to the DB, else 75k)
 kern scripts segment-prune .kern/recall.db --apply               # execute; snapshots recall.db → recall.db.pre-prune-<ts> first (SQLite backup API, WAL-safe)
 kern scripts segment-prune .kern/recall.db --apply --no-backup   # skip the snapshot
 kern scripts segment-prune .kern/recall.db --json                # plan + health as JSON
