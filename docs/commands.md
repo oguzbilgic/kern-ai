@@ -267,7 +267,7 @@ Output, per level (L0, L1, L2, …):
 |---|---|
 | `Segs` / `Summ` | segments at this level / how many have a summary |
 | `Orph` | `parent_id IS NULL` — expected for the recent tail waiting to be rolled up |
-| `Strag` | orphans that sit *before* the newest parent at level+1. `rollUpLevels` batches orphans in tens by `msg_start`, so a straggler gets grouped with unrelated segments from weeks later, producing a parent that spans a huge range it never summarized |
+| `Strag` | orphans that sit *before* the newest parent at level+1. Before #364, `rollUpLevels` batched orphans in tens by `msg_start`, so a straggler got grouped with unrelated segments from weeks later, producing a parent that spanned a huge range it never summarized. Now stragglers are picked up by the hole-filler rule on the next rollup pass |
 | `Ovlp` | pairs whose message ranges intersect by ≥2 messages (re-index or restart artifacts) |
 | `Shad` | segments fully contained inside another same-level segment — deletion candidates |
 | `Fence` | 1-message overlaps at incremental chunk boundaries (indexer re-includes `last_segmented_msg`). Systematic and benign; counted but not listed |
@@ -306,7 +306,7 @@ Every level is measured against the same floor — the session's first message. 
 
 Output: a per-level table (before / kept / deleted / orphaned / remaining overlap / remaining gap / coverage), deletions grouped by reason (`off-path`, `invalid-parent`, `childless-parent`) with `created_at` so a re-index is recognizable, orphan counts per level, residual overlaps, and `segment-health` scores before and (with `--apply`) after.
 
-**Run it with the agent stopped.** Upper levels regrow on their own: the next turn's `indexSession → rollUpLevels` re-batches the orphans into parents. This requires the rollup contiguity fix (#364) to be live first — the old rollup groups orphans in tens by `msg_start` with no adjacency check, and would rebuild the very mega-parents prune just removed. Runs shorter than 10 orphans stay as roots; `composeHistory` injects roots directly, so nothing is lost from the prompt.
+**Run it with the agent stopped.** Upper levels regrow on their own: the next turn's `indexSession → rollUpLevels` re-batches the orphans into parents. This requires the rollup contiguity fix (#364) to be live first — the pre-#364 rollup grouped orphans in tens by `msg_start` with no adjacency check, and would rebuild the very mega-parents prune just removed. With #364 live, one rollup pass after prune brought all six fleet databases to 100/100 in simulation.
 
 Verified on six fleet databases: before → after health 3→90, 21→100, 45→90, 77→90, 98→100, 100→100; zero overlaps remain anywhere. Remaining deductions are stragglers/gaps at L1+ that the next rollup pass clears.
 

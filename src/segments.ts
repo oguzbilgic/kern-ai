@@ -204,9 +204,17 @@ export function selectHistorySegments(
     }
   }
 
-  const selected = trimmedSegments
+  const roots = trimmedSegments
     .filter(s => s.parent_id == null)
-    .sort((a, b) => a.msg_start - b.msg_start);
+    .sort((a, b) => a.msg_start - b.msg_start || b.msg_end - a.msg_end || a.id - b.id);
+  // Safety net (#364 A4): a root whose range sits inside another root's range is a
+  // shadow — inject only the covering one. Children tile their parent exactly, so
+  // deduping the roots is enough; expansion below cannot reintroduce an overlap.
+  const selected: HistorySegment[] = [];
+  for (const r of roots) {
+    const covered = selected.some(s => s.msg_start <= r.msg_start && r.msg_end <= s.msg_end);
+    if (!covered) selected.push(r);
+  }
   if (selected.length === 0) return null;
 
   let usedTokens = selected.reduce((s, seg) => s + seg.summary_token_count, 0);
@@ -238,7 +246,69 @@ export function selectHistorySegments(
   return { selected, tokens: usedTokens, snappedBoundary };
 }
 
+export const ROLLUP_SIZE = 10;
+
+export interface RollupRow {
+  id: number;
+  msg_start: number;
+  msg_end: number;
+  start_time: string | null;
+  end_time: string | null;
+  summary: string;
+  token_count: number;
+  summary_token_count: number;
+  parent_id: number | null;
+  summarized: number;
+}
+
+/** Adjacent, allowing the 1-message overlap that pre-#364 chunk boundaries produced. */
+export function isAdjacent(prevEnd: number, nextStart: number): boolean {
+  return nextStart === prevEnd || nextStart === prevEnd - 1;
+}
+
+/**
+ * Pure grouping step of rollUpLevels(): given every segment at one level (sorted by
+ * msg_start), return the groups of summarized orphans to roll up, in order.
+ * See rollUpLevels() for the rules. Exported for tests.
+ */
+export function planRollupGroups(rows: RollupRow[]): RollupRow[][] {
+  if (rows.length === 0) return [];
+  const levelStart = rows[0].msg_start;
+  const parented = rows.filter(r => r.parent_id != null);
+  const hasParentedEndingAt = (pos: number) => parented.some(p => isAdjacent(p.msg_end, pos));
+  const hasParentedStartingAt = (pos: number) => parented.some(p => isAdjacent(pos, p.msg_start));
+
+  // Contiguous runs of summarized orphans.
+  const orphans = rows.filter(r => r.parent_id == null && r.summarized === 1);
+  const runs: RollupRow[][] = [];
+  for (const o of orphans) {
+    const run = runs[runs.length - 1];
+    if (run && isAdjacent(run[run.length - 1].msg_end, o.msg_start)) run.push(o);
+    else runs.push([o]);
+  }
+
+  const groups: RollupRow[][] = [];
+  for (const run of runs) {
+    const runStart = run[0].msg_start;
+    const runEnd = run[run.length - 1].msg_end;
+    const boundedLeft = runStart === levelStart || hasParentedEndingAt(runStart);
+    const boundedRight = hasParentedStartingAt(runEnd);
+    const interior = boundedLeft && boundedRight;
+
+    const full = Math.floor(run.length / ROLLUP_SIZE);
+    for (let g = 0; g < full; g++) groups.push(run.slice(g * ROLLUP_SIZE, (g + 1) * ROLLUP_SIZE));
+    const rest = run.slice(full * ROLLUP_SIZE);
+    if (rest.length === 0 || !interior) continue;
+    // Hole filler: fold the remainder into the last full group if there is one
+    // (a parent of 10–19 is fine), otherwise it becomes a small parent on its own.
+    if (full > 0) groups[groups.length - 1].push(...rest);
+    else groups.push(rest);
+  }
+  return groups;
+}
+
 export class SegmentIndex {
+
   private db: Database.Database;
   private embeddingModel: Parameters<typeof embed>[0]["model"];
   private summaryModel: Parameters<typeof generateText>[0]["model"];
@@ -281,16 +351,33 @@ export class SegmentIndex {
     const state = this.db.prepare(
       "SELECT last_segmented_msg FROM segment_state WHERE session_id = ?"
     ).get(sessionId) as { last_segmented_msg: number } | undefined;
-    const lastSegmented = state?.last_segmented_msg ?? 0;
+    // last_segmented_msg is the index of the last message already inside a segment
+    // (inclusive). Resume strictly after it — re-including it made every chunk
+    // boundary a 1-message overlap (#364 A1).
+    let resumeFrom = state ? state.last_segmented_msg + 1 : 0;
+    if (!state) {
+      // No cursor but segments exist: the cursor was reset (pre-#364 embedding-dimension
+      // change did this). Fast-forward to the tree instead of re-segmenting from 0 —
+      // that re-embedded the whole history and laid a shifted second tiling next to
+      // the first one.
+      const tree = this.db.prepare(
+        "SELECT MAX(msg_end) AS m FROM semantic_segments WHERE session_id = ? AND level = 0"
+      ).get(sessionId) as { m: number | null };
+      if (tree.m != null && tree.m > 0) {
+        resumeFrom = tree.m;
+        this.db.prepare("INSERT OR REPLACE INTO segment_state (session_id, last_segmented_msg) VALUES (?, ?)").run(sessionId, tree.m - 1);
+        log.warn("segments", `segment_state missing for ${sessionId.slice(0, 8)} but L0 covers [0, ${tree.m}) — cursor fast-forwarded`);
+      }
+    }
 
     // Load new messages from the messages table — chunked to prevent OOM
     const allMessages = this.db.prepare(
       "SELECT id, msg_index, role, content, timestamp FROM messages WHERE session_id = ? AND msg_index >= ? ORDER BY msg_index"
-    ).all(sessionId, lastSegmented) as MessageRow[];
+    ).all(sessionId, resumeFrom) as MessageRow[];
 
     if (allMessages.length < 3) return 0;
     // For incremental indexing, wait for enough content to detect topic boundaries
-    if (lastSegmented > 0) {
+    if (resumeFrom > 0) {
       if (allMessages.length < MIN_TAIL_MESSAGES) return 0;
       const tailTokens = allMessages.reduce((sum, m) => sum + Math.ceil(extractText(m.content).length / 4), 0);
       if (tailTokens < MIN_TAIL_TOKENS) return 0;
@@ -345,12 +432,21 @@ export class SegmentIndex {
       const upsertState = this.db.prepare(
         "INSERT OR REPLACE INTO segment_state (session_id, last_segmented_msg) VALUES (?, ?)"
       );
+      // Same-level overlap check. UNIQUE(session, level, start, end) only blocks exact
+      // duplicates; a re-index that cuts one message differently would otherwise lay a
+      // second tiling alongside the first (#364 A3). Any overlap → the range is already
+      // covered → skip. segment_state still advances so we never re-embed this stretch.
+      const overlapping = this.db.prepare(
+        "SELECT 1 FROM semantic_segments WHERE session_id = ? AND level = 0 AND msg_start < ? AND msg_end > ? LIMIT 1"
+      );
 
       let created = 0;
+      let rejected = 0;
       const lastMsgIndex = messages[messages.length - 1].msg_index;
 
       const tx = this.db.transaction(() => {
         for (const seg of merged) {
+          if (overlapping.get(sessionId, seg.msg_end, seg.msg_start)) { rejected++; continue; }
           const info = insertSeg.run(seg.session_id, seg.msg_start, seg.msg_end, seg.start_time, seg.end_time, seg.text, seg.token_count);
           if (info.changes === 0) continue;
           const segId = typeof info.lastInsertRowid === "bigint" ? info.lastInsertRowid : BigInt(info.lastInsertRowid);
@@ -362,6 +458,9 @@ export class SegmentIndex {
       tx();
 
       totalCreated += created;
+      if (rejected > 0) {
+        log.warn("segments", `skipped ${rejected} segment(s) overlapping existing L0 coverage (msgs ${messages[0].msg_index}–${lastMsgIndex}); segment_state was behind the tree`);
+      }
 
       if (created > 0) {
         log.debug("segments", `created ${created} segments from chunk`);
@@ -521,12 +620,24 @@ export class SegmentIndex {
   }
 
   /**
-   * Roll up segments into higher levels.
-   * For each level, find 10+ consecutive summarized segments with no parent_id.
-   * Group them into a parent segment at level+1. Recurse until no more groups.
+   * Roll orphaned, summarized segments up into parents one level higher.
+   *
+   * Invariant (#364): every level tiles the indexed range with exactly one branch,
+   * so a parent must cover exactly the contiguous run of its children. Orphans are
+   * therefore grouped only along contiguous runs (next.msg_start == prev.msg_end,
+   * or == prev.msg_end − 1 for legacy fencepost segments); a discontinuity ends
+   * the run. Never batch by position alone — that produced parents spanning
+   * weeks of siblings they did not own.
+   *
+   * Per run:
+   *   - full groups of ROLLUP_SIZE always roll up;
+   *   - the remainder rolls up only if the run is *interior* — bounded on the right
+   *     by an already-parented segment and on the left by one too (or by the start
+   *     of the level). Such a hole would otherwise stay orphaned forever;
+   *   - the remainder of the trailing (open-ended) run stays orphan until it grows.
+   * Recurse until no level rolls anything.
    */
   private async rollUpLevels(sessionId: string): Promise<void> {
-    const ROLLUP_SIZE = 10;
     let rolled = true;
 
     while (rolled) {
@@ -540,87 +651,85 @@ export class SegmentIndex {
       const maxLevel = maxLevelRow?.max_level ?? 0;
 
       for (let level = 0; level <= maxLevel; level++) {
-        // Get consecutive summarized orphans at this level
-        const orphans = this.db.prepare(
-          `SELECT id, msg_start, msg_end, start_time, end_time, summary, token_count, summary_token_count
+        const rows = this.db.prepare(
+          `SELECT id, msg_start, msg_end, start_time, end_time, summary, token_count, summary_token_count, parent_id, summarized
            FROM semantic_segments
-           WHERE session_id = ? AND level = ? AND parent_id IS NULL AND summarized = 1
-           ORDER BY msg_start`
-        ).all(sessionId, level) as Array<{
-          id: number; msg_start: number; msg_end: number;
-          start_time: string | null; end_time: string | null;
-          summary: string; token_count: number; summary_token_count: number;
-        }>;
+           WHERE session_id = ? AND level = ?
+           ORDER BY msg_start, msg_end`
+        ).all(sessionId, level) as RollupRow[];
 
-        if (orphans.length < ROLLUP_SIZE) continue;
+        const groups = planRollupGroups(rows);
+        if (groups.length === 0) continue;
 
-        // Take groups of ROLLUP_SIZE
-        const groupCount = Math.floor(orphans.length / ROLLUP_SIZE);
-        for (let g = 0; g < groupCount; g++) {
+        for (const group of groups) {
           if (this.abortController?.signal.aborted) break;
-
-          const group = orphans.slice(g * ROLLUP_SIZE, (g + 1) * ROLLUP_SIZE);
-          const parentLevel = level + 1;
-          const msgStart = group[0].msg_start;
-          const msgEnd = group[group.length - 1].msg_end;
-          const startTime = group[0].start_time;
-          const endTime = group[group.length - 1].end_time;
-          const totalTokens = group.reduce((s, seg) => s + seg.token_count, 0);
-
-          // Concatenate child summaries as input for parent summary
-          const childSummaries = group.map((seg, i) =>
-            `[Segment ${i + 1}, msgs ${seg.msg_start}-${seg.msg_end}]\n${seg.summary}`
-          ).join("\n\n");
-
-          const targetTokens = 1500;
-
-          try {
-            const result = await generateText({
-              model: this.summaryModel,
-              prompt: rollupSummaryPrompt(childSummaries, targetTokens, group.length),
-              maxOutputTokens: targetTokens,
-              providerOptions: this.summaryProviderOptions,
-            });
-
-            const summaryText = result.text.trim();
-            if (!summaryText) continue;
-
-            const summaryTokens = result.usage?.outputTokens ?? Math.ceil(summaryText.length / 4);
-
-            // Insert parent, set children's parent_id
-            const tx = this.db.transaction(() => {
-              const info = this.db.prepare(
-                `INSERT OR IGNORE INTO semantic_segments (session_id, msg_start, msg_end, start_time, end_time, level, summary, token_count, summary_token_count, summarized)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
-              ).run(sessionId, msgStart, msgEnd, startTime, endTime, parentLevel, summaryText, totalTokens, summaryTokens);
-
-              let parentId: number | bigint = info.lastInsertRowid;
-              if (info.changes === 0) {
-                // Already exists — find existing parent ID so children don't loop endlessly as orphans
-                const existing = this.db.prepare(
-                  `SELECT id FROM semantic_segments
-                   WHERE session_id = ? AND level = ? AND msg_start = ? AND msg_end = ?`
-                ).get(sessionId, parentLevel, msgStart, msgEnd) as { id: number } | undefined;
-                if (!existing) return;
-                parentId = existing.id;
-              }
-
-              const setParent = this.db.prepare(
-                "UPDATE semantic_segments SET parent_id = ? WHERE id = ?"
-              );
-              for (const child of group) {
-                setParent.run(parentId, child.id);
-              }
-            });
-            tx();
-
-            log("segments", `rolled up ${group.length} L${level} → 1 L${parentLevel} (msgs ${msgStart}-${msgEnd})`);
-            rolled = true;
-          } catch (err: any) {
-            log.error("segments", `rollup failed for L${level} group: ${err.message}`);
-          }
+          if (await this.rollUpGroup(sessionId, level, group)) rolled = true;
         }
       }
+    }
+  }
+
+  /** Summarize one contiguous group of orphans into a parent at level+1. */
+  private async rollUpGroup(sessionId: string, level: number, group: RollupRow[]): Promise<boolean> {
+    const parentLevel = level + 1;
+    const msgStart = group[0].msg_start;
+    const msgEnd = group[group.length - 1].msg_end;
+    const startTime = group[0].start_time;
+    const endTime = group[group.length - 1].end_time;
+    const totalTokens = group.reduce((s, seg) => s + seg.token_count, 0);
+
+    // Concatenate child summaries as input for parent summary
+    const childSummaries = group.map((seg, i) =>
+      `[Segment ${i + 1}, msgs ${seg.msg_start}-${seg.msg_end}]\n${seg.summary}`
+    ).join("\n\n");
+
+    const targetTokens = 1500;
+
+    try {
+      const result = await generateText({
+        model: this.summaryModel,
+        prompt: rollupSummaryPrompt(childSummaries, targetTokens, group.length),
+        maxOutputTokens: targetTokens,
+        providerOptions: this.summaryProviderOptions,
+      });
+
+      const summaryText = result.text.trim();
+      if (!summaryText) return false;
+
+      const summaryTokens = result.usage?.outputTokens ?? Math.ceil(summaryText.length / 4);
+
+      // Insert parent, set children's parent_id
+      const tx = this.db.transaction(() => {
+        const info = this.db.prepare(
+          `INSERT OR IGNORE INTO semantic_segments (session_id, msg_start, msg_end, start_time, end_time, level, summary, token_count, summary_token_count, summarized)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+        ).run(sessionId, msgStart, msgEnd, startTime, endTime, parentLevel, summaryText, totalTokens, summaryTokens);
+
+        let parentId: number | bigint = info.lastInsertRowid;
+        if (info.changes === 0) {
+          // Already exists — find existing parent ID so children don't loop endlessly as orphans
+          const existing = this.db.prepare(
+            `SELECT id FROM semantic_segments
+             WHERE session_id = ? AND level = ? AND msg_start = ? AND msg_end = ?`
+          ).get(sessionId, parentLevel, msgStart, msgEnd) as { id: number } | undefined;
+          if (!existing) return;
+          parentId = existing.id;
+        }
+
+        const setParent = this.db.prepare(
+          "UPDATE semantic_segments SET parent_id = ? WHERE id = ?"
+        );
+        for (const child of group) {
+          setParent.run(parentId, child.id);
+        }
+      });
+      tx();
+
+      log("segments", `rolled up ${group.length} L${level} → 1 L${parentLevel} (msgs ${msgStart}-${msgEnd})`);
+      return true;
+    } catch (err: any) {
+      log.error("segments", `rollup failed for L${level} group: ${err.message}`);
+      return false;
     }
   }
 

@@ -131,8 +131,12 @@ export class MemoryDB {
       this.db.exec("DROP TABLE IF EXISTS vec_chunks");
       this.db.exec("DROP TABLE IF EXISTS vec_segments");
       this.db.exec("DELETE FROM index_state");
-      this.db.exec("DELETE FROM segment_state");
-      log("memory", "Vector indexes dropped, indexing state reset — backfill will run automatically");
+      // segment_state is deliberately kept (#364 A6). Segments and their summaries do
+      // not depend on the embedding model; resetting the cursor here re-segmented the
+      // whole session from message 0 and laid a second, shifted tiling next to the
+      // first one on every provider switch. vec_segments is rebuilt empty and refilled
+      // by new segments only — nothing reads it today.
+      log("memory", "Vector indexes dropped, chunk indexing state reset — backfill will run automatically");
     }
 
     // Create vec tables (virtual tables don't support IF NOT EXISTS)

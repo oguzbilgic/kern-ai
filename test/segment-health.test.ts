@@ -174,18 +174,32 @@ test("segment-health: parent/child inconsistencies — holes, range mismatch, ch
 // --- injection simulation -------------------------------------------------------
 
 test("segment-health: injection waste counts tokens of selected segments already covered", () => {
-  // Two orphans covering the same range → the second one is 100% redundant
+  // Two orphans overlapping by 60 of 100 msgs (neither contains the other, so the
+  // #364 A4 root dedupe leaves both in) → 60% of the smaller one is redundant.
+  const db = makeDb(140, [
+    { id: 1, start: 0, end: 100, tokens: 400 },
+    { id: 2, start: 40, end: 140, tokens: 600, created: "2026-09-17 09:00:00" },
+  ]);
+  const r = analyzeSegmentHealth(db, SID, { budgetTokens: 5000 });
+  assert.ok(r.injection);
+  assert.equal(r.injection.segments, 2);
+  assert.equal(r.injection.tokens, 1000);
+  assert.ok(r.injection.redundantTokens > 0);
+  assert.ok(r.injection.wastePct > 0);
+});
+
+test("segment-health: a fully shadowed root is deduped out of the injection (A4)", () => {
   const db = makeDb(100, [
     { id: 1, start: 0, end: 100, tokens: 400 },
     { id: 2, start: 0, end: 100, tokens: 600, created: "2026-09-17 09:00:00" },
   ]);
   const r = analyzeSegmentHealth(db, SID, { budgetTokens: 5000 });
   assert.ok(r.injection);
-  assert.equal(r.injection.segments, 2);
-  assert.equal(r.injection.tokens, 1000);
-  assert.equal(r.injection.redundantTokens, 600);
-  assert.equal(r.injection.wastePct, 60);
-  assert.equal(r.scoreBreakdown.injected_waste, -30, "capped at -30");
+  assert.equal(r.injection.segments, 1);
+  assert.equal(r.injection.tokens, 400);
+  assert.equal(r.injection.redundantTokens, 0);
+  // The tree is still unhealthy — the shadow is reported as an overlap, just not injected.
+  assert.equal(r.overlaps.length, 1);
 });
 
 test("segment-health: injection expands parents into children when budget allows, like composeHistory", () => {
