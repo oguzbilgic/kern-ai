@@ -56,9 +56,28 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
       return formatStatus(getStatusDataFn());
     }
 
+    case "/plugins": {
+      if (!_pluginCtx) return "```yaml\nplugins: {}\n```";
+      const status = plugins.collectStatus(_pluginCtx);
+      const lines = ["```yaml", "plugins:"];
+      for (const [name, val] of Object.entries(status)) {
+        if (typeof val === "object" && val !== null) {
+          lines.push(`  ${name}:`);
+          for (const [subKey, subVal] of Object.entries(val)) {
+            lines.push(`    ${subKey}: ${JSON.stringify(subVal)}`);
+          }
+        } else {
+          lines.push(`  ${name}: ${JSON.stringify(val)}`);
+        }
+      }
+      lines.push("```");
+      return lines.join("\n");
+    }
+
     case "/help": {
       const cmds: Record<string, string> = {
         status: "show agent status, uptime, token usage",
+        plugins: "show detailed plugin status and metrics",
         restart: "restart the agent process",
       };
       const pluginCmds = plugins.collectCommandDescriptions();

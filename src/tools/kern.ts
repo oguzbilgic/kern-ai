@@ -289,7 +289,28 @@ export function formatStatus(data: StatusData): string {
   if (data.plugins && Object.keys(data.plugins).length > 0) {
     lines.push("plugins:");
     for (const [k, v] of Object.entries(data.plugins)) {
-      lines.push(`  ${k}: ${v}`);
+      if (typeof v === "string") {
+        lines.push(`  ${k}: ${v}`);
+      } else if (v && typeof v === "object") {
+        // Format specific known plugin stats cleanly as one-liners
+        if (k === "recall") {
+          const r = v as any;
+          const buildingStr = r.building ? " (building)" : "";
+          lines.push(`  recall: ${r.chunks ?? 0} chunks${buildingStr}`);
+        } else if (k === "media") {
+          const m = v as any;
+          lines.push(`  media: ${m.total ?? 0} files (${m.images ?? 0} images)`);
+        } else if (k === "subagents") {
+          const s = v as any;
+          lines.push(`  subagents: ${s.running ?? 0} running / ${s.total ?? 0} total`);
+        } else {
+          // generic fallback
+          const summary = Object.entries(v)
+            .map(([subKey, subVal]) => `${subKey}: ${subVal}`)
+            .join(", ");
+          lines.push(`  ${k}: ${summary}`);
+        }
+      }
     }
   }
 
