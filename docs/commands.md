@@ -248,6 +248,41 @@ mv /tmp/<session-id>.jsonl <agent>/.kern/sessions/                 # install, th
 
 recall.db only holds messages indexed at turn-finish, so the final turn or two before a crash may be missing — everything indexed is exact. The command warns if message indexes have gaps.
 
+## kern scripts segment-health
+
+Read-only diagnostics over the semantic summary tree in `recall.db`. The tree has one invariant that should hold at every level: segments tile the message range exactly — no overlaps, no gaps — and every child lies inside its parent. This command reports every violation, plus what it costs: how many redundant summary tokens the agent is actually injecting into its prompt.
+
+```bash
+kern scripts segment-health .kern/recall.db                      # largest session, budget from .kern/config.json
+kern scripts segment-health .kern/recall.db --list               # list sessions
+kern scripts segment-health .kern/recall.db --session <id>       # specific session (prefix ok)
+kern scripts segment-health .kern/recall.db --budget 15000       # simulate injection with a given summary budget
+kern scripts segment-health .kern/recall.db --limit 50           # show up to 50 rows per finding (default 10)
+kern scripts segment-health .kern/recall.db --json               # machine-readable, no truncation
+```
+
+Output, per level (L0, L1, L2, …):
+
+| Column | Meaning |
+|---|---|
+| `Segs` / `Summ` | segments at this level / how many have a summary |
+| `Orph` | `parent_id IS NULL` — expected for the recent tail waiting to be rolled up |
+| `Strag` | orphans that sit *before* the newest parent at level+1. `rollUpLevels` batches orphans in tens by `msg_start`, so a straggler gets grouped with unrelated segments from weeks later, producing a parent that spans a huge range it never summarized |
+| `Ovlp` | pairs whose message ranges intersect by ≥2 messages (re-index or restart artifacts) |
+| `Shad` | segments fully contained inside another same-level segment — deletion candidates |
+| `Fence` | 1-message overlaps at incremental chunk boundaries (indexer re-includes `last_segmented_msg`). Systematic and benign; counted but not listed |
+| `Gaps` | message ranges no segment at this level covers |
+| `RedTok` | summary tokens attributable to real overlap (proportional estimate) |
+| `Coverage` | span of the level and % of it covered |
+
+Then detail lists (truncated at `--limit`): overlaps with both `created_at` stamps so you can tell a re-index from a concurrent write, gaps, stragglers, and parent/child inconsistencies (`range-mismatch`, `non-contiguous-children`, `childless`, `child-outside-parent`).
+
+**Injected context** runs the exact selection `composeHistory()` uses — same boundary snapping, same breadth-first expansion — with the agent's real budget (`maxContextTokens × summaryBudget` read from the `config.json` next to `recall.db`, or `--budget`). Reports segments picked per level, total tokens, and how many of those tokens describe messages already covered by an earlier selected summary. That waste % is the number that matters: on a local model with a 32k window it is the difference between a warm KV cache and a full re-prefill every turn.
+
+**Health** is 100 minus capped penalties: overlapping segments (−30), shadowed segments (−2 each, −20), injected waste % (−30), stragglers (−2 each, −10), parent issues (−1 each, −10). The breakdown is printed so the score is never a mystery.
+
+The unsegmented tail (messages after the last L0 end) is reported separately — it is pending, not a gap. Never writes to the DB.
+
 ## Slash commands
 
 Type these in any channel (TUI, Web, Telegram, Slack). Handled by the runtime at the queue level — never sent to the LLM. Instant, zero tokens. Results are broadcast to all connected clients via SSE.

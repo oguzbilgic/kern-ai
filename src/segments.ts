@@ -152,6 +152,92 @@ interface Segment {
   embedding: number[];
 }
 
+export interface HistorySegment {
+  id: number;
+  level: number;
+  msg_start: number;
+  msg_end: number;
+  start_time: string | null;
+  end_time: string | null;
+  summary: string;
+  token_count: number;
+  summary_token_count: number;
+  parent_id: number | null;
+}
+
+/**
+ * Pure selection step of composeHistory(): pick which summarized segments
+ * fill a token budget for the trimmed region [0, trimmedBeforeMsg).
+ *
+ * - trimmedBeforeMsg is snapped down to the nearest L0 segment end so the
+ *   selection stays stable across consecutive turns (cache hits).
+ * - Starts from top-level (orphan) segments, then expands breadth-first by
+ *   level (all L2s → L1s before any L1 → L0s), most recent first, while the
+ *   budget allows.
+ *
+ * Exported so offline tools (kern scripts segment-health) can reproduce the
+ * exact injection an agent would get, without a live SegmentIndex.
+ */
+export function selectHistorySegments(
+  allSegments: HistorySegment[],
+  trimmedBeforeMsg: number,
+  budgetTokens: number,
+): { selected: HistorySegment[]; tokens: number; snappedBoundary: number } | null {
+  if (allSegments.length === 0) return null;
+
+  const l0Boundaries = allSegments
+    .filter(s => s.level === 0 && s.msg_end <= trimmedBeforeMsg)
+    .map(s => s.msg_end);
+  const snappedBoundary = l0Boundaries.length > 0
+    ? Math.max(...l0Boundaries)
+    : trimmedBeforeMsg;
+
+  const trimmedSegments = allSegments.filter(s => s.msg_start < snappedBoundary);
+  if (trimmedSegments.length === 0) return null;
+
+  const childrenOf = new Map<number, HistorySegment[]>();
+  for (const seg of allSegments) {
+    if (seg.parent_id != null) {
+      const existing = childrenOf.get(seg.parent_id) || [];
+      existing.push(seg);
+      childrenOf.set(seg.parent_id, existing);
+    }
+  }
+
+  const selected = trimmedSegments
+    .filter(s => s.parent_id == null)
+    .sort((a, b) => a.msg_start - b.msg_start);
+  if (selected.length === 0) return null;
+
+  let usedTokens = selected.reduce((s, seg) => s + seg.summary_token_count, 0);
+
+  let expanded = true;
+  while (expanded && usedTokens < budgetTokens) {
+    expanded = false;
+    const maxLevel = Math.max(...selected.map(s => s.level));
+    for (let i = selected.length - 1; i >= 0; i--) {
+      const seg = selected[i];
+      if (seg.level < maxLevel) continue;
+      const children = childrenOf.get(seg.id);
+      if (!children || children.length === 0) continue;
+
+      const parentCost = seg.summary_token_count;
+      const childCost = children.reduce((s, c) => s + c.summary_token_count, 0);
+      const delta = childCost - parentCost;
+
+      if (usedTokens + delta <= budgetTokens) {
+        const sortedChildren = [...children].sort((a, b) => a.msg_start - b.msg_start);
+        selected.splice(i, 1, ...sortedChildren);
+        usedTokens += delta;
+        expanded = true;
+        break;
+      }
+    }
+  }
+
+  return { selected, tokens: usedTokens, snappedBoundary };
+}
+
 export class SegmentIndex {
   private db: Database.Database;
   private embeddingModel: Parameters<typeof embed>[0]["model"];
@@ -809,18 +895,7 @@ export class SegmentIndex {
     text: string;
     levelCounts: Record<number, number>;
     tokens: number;
-    segments: Array<{
-      id: number;
-      level: number;
-      msg_start: number;
-      msg_end: number;
-      start_time: string | null;
-      end_time: string | null;
-      summary: string;
-      token_count: number;
-      summary_token_count: number;
-      parent_id: number | null;
-    }>;
+    segments: HistorySegment[];
   } | null {
     // Get all summarized segments for this session
     const allSegments = this.db.prepare(
@@ -828,78 +903,11 @@ export class SegmentIndex {
        FROM semantic_segments
        WHERE session_id = ? AND summarized = 1
        ORDER BY level DESC, msg_start ASC`
-    ).all(sessionId) as Array<{
-      id: number; msg_start: number; msg_end: number;
-      start_time: string | null; end_time: string | null;
-      parent_id: number | null; level: number;
-      summary: string; token_count: number; summary_token_count: number;
-    }>;
+    ).all(sessionId) as HistorySegment[];
 
-    if (allSegments.length === 0) return null;
-
-    // Snap trim boundary down to nearest L0 segment end for cache stability.
-    // This prevents the summary from changing every turn as new messages shift
-    // the trim boundary by 1-2 messages.
-    const l0Boundaries = allSegments
-      .filter(s => s.level === 0 && s.msg_end <= trimmedBeforeMsg)
-      .map(s => s.msg_end);
-    const snappedBoundary = l0Boundaries.length > 0
-      ? Math.max(...l0Boundaries)
-      : trimmedBeforeMsg;
-
-    // Only segments covering the trimmed region (before snapped boundary)
-    const trimmedSegments = allSegments.filter(s => s.msg_start < snappedBoundary);
-    if (trimmedSegments.length === 0) return null;
-
-    // Build a map of parent → children for expansion
-    const childrenOf = new Map<number, typeof allSegments>();
-    for (const seg of allSegments) {
-      if (seg.parent_id != null) {
-        const existing = childrenOf.get(seg.parent_id) || [];
-        existing.push(seg);
-        childrenOf.set(seg.parent_id, existing);
-      }
-    }
-
-    // Start with top-level segments (no parent) covering trimmed region, sorted by msg_start
-    let selected = trimmedSegments
-      .filter(s => s.parent_id == null)
-      .sort((a, b) => a.msg_start - b.msg_start);
-
-    if (selected.length === 0) return null;
-
-    let usedTokens = selected.reduce((s, seg) => s + seg.summary_token_count, 0);
-
-    // Expand segments breadth-first by level, then recency within each level.
-    // This ensures all L2s expand to L1s before any L1 expands to L0,
-    // giving balanced coverage across the full history.
-    let expanded = true;
-    while (expanded && usedTokens < budgetTokens) {
-      expanded = false;
-      // Find the highest level segment that has children (breadth-first),
-      // breaking ties by recency (rightmost)
-      const maxLevel = Math.max(...selected.map(s => s.level));
-      for (let i = selected.length - 1; i >= 0; i--) {
-        const seg = selected[i];
-        if (seg.level < maxLevel) continue; // expand highest level first
-        const children = childrenOf.get(seg.id);
-        if (!children || children.length === 0) continue;
-
-        // Cost of expansion: remove parent summary, add all children summaries
-        const parentCost = seg.summary_token_count;
-        const childCost = children.reduce((s, c) => s + c.summary_token_count, 0);
-        const delta = childCost - parentCost;
-
-        if (usedTokens + delta <= budgetTokens) {
-          // Replace parent with children
-          const sortedChildren = [...children].sort((a, b) => a.msg_start - b.msg_start);
-          selected.splice(i, 1, ...sortedChildren);
-          usedTokens += delta;
-          expanded = true;
-          break; // restart from the end
-        }
-      }
-    }
+    const picked = selectHistorySegments(allSegments, trimmedBeforeMsg, budgetTokens);
+    if (!picked) return null;
+    const { selected, tokens: usedTokens } = picked;
 
     // Count per level
     const levelCounts: Record<number, number> = {};

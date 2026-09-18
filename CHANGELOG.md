@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- **`kern scripts segment-health <recall.db>`** — read-only analyzer for the semantic summary tree. Per level: segment counts, orphans, stragglers, overlaps (with shadowed and 1-msg fencepost overlaps classified separately), gaps, coverage, and redundant tokens. Lists overlaps/gaps/stragglers/parent-child inconsistencies (truncated at `--limit`, default 10), then simulates the agent's actual `composeHistory()` selection with its real budget to report injected tokens and % waste from overlapping summaries. Health score with a printed breakdown. `--json` for snapshots. Motivated by finding 1,938 overlapping segments on one agent and 42% redundant summary tokens on another; the fix comes separately.
+- **`selectHistorySegments()`** — the selection step of `composeHistory()` extracted as a pure exported function so offline tools reproduce injection exactly. No behavior change.
+
 ## 0.38.0 (2026-09-16)
 
 ### Features
