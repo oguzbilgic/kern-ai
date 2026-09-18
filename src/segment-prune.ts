@@ -171,7 +171,14 @@ function selectTiling(segs: Node[], from: number, target: number, level: number)
   return { path, overlap, gap };
 }
 
-export function planPrune(rows: SegRow[], sessionId: string): PrunePlan {
+export interface PlanOptions {
+  /** First message index of the session (`MIN(msg_index)`). Anchors the L0 tiling so a
+   *  leading gap is charged exactly as segment-health reports it. Defaults to the
+   *  earliest segment start when unknown. */
+  sessionStart?: number;
+}
+
+export function planPrune(rows: SegRow[], sessionId: string, opts: PlanOptions = {}): PrunePlan {
   const nodes: Node[] = rows.map(r => ({ ...r, alive: true }));
   const byId = new Map<number, Node>(nodes.map(n => [n.id, n]));
   const byLevel = new Map<number, Node[]>();
@@ -197,7 +204,11 @@ export function planPrune(rows: SegRow[], sessionId: string): PrunePlan {
   const orphans: PruneOrphan[] = [];
   const residual: ResidualOverlap[] = [];
   const levels: LevelPlan[] = [];
-  const floor = nodes.length ? Math.min(...nodes.map(n => n.msg_start)) : 0; // session's first indexed msg
+  // One floor for every level, on purpose: the invariant is that each level tiles the
+  // whole indexed range. An L1 that only starts at msg 8056 while L0 starts at 0 has a
+  // real gap — those L0s are parentless — and the plan should say so. A leading gap costs
+  // the same on every candidate path, so it never changes which segments are selected.
+  const floor = opts.sessionStart ?? (nodes.length ? Math.min(...nodes.map(n => n.msg_start)) : 0);
 
   const kill = (n: Node, reason: DeleteReason, detail?: string) => {
     if (!n.alive) return;
@@ -286,6 +297,17 @@ export function planPrune(rows: SegRow[], sessionId: string): PrunePlan {
   return { sessionId, deletions, orphans, residual, levels };
 }
 
+export function sessionStart(db: Database.Database, sessionId: string): number | undefined {
+  const r = db.prepare("SELECT MIN(msg_index) AS m FROM messages WHERE session_id = ?").get(sessionId) as { m: number | null } | undefined;
+  return r?.m ?? undefined;
+}
+
+/** True if `vec_segments` exists on this connection (needs sqlite-vec loaded to be usable). */
+export function hasVecSegments(db: Database.Database): boolean {
+  const r = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec_segments'").get();
+  return !!r;
+}
+
 export function loadSegmentRows(db: Database.Database, sessionId: string): SegRow[] {
   return db.prepare(
     `SELECT id, session_id, msg_start, msg_end, start_time, end_time, parent_id, level, summary,
@@ -295,17 +317,24 @@ export function loadSegmentRows(db: Database.Database, sessionId: string): SegRo
 }
 
 /**
- * Run the plan. One transaction: delete rows, null orphaned parent_ids,
- * drop matching vec_segments rows if that table exists.
+ * Run the plan. One transaction: null orphaned parent_ids, delete rows, and delete the
+ * matching `vec_segments` rows (segment embeddings, rowid = segment id).
+ *
+ * `vec_segments` is a sqlite-vec `vec0` virtual table; the caller's connection must have
+ * `sqliteVec.load(db)` applied or the DELETE cannot be prepared. That is an error, not a
+ * skip — leaving embeddings for deleted segments would make recall return dead ids.
+ * A DB with no `vec_segments` table at all (test fixtures, stripped copies) is fine.
  */
 export function applyPrune(db: Database.Database, plan: PrunePlan): { deleted: number; orphaned: number } {
   const delStmt = db.prepare("DELETE FROM semantic_segments WHERE id = ?");
   const orphanStmt = db.prepare("UPDATE semantic_segments SET parent_id = NULL WHERE id = ?");
   let vecStmt: Database.Statement | null = null;
-  try {
-    vecStmt = db.prepare("DELETE FROM vec_segments WHERE rowid = ?");
-  } catch {
-    vecStmt = null; // extension not loaded or table absent — segment embeddings are rebuilt lazily anyway
+  if (hasVecSegments(db)) {
+    try {
+      vecStmt = db.prepare("DELETE FROM vec_segments WHERE rowid = ?");
+    } catch (err) {
+      throw new Error(`vec_segments exists but cannot be opened (sqlite-vec not loaded on this connection?): ${(err as Error).message}`);
+    }
   }
 
   const tx = db.transaction(() => {
@@ -314,7 +343,7 @@ export function applyPrune(db: Database.Database, plan: PrunePlan): { deleted: n
     for (const o of plan.orphans) orphanStmt.run(o.id);
     for (const d of [...plan.deletions].sort((a, b) => a.level - b.level)) {
       delStmt.run(d.id);
-      if (vecStmt) { try { vecStmt.run(d.id); } catch { /* ignore */ } }
+      if (vecStmt) vecStmt.run(d.id);
     }
   });
   tx();

@@ -288,10 +288,11 @@ The unsegmented tail (messages after the last L0 end) is reported separately —
 Recovery for a summary tree that `segment-health` shows to be violating the tiling invariant — parallel tilings from a re-index, straggler rollups spanning siblings they never summarized, shadowed duplicates. Prune is pure selection: it decides which existing segments form the one true branch and deletes the rest. **Zero LLM calls.** Dry-run by default.
 
 ```bash
-kern scripts segment-prune .kern/recall.db                       # dry run: plan + before/after health, nothing written
+kern scripts segment-prune .kern/recall.db                       # dry run: plan + before/after health (after = plan applied to a scratch snapshot), nothing written
 kern scripts segment-prune .kern/recall.db --session <id>        # specific session (prefix ok)
-kern scripts segment-prune .kern/recall.db --apply               # execute; copies recall.db → recall.db.pre-prune-<ts> first
-kern scripts segment-prune .kern/recall.db --apply --no-backup   # skip the backup copy
+kern scripts segment-prune .kern/recall.db --budget 50000        # summary budget for the health simulation (default: config.json next to the DB, else 15k)
+kern scripts segment-prune .kern/recall.db --apply               # execute; snapshots recall.db → recall.db.pre-prune-<ts> first (SQLite backup API, WAL-safe)
+kern scripts segment-prune .kern/recall.db --apply --no-backup   # skip the snapshot
 kern scripts segment-prune .kern/recall.db --json                # plan + health as JSON
 ```
 
@@ -299,7 +300,9 @@ Per level, bottom-up:
 
 1. **Parent validation** (L1+). A parent survives only if the children still alive tile its range exactly (a legacy 1-msg fencepost is tolerated). A hole means the parent summarizes content it never saw or claims a range it doesn't own → deleted, its surviving children detached (`parent_id = NULL`). Losing a shadowed duplicate child is fine as long as what's left still tiles — invalidation only cascades where it has to.
 2. **Tiling selection.** Min-cost chain of segments covering the level's span. Every pair of adjacent segments costs its overlap (fencepost free) or its gap. At **L0 gaps outrank overlaps** — a hole at L0 never heals (`indexSession` only moves forward), an overlap only wastes tokens, so an unavoidable L0 overlap is kept and listed as *residual*. At **L1+ overlaps outrank gaps** — a hole there is just orphans below, and the next `rollUpLevels` refills it. Ties: prefer summarized, then segments that already have a parent, then oldest `created_at` (the original tiling is what the tree above was built on; the re-index is the intruder).
-3. **Delete** everything at the level not on the chain. Pending (unsummarized) rows take part too, so a fresh re-index intruder goes before it costs a summarizer call; a genuine new tail chunk is on the chain and stays.
+3. **Delete** everything at the level not on the chain, plus the matching `vec_segments` embedding rows. Pending (unsummarized) rows take part too, so a fresh re-index intruder goes before it costs a summarizer call; a genuine new tail chunk is on the chain and stays.
+
+Every level is measured against the same floor — the session's first message. An L1 that begins at message 8056 while L0 begins at 0 has a real gap (those L0s have no parent), and the report says so. A leading gap costs the same on every candidate chain, so it never changes what gets selected.
 
 Output: a per-level table (before / kept / deleted / orphaned / remaining overlap / remaining gap / coverage), deletions grouped by reason (`off-path`, `invalid-parent`, `childless-parent`) with `created_at` so a re-index is recognizable, orphan counts per level, residual overlaps, and `segment-health` scores before and (with `--apply`) after.
 

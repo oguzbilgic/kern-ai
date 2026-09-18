@@ -1,10 +1,19 @@
 import Database from "better-sqlite3";
-import { copyFileSync, existsSync } from "fs";
+import * as sqliteVec from "sqlite-vec";
+import { existsSync, rmSync } from "fs";
 import { resolve } from "path";
 import { analyzeSegmentHealth, listSessions } from "../segment-health.js";
-import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune } from "../segment-prune.js";
+import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune, sessionStart } from "../segment-prune.js";
 
-const USAGE = "Usage: kern scripts segment-prune <recall.db> [--session <id>] [--apply] [--no-backup] [--limit <n>] [--json]";
+const USAGE = "Usage: kern scripts segment-prune <recall.db> [--session <id>] [--budget <tokens>] [--apply] [--no-backup] [--limit <n>] [--json]";
+
+/** Consistent snapshot of `db` via SQLite's online backup API (WAL-safe, journal-mode agnostic). */
+async function snapshot(db: Database.Database, dest: string): Promise<Database.Database> {
+  await db.backup(dest);
+  const copy = new Database(dest, { fileMustExist: true });
+  sqliteVec.load(copy);
+  return copy;
+}
 
 export async function segmentPrune(args: string[]): Promise<void> {
   const positional: string[] = [];
@@ -13,6 +22,7 @@ export async function segmentPrune(args: string[]): Promise<void> {
   let backup = true;
   let limit = 10;
   let json = false;
+  let budget: number | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -20,6 +30,7 @@ export async function segmentPrune(args: string[]): Promise<void> {
     else if (a === "--apply") apply = true;
     else if (a === "--no-backup") backup = false;
     else if (a === "--limit") limit = Number(args[++i]);
+    else if (a === "--budget") budget = Number(args[++i]);
     else if (a === "--json") json = true;
     else if (a.startsWith("--")) {
       console.error(`Unknown flag ${a}\n${USAGE}`);
@@ -39,6 +50,10 @@ export async function segmentPrune(args: string[]): Promise<void> {
   }
 
   const db = new Database(dbPath, { readonly: !apply, fileMustExist: true });
+  sqliteVec.load(db);
+  const healthOpts = budget ? { budgetTokens: budget } : {};
+  let scratch: Database.Database | null = null;
+  const scratchPath = `${dbPath}.prune-dryrun-${process.pid}`;
   try {
     const sessions = listSessions(db);
     if (sessions.length === 0) {
@@ -53,20 +68,25 @@ export async function segmentPrune(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    const before = analyzeSegmentHealth(db, sessionId);
+    const before = analyzeSegmentHealth(db, sessionId, healthOpts);
     const rows = loadSegmentRows(db, sessionId);
-    const plan = planPrune(rows, sessionId);
+    const plan = planPrune(rows, sessionId, { sessionStart: sessionStart(db, sessionId) });
 
     let applied: { deleted: number; orphaned: number } | null = null;
     let backupPath: string | null = null;
-    let after = null;
+    let after: ReturnType<typeof analyzeSegmentHealth>;
     if (apply) {
       if (backup) {
         backupPath = `${dbPath}.pre-prune-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-        copyFileSync(dbPath, backupPath);
+        await db.backup(backupPath);
       }
       applied = applyPrune(db, plan);
-      after = analyzeSegmentHealth(db, sessionId);
+      after = analyzeSegmentHealth(db, sessionId, healthOpts);
+    } else {
+      // Dry run: apply the plan to a throwaway snapshot so "after" is real, not estimated.
+      scratch = await snapshot(db, scratchPath);
+      applyPrune(scratch, plan);
+      after = analyzeSegmentHealth(scratch, sessionId, healthOpts);
     }
 
     if (json) {
@@ -82,9 +102,13 @@ export async function segmentPrune(args: string[]): Promise<void> {
     const fmt = (h: ReturnType<typeof analyzeSegmentHealth>) =>
       `${h.score}/100  overlaps ${h.overlaps.length}  shadowed ${h.levels.reduce((s, l) => s + l.shadowed, 0)}  parent issues ${h.parentIssues.length}  stragglers ${h.stragglers.length}  gaps ${h.gaps.length}`;
     console.log(`Health before: ${fmt(before)}`);
-    if (after) console.log(`Health after:  ${fmt(after)}`);
-    else console.log("Dry run — nothing written. Re-run with --apply to execute.");
+    console.log(`Health after:  ${fmt(after)}${apply ? "" : "  (simulated)"}`);
+    if (!apply) console.log("Dry run — nothing written. Re-run with --apply to execute.");
   } finally {
     db.close();
+    if (scratch) {
+      scratch.close();
+      rmSync(scratchPath, { force: true });
+    }
   }
 }

@@ -235,3 +235,27 @@ test("segment-prune: formatPrunePlan renders table, reasons, orphans", () => {
   assert.match(out, /Orphaned .*L1 1/);
   assert.match(out, /Zero LLM calls/);
 });
+
+test("segment-prune: sessionStart anchors L0 so a leading gap is charged like segment-health does", () => {
+  const db = makeDb(100, [{ id: 1, start: 20, end: 60 }, { id: 2, start: 60, end: 100 }]);
+  const noAnchor = planPrune(loadSegmentRows(db, SID), SID);
+  assert.equal(noAnchor.levels[0].pathGap, 0);
+  const anchored = planPrune(loadSegmentRows(db, SID), SID, { sessionStart: 0 });
+  assert.equal(anchored.levels[0].pathGap, 20);
+  assert.equal(anchored.deletions.length, 0);
+});
+
+test("segment-prune: applyPrune deletes matching vec_segments rows when the table exists", () => {
+  const db = makeDb(120, [
+    { id: 1, start: 0, end: 40 }, { id: 2, start: 40, end: 80 }, { id: 3, start: 80, end: 120 },
+    { id: 21, start: 0, end: 39, created: "2026-09-01" },
+  ]);
+  // Plain table stands in for the vec0 virtual table; same rowid = segment id contract.
+  db.exec("CREATE TABLE vec_segments (rowid INTEGER PRIMARY KEY, embedding BLOB)");
+  for (const id of [1, 2, 3, 21]) db.prepare("INSERT INTO vec_segments (rowid, embedding) VALUES (?, x'00')").run(id);
+  const plan = planPrune(loadSegmentRows(db, SID), SID);
+  assert.deepEqual(plan.deletions.map(d => d.id), [21]);
+  applyPrune(db, plan);
+  const left = (db.prepare("SELECT rowid FROM vec_segments ORDER BY rowid").all() as Array<{ rowid: number }>).map(r => r.rowid);
+  assert.deepEqual(left, [1, 2, 3]);
+});
