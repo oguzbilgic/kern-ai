@@ -22,8 +22,6 @@ export interface OrphanChunk {
   session_id: string;
   msg_start: number;
   msg_end: number;
-  text: string;
-  token_count: number;
 }
 
 export interface RecallRepairPlan {
@@ -60,7 +58,12 @@ export function planRecallRepair(db: Database.Database, sessionId: string): Reca
   let vectorChunks = 0;
   let orphans: OrphanChunk[] = [];
 
-  try {
+  // Verify vec_chunks table exists in the schema
+  const vecTableExists = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec_chunks'"
+  ).get();
+
+  if (vecTableExists) {
     const vecRow = db.prepare(`
       SELECT count(v.rowid) as cnt
       FROM chunks c
@@ -69,18 +72,18 @@ export function planRecallRepair(db: Database.Database, sessionId: string): Reca
     `).get(sessionId) as { cnt: number };
     vectorChunks = vecRow.cnt;
 
-    // Find orphaned chunks lacking vec_chunks rows
+    // Find orphaned chunks lacking vec_chunks rows (lightweight: id, session_id, msg_start, msg_end)
     orphans = db.prepare(`
-      SELECT c.id, c.session_id, c.msg_start, c.msg_end, c.text, c.token_count
+      SELECT c.id, c.session_id, c.msg_start, c.msg_end
       FROM chunks c
       LEFT JOIN vec_chunks v ON v.rowid = c.id
       WHERE c.session_id = ? AND v.rowid IS NULL
       ORDER BY c.id ASC
     `).all(sessionId) as OrphanChunk[];
-  } catch {
-    // If vec_chunks doesn't exist or isn't loaded, all chunks are effectively orphans
+  } else {
+    // vec_chunks table does not exist at all in DB: all chunks are orphans
     orphans = db.prepare(`
-      SELECT id, session_id, msg_start, msg_end, text, token_count
+      SELECT id, session_id, msg_start, msg_end
       FROM chunks
       WHERE session_id = ?
       ORDER BY id ASC

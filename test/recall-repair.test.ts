@@ -52,11 +52,6 @@ test("planRecallRepair: detects clean/healthy index as no-op", () => {
       (2, '${sessionId}', 2, 3, 'chunk 2'),
       (3, '${sessionId}', 4, 5, 'chunk 3');
 
-    INSERT INTO vec_chunks (rowid, embedding) VALUES
-      (1, '[0.1, 0.2, 0.3, 0.4]'),
-      (2, '[0.2, 0.3, 0.4, 0.5]'),
-      (3, '[0.3, 0.4, 0.5, 0.6]');
-
     INSERT INTO messages (session_id, msg_index, role, content) VALUES
       ('${sessionId}', 0, 'user', 'msg 0'),
       ('${sessionId}', 1, 'assistant', 'msg 1');
@@ -64,6 +59,11 @@ test("planRecallRepair: detects clean/healthy index as no-op", () => {
     INSERT INTO index_state (session_id, last_indexed_msg) VALUES
       ('${sessionId}', 2);
   `);
+
+  const insertVec = db.prepare("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)");
+  insertVec.run(1n, new Float32Array([0.1, 0.2, 0.3, 0.4]));
+  insertVec.run(2n, new Float32Array([0.2, 0.3, 0.4, 0.5]));
+  insertVec.run(3n, new Float32Array([0.3, 0.4, 0.5, 0.6]));
 
   const plan = planRecallRepair(db, sessionId);
 
@@ -86,12 +86,12 @@ test("planRecallRepair: identifies orphaned chunks without vec_chunks entries", 
       (3, '${sessionId}', 4, 5, 'chunk 3'),
       (4, '${sessionId}', 6, 7, 'chunk 4');
 
-    INSERT INTO vec_chunks (rowid, embedding) VALUES
-      (1, '[0.1, 0.2, 0.3, 0.4]');
-
     INSERT INTO index_state (session_id, last_indexed_msg) VALUES
       ('${sessionId}', 8);
   `);
+
+  const insertVec = db.prepare("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)");
+  insertVec.run(1n, new Float32Array([0.1, 0.2, 0.3, 0.4]));
 
   const plan = planRecallRepair(db, sessionId);
 

@@ -42,8 +42,11 @@ export async function recallRepair(args: string[]): Promise<void> {
   const db = new Database(dbPath, { fileMustExist: true });
   try {
     sqliteVec.load(db);
-  } catch {
-    console.error("Warning: failed to load sqlite-vec extension");
+  } catch (err: any) {
+    console.error(`Error: failed to load sqlite-vec extension: ${err.message}`);
+    console.error("sqlite-vec is required for recall-repair to safely inspect vector tables.");
+    db.close();
+    process.exit(1);
   }
 
   try {
@@ -92,6 +95,17 @@ export async function recallRepair(args: string[]): Promise<void> {
       console.log(`  Orphans:  0 missing vectors`);
       console.log(`  Scan:     ${(plan.lastIndexedMsg ?? 0).toLocaleString()} / ${plan.totalMessages.toLocaleString()} msgs (100.0% scanned, 0 lag)`);
       console.log("");
+      console.log("Nothing to repair. Zero changes needed.");
+      return;
+    }
+
+    if (plan.orphanChunks.length === 0) {
+      console.log("Status: Healthy (indexing in progress)");
+      console.log(`  Chunks:   ${plan.vectorChunks.toLocaleString()} / ${plan.totalChunks.toLocaleString()} vectors (${coverage}% coverage)`);
+      console.log(`  Orphans:  0 missing vectors`);
+      console.log(`  Scan:     ${(plan.lastIndexedMsg ?? 0).toLocaleString()} / ${plan.totalMessages.toLocaleString()} msgs (${plan.tailLag} msgs pending)`);
+      console.log("");
+      console.log("All existing chunks have vectors. Indexing is progressing normally in the background.");
       console.log("Nothing to repair. Zero changes needed.");
       return;
     }
