@@ -3,9 +3,9 @@
 ## 0.40.0 (unreleased)
 
 ### Features
-- **`kern scripts recall-repair <recall.db>`** — recovery tool for recall vector indexes with orphaned chunks. Pure SQLite (zero LLM calls, zero API credentials). Prunes orphaned chunks and rewinds the index scan cursor so the agent's native background indexer cleanly re-indexes missing messages on next start or turn. Dry-run by default; zero-op when index is already healthy (0 changes, 0 writes).
-- **`!recall-health` and `!segment-health` chat commands** — inspect embedding pipeline and summary tree health live in chat via `/recall-health` or `/segment-health`. Bypasses the LLM queue for instant read-only diagnostics on the active session.
-- **`kern scripts recall-health <recall.db>`** — offline diagnostic tool for `recall.db`. Checks message lag, chunk size distribution, batch blockers, surrogate pair integrity, vector table sync, and stalled messages, with an itemized 0–100 health score.
+- **`recall-repair`** — recovery tool for recall vector indexes with orphaned chunks. Pure SQLite (zero LLM calls, zero API credentials). Prunes orphaned chunks and rewinds the index scan cursor so the agent's native background indexer cleanly re-indexes missing messages on next start or turn. Accessible offline via `kern scripts recall-repair <recall.db>`. Dry-run by default; zero-op when index is already healthy (0 changes, 0 writes).
+- **`recall-health`** — diagnostic tool for `recall.db`. Checks message lag, chunk size distribution, batch blockers, surrogate pair integrity, vector table sync, and stalled messages, with an itemized 0–100 health score. Accessible live in chat via `/recall-health` or `!recall-health` (bypassing the LLM queue for instant read-only diagnostics), or offline via `kern scripts recall-health <recall.db>`.
+- **`segment-health`** — live chat command (`/segment-health` or `!segment-health`) to inspect the semantic summary tree directly from chat, bypassing the LLM queue to report levels, overlaps, gaps, and injection token waste.
 - **Bang command prefix (`!command`) support** — commands (`!status`, `!help`, `!plugins`, `!restart`, etc.) can be triggered with a leading `!` prefix in addition to `/`, avoiding client-side interception in clients like Matrix and Slack.
 - **`/plugins` slash command** — inspect detailed plugin metrics (skills, MCP servers and tools, sub-agents, recall chunks, media attachments) in a structured view.
 
