@@ -3,13 +3,15 @@ import { embed, embedMany } from "ai";
 import { readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { log } from "../../log.js";
-import { extractText } from "../../util.js";
+import { extractText, capForEmbedding, EMBED_MAX_CHARS } from "../../util.js";
 import { createEmbeddingModel } from "../../model.js";
 import type { ModelMessage } from "ai";
 import type { MemoryDB } from "../../memory.js";
 import type { KernConfig } from "../../config.js";
 
 const MAX_CHUNK_TOKENS = 1000; // rough token limit per chunk
+const EMBED_BATCH_SIZE = 100;
+const EMBED_MIN_CHARS = 500;
 
 // Normalize an ISO8601 string (UTC `Z` or `±HH:MM` offset) to canonical UTC
 // `Z` form for storage. Ensures `recall.db` timestamp column is UTC-normalized
@@ -117,29 +119,27 @@ export class RecallIndex {
       return 0;
     }
 
-    // Embed chunks in batches (API limits)
-    const BATCH_SIZE = 100;
+    // Embed chunks in batches with shrink-and-retry for resilience (#315)
     const texts = chunks.map((c) => c.text);
     log.debug("recall", `embedding ${texts.length} chunks (${texts.reduce((a, t) => a + t.length, 0)} chars)`);
 
-    const embeddings: number[][] = [];
+    let embeddings: number[][];
     try {
-      for (let b = 0; b < texts.length; b += BATCH_SIZE) {
-        const batch = texts.slice(b, b + BATCH_SIZE);
-        const result = await embedMany({ model: this.embeddingModel, values: batch });
-        embeddings.push(...result.embeddings);
-        if (texts.length > BATCH_SIZE) {
-          log.debug("recall", `embedded batch ${Math.floor(b / BATCH_SIZE) + 1}/${Math.ceil(texts.length / BATCH_SIZE)}`);
-        }
-      }
+      embeddings = await this.embedTexts(texts);
     } catch (err: any) {
       log.error("recall", `embedding failed: ${err.message}`);
       return 0;
     }
 
-    // Insert chunks + embeddings
+    // Insert chunks + embeddings (re-vectorize existing chunks on dimension rebuilds, #333)
     const insertChunk = this.db.prepare(
       "INSERT OR IGNORE INTO chunks (session_id, msg_start, msg_end, text, timestamp, token_count) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const selectChunkId = this.db.prepare(
+      "SELECT id FROM chunks WHERE session_id = ? AND msg_start = ? AND msg_end = ?"
+    );
+    const deleteVec = this.db.prepare(
+      "DELETE FROM vec_chunks WHERE rowid = ?"
     );
     const insertVec = this.db.prepare(
       "INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)"
@@ -160,8 +160,19 @@ export class RecallIndex {
           chunk.timestamp,
           chunk.token_count
         );
-        if (info.changes === 0) continue; // duplicate chunk, skip vec insert
-        const chunkId = typeof info.lastInsertRowid === "bigint" ? info.lastInsertRowid : BigInt(info.lastInsertRowid);
+
+        let chunkId: bigint;
+        if (info.changes === 0) {
+          // Row already exists in chunks table (e.g. after a vector table dimension rebuild).
+          // Look up its existing ID so we can insert or re-vectorize into vec_chunks (#333).
+          const row = selectChunkId.get(chunk.session_id, chunk.msg_start, chunk.msg_end) as { id: number | bigint } | undefined;
+          if (!row) continue;
+          chunkId = typeof row.id === "bigint" ? row.id : BigInt(row.id);
+          deleteVec.run(chunkId);
+        } else {
+          chunkId = typeof info.lastInsertRowid === "bigint" ? info.lastInsertRowid : BigInt(info.lastInsertRowid);
+        }
+
         insertVec.run(chunkId, new Float32Array(embeddings[i]));
         indexed++;
       }
@@ -171,6 +182,49 @@ export class RecallIndex {
 
     log("recall", `indexed ${indexed} chunks for session ${sessionId.slice(0, 8)}...`);
     return indexed;
+  }
+
+  /**
+   * Embed texts in batches with shrink-and-retry fallback.
+   */
+  private async embedTexts(texts: string[]): Promise<number[][]> {
+    const embeddings: number[][] = [];
+    for (let b = 0; b < texts.length; b += EMBED_BATCH_SIZE) {
+      const batch = texts.slice(b, b + EMBED_BATCH_SIZE).map((t) => capForEmbedding(t));
+      try {
+        const result = await embedMany({ model: this.embeddingModel, values: batch });
+        embeddings.push(...result.embeddings);
+      } catch (err: any) {
+        log.warn("recall", `embed batch failed (${err.message}) — retrying values individually`);
+        for (const value of batch) {
+          embeddings.push(await this.embedOne(value));
+        }
+      }
+      if (texts.length > EMBED_BATCH_SIZE) {
+        log.debug("recall", `embedded batch ${Math.floor(b / EMBED_BATCH_SIZE) + 1}/${Math.ceil(texts.length / EMBED_BATCH_SIZE)}`);
+      }
+    }
+    return embeddings;
+  }
+
+  /**
+   * Embed a single value, halving it until the provider accepts it.
+   */
+  private async embedOne(value: string): Promise<number[]> {
+    let chars = Math.min(value.length, EMBED_MAX_CHARS);
+    for (;;) {
+      try {
+        const { embedding } = await embed({
+          model: this.embeddingModel,
+          value: capForEmbedding(value, chars),
+        });
+        return embedding;
+      } catch (err: any) {
+        if (chars <= EMBED_MIN_CHARS) throw err;
+        chars = Math.max(EMBED_MIN_CHARS, Math.floor(chars / 2));
+        log.warn("recall", `embed value rejected — retrying at ${chars} chars`);
+      }
+    }
   }
 
   /**

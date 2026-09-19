@@ -2,6 +2,12 @@
 
 ## 0.40.0 (unreleased)
 
+### Fixes
+- **Recall embedding resilience and dimension rebuild re-vectorization** ([#315](https://github.com/oguzbilgic/kern-ai/issues/315), [#333](https://github.com/oguzbilgic/kern-ai/issues/333)) — embedding pipeline no longer stalls on oversized chunks or drops vectors during dimension rebuilds:
+  - Caps chunk text inputs using `capForEmbedding` (8,000 characters) before sending to `embedMany` to prevent provider HTTP 400 rejection on large messages.
+  - Implements shrink-and-retry fallback: if a batch fails, individual chunks are retried one-by-one and halved down to 500 characters until accepted, ensuring progress is guaranteed rather than aborting the entire session index.
+  - Fixes vector loss on dimension rebuilds: when an embedding dimension mismatch drops `vec_chunks`, subsequent indexing looks up existing chunk IDs in `chunks` and re-vectorizes them into `vec_chunks` instead of skipping vector insertion when `INSERT OR IGNORE` encounters existing rows.
+
 ### Features
 - **`!embed-health` and `!segment-health` chat commands** — inspect embedding pipeline health and semantic summary tree health live in chat over Matrix, Discord, Slack, Telegram, Nostr, and IRC via `/embed-health` or `!embed-health` and `/segment-health` or `!segment-health`. Bypasses the LLM queue for instant read-only diagnostics on the running agent's active session without needing shell access.
 - **`kern scripts embed-health <recall.db>`** — offline diagnostic tool for the recall embedding index in `recall.db`. Read-only analyzer covering both conversational chunks (`chunks` / `vec_chunks`) and semantic segment rollups (`semantic_segments` / `vec_segments`). Checks 6 invariant dimensions: message lag and coverage, chunk size distribution (token and char percentiles with `<1k`, `1k–4k`, `4k–8k`, `>8k` buckets), batch blockers (>8192 tokens or >16k chars triggering provider HTTP 400), UTF-16 surrogate pair integrity / lossy replacement checks, vector table sync (`orphanContent`, `ghostVectors`, dimensionality mismatch), and exact identification of stalled messages blocking the unindexed tail. Includes `--session`, `--limit`, `--list`, and `--json` support with a 0–100 itemized health score.
