@@ -8,11 +8,15 @@ import { setTelegramBot } from "../plugins/telegram/plugin.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
-function mdToHtml(text: string): string {
+export function mdToHtml(text: string): string {
   let html = stripAnsi(text);
 
-  // Code blocks first — protect from other replacements
-  html = html.replace(/```\w*\n([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
+  // Code blocks first — preserve language class for Telegram syntax highlighting
+  html = html.replace(/```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (_m, lang, code) => {
+    return lang
+      ? `<pre><code class="language-${lang}">${code}</code></pre>`
+      : `<pre><code>${code}</code></pre>`;
+  });
 
   // Inline code
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -37,9 +41,9 @@ function mdToHtml(text: string): string {
   return html;
 }
 
-function stripMarkdown(text: string): string {
+export function stripMarkdown(text: string): string {
   let plain = stripAnsi(text);
-  plain = plain.replace(/```\w*\n([\s\S]*?)```/g, "$1");
+  plain = plain.replace(/```[a-zA-Z0-9_-]*\n([\s\S]*?)```/g, "$1");
   plain = plain.replace(/`([^`]+)`/g, "$1");
   plain = plain.replace(/\*\*(.+?)\*\*/g, "$1");
   plain = plain.replace(/(?<![*])(\*)(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$2");

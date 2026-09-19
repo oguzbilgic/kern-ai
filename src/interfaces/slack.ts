@@ -8,9 +8,10 @@ import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
-function mdToSlack(text: string): string {
+export function mdToSlack(text: string): string {
   let s = stripAnsi(text);
-  // Code blocks — leave as-is, Slack supports ```
+  // Code blocks — strip language tag so Slack mrkdwn doesn't render it as literal text
+  s = s.replace(/```[a-zA-Z0-9_-]+\n/g, "```\n");
   // Bold: **text** → *text*
   s = s.replace(/\*\*(.+?)\*\*/g, "*$1*");
   // Italic: *text* → _text_ (but not inside bold)
