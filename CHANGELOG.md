@@ -3,27 +3,18 @@
 ## 0.40.0 (unreleased)
 
 ### Features
-- **`!embed-health` and `!segment-health` chat commands** — inspect embedding pipeline health and semantic summary tree health live in chat over Matrix, Discord, Slack, Telegram, Nostr, and IRC via `/embed-health` or `!embed-health` and `/segment-health` or `!segment-health`. Bypasses the LLM queue for instant read-only diagnostics on the running agent's active session without needing shell access.
-- **`kern scripts embed-health <recall.db>`** — offline diagnostic tool for the recall embedding index in `recall.db`. Read-only analyzer covering both conversational chunks (`chunks` / `vec_chunks`) and semantic segment rollups (`semantic_segments` / `vec_segments`). Checks 6 invariant dimensions: message lag and coverage, chunk size distribution (token and char percentiles with `<1k`, `1k–4k`, `4k–8k`, `>8k` buckets), batch blockers (>8192 tokens or >16k chars triggering provider HTTP 400), UTF-16 surrogate pair integrity / lossy replacement checks, vector table sync (`orphanContent`, `ghostVectors`, dimensionality mismatch), and exact identification of stalled messages blocking the unindexed tail. Includes `--session`, `--limit`, `--list`, and `--json` support with a 0–100 itemized health score.
-- **Bang command prefix (`!command`) support** — commands like `!status`, `!help`, `!plugins`, `!restart`, `!skills`, `!subagents`, `!mcp` can now be triggered with a leading `!` prefix in addition to `/`. This allows seamless command execution in clients like Matrix (Element, Cinny) and Slack, where leading `/` is intercepted by native client-side command dispatchers.
-- **`/plugins` slash command** — inspect detailed plugin status and metrics in a structured view. Reports per-plugin breakdowns including active and total skills, connected MCP servers and available tools, sub-agent execution counts and run states, semantic recall chunk metrics and timestamp spans, and media attachment counts and storage footprint.
+- **`!embed-health` and `!segment-health` chat commands** — inspect embedding pipeline and summary tree health live in chat via `/embed-health`, `!embed-health`, `/segment-health`, or `!segment-health`. Bypasses the LLM queue for instant read-only diagnostics on the active session.
+- **`kern scripts embed-health <recall.db>`** — offline diagnostic tool for `recall.db`. Checks message lag, chunk size distribution, batch blockers, surrogate pair integrity, vector table sync, and stalled messages, with an itemized 0–100 health score.
+- **Bang command prefix (`!command`) support** — commands (`!status`, `!help`, `!plugins`, `!restart`, etc.) can be triggered with a leading `!` prefix in addition to `/`, avoiding client-side interception in Matrix and Slack.
+- **`/plugins` slash command** — inspect detailed plugin metrics (skills, MCP servers and tools, sub-agents, recall chunks, media attachments) in a structured view.
 
 ### Improvements
-- **ANSI color and style rendering across chat interfaces** — health reports (`!embed-health`, `!segment-health`, and CLI scripts) and code fences now render with color across chat interfaces:
-  - On Matrix, `mdToMatrixHtml` maps ANSI SGR escape sequences inside code blocks to `<font color="...">` and `<b>` using the Catppuccin Mocha palette, while stripping escapes from plain-text fallback bodies.
-  - On Discord, code blocks containing ANSI sequences are automatically tagged with ````ansi` for native terminal color rendering.
-  - On Telegram, Slack, IRC, and Nostr, ANSI sequences are stripped at the outgoing boundary to prevent raw escape codes from leaking into messages.
-- **Clean YAML code block formatting for slash commands** — slash command responses (`/status`, `/help`, `/skills`, `/subagents`, `/mcp`, `/plugins`) are now rendered inside clean ````yaml` code blocks. This guarantees monospaced alignment, consistent syntax highlighting, and uniform readability across all chat clients (Matrix, Telegram, Discord, Slack, Nostr, IRC) without broken markdown formatting or escaped characters:
-  - `/status` formats runtime health, token breakdown (system, messages, summary rollups), segments, channel connections, and plugin metrics as scannable key-value pairs.
-  - `/help` presents available slash commands without leading slash keys for crisp dictionary highlighting.
-  - `/skills`, `/subagents`, and `/mcp` display clean YAML mappings with status, durations, error descriptions, and tool listings.
-  - Fixed `[object Object]` leak in `/status` by formatting plugin statistics into concise one-line summaries.
+- **ANSI color and style rendering across chat interfaces** — health reports (`!embed-health`, `!segment-health`, and CLI scripts) render with color in terminals, Matrix, and Discord, while escape codes are automatically stripped on channels without color support (Telegram, Slack, IRC, Nostr).
+- **Clean YAML code block formatting for slash commands** — slash command responses (`/status`, `/help`, `/skills`, `/subagents`, `/mcp`, `/plugins`) are formatted in clean ````yaml` code blocks for consistent alignment and syntax highlighting across chat interfaces.
+
 
 ### Fixes
-- **Recall embedding resilience and dimension rebuild re-vectorization** ([#315](https://github.com/oguzbilgic/kern-ai/issues/315), [#333](https://github.com/oguzbilgic/kern-ai/issues/333)) — embedding pipeline no longer stalls on oversized chunks or drops vectors during dimension rebuilds:
-  - Caps chunk text inputs using `capForEmbedding` (8,000 characters) before sending to `embedMany` to prevent provider HTTP 400 rejection on large messages.
-  - Implements shrink-and-retry fallback: if a batch fails, individual chunks are retried one-by-one and halved down to 500 characters until accepted, ensuring progress is guaranteed rather than aborting the entire session index.
-  - Fixes vector loss on dimension rebuilds: when an embedding dimension mismatch drops `vec_chunks`, subsequent indexing looks up existing chunk IDs in `chunks` and re-vectorizes them into `vec_chunks` instead of skipping vector insertion when `INSERT OR IGNORE` encounters existing rows.
+- **Recall embedding resilience and dimension rebuild re-vectorization** ([#315](https://github.com/oguzbilgic/kern-ai/issues/315), [#333](https://github.com/oguzbilgic/kern-ai/issues/333)) — prevents embedding stalls on oversized chunks via 8k-char capping with shrink-and-retry fallback, and re-vectorizes existing chunks into `vec_chunks` when dimension changes drop the vector index.
 
 ## 0.39.0 (2026-09-17)
 
