@@ -3,15 +3,14 @@
 ## 0.40.0 (unreleased)
 
 ### Features
-- **`!embed-health` and `!segment-health` chat commands** — inspect embedding pipeline and summary tree health live in chat via `/embed-health`, `!embed-health`, `/segment-health`, or `!segment-health`. Bypasses the LLM queue for instant read-only diagnostics on the active session.
+- **`!embed-health` and `!segment-health` chat commands** — inspect embedding pipeline and summary tree health live in chat via `/embed-health` or `/segment-health`. Bypasses the LLM queue for instant read-only diagnostics on the active session.
 - **`kern scripts embed-health <recall.db>`** — offline diagnostic tool for `recall.db`. Checks message lag, chunk size distribution, batch blockers, surrogate pair integrity, vector table sync, and stalled messages, with an itemized 0–100 health score.
-- **Bang command prefix (`!command`) support** — commands (`!status`, `!help`, `!plugins`, `!restart`, etc.) can be triggered with a leading `!` prefix in addition to `/`, avoiding client-side interception in Matrix and Slack.
+- **Bang command prefix (`!command`) support** — commands (`!status`, `!help`, `!plugins`, `!restart`, etc.) can be triggered with a leading `!` prefix in addition to `/`, avoiding client-side interception in clients like Matrix and Slack.
 - **`/plugins` slash command** — inspect detailed plugin metrics (skills, MCP servers and tools, sub-agents, recall chunks, media attachments) in a structured view.
 
 ### Improvements
-- **ANSI color and style rendering across chat interfaces** — health reports (`!embed-health`, `!segment-health`, and CLI scripts) render with color in terminals, Matrix, and Discord, while escape codes are automatically stripped on channels without color support (Telegram, Slack, IRC, Nostr).
+- **ANSI color and style rendering across chat interfaces** — health reports and code fences render with color in terminals and supported clients, while escape codes are automatically stripped on channels without color support.
 - **Clean YAML code block formatting for slash commands** — slash command responses (`/status`, `/help`, `/skills`, `/subagents`, `/mcp`, `/plugins`) are formatted in clean ````yaml` code blocks for consistent alignment and syntax highlighting across chat interfaces.
-
 
 ### Fixes
 - **Recall embedding resilience and dimension rebuild re-vectorization** ([#315](https://github.com/oguzbilgic/kern-ai/issues/315), [#333](https://github.com/oguzbilgic/kern-ai/issues/333)) — prevents embedding stalls on oversized chunks via 8k-char capping with shrink-and-retry fallback, and re-vectorizes existing chunks into `vec_chunks` when dimension changes drop the vector index.
