@@ -8,7 +8,7 @@ import * as nip44 from "nostr-tools/nip44";
 import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, stripAnsi } from "../util.js";
 
 /**
  * Nostr interface — encrypted DMs (NIP-04, kind 4) over one or more relays.
@@ -346,16 +346,17 @@ export class NostrInterface implements Interface {
 
   /** Encrypt, sign, and publish a DM (NIP-17 gift wrap or legacy NIP-04) to every connected relay. */
   private async sendDM(toPk: string, text: string, mode: "nip17" | "nip04" = "nip17"): Promise<boolean> {
+    const cleanText = stripAnsi(text);
     let event: NostrEvent;
 
     if (mode === "nip17") {
       // NIP-17 / NIP-59: Gift wrap (kind 1059) containing rumor (kind 14)
       // If recipient used a client with custom encryption pubkey (like Jumble / NIP-4e), wrap to that key.
       const recipientEncryptionPk = this.senderEncKey.get(toPk) || toPk;
-      event = nip17.wrapEvent(this.sk, { publicKey: recipientEncryptionPk }, text) as NostrEvent;
+      event = nip17.wrapEvent(this.sk, { publicKey: recipientEncryptionPk }, cleanText) as NostrEvent;
     } else {
       // Legacy NIP-04 (kind 4)
-      const content = nip04.encrypt(this.sk, toPk, text);
+      const content = nip04.encrypt(this.sk, toPk, cleanText);
       event = finalizeEvent(
         {
           kind: 4,

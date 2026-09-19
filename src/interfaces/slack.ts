@@ -3,13 +3,13 @@ import { App as SlackApp } from "@slack/bolt";
 import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, stripAnsi } from "../util.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 function mdToSlack(text: string): string {
-  let s = text;
+  let s = stripAnsi(text);
   // Code blocks — leave as-is, Slack supports ```
   // Bold: **text** → *text*
   s = s.replace(/\*\*(.+?)\*\*/g, "*$1*");
@@ -222,7 +222,7 @@ export class SlackInterface implements Interface {
     try {
       await this.app.client.chat.postMessage({
         channel: channelId,
-        text,
+        text: stripAnsi(text),
       });
       return true;
     } catch {

@@ -2,14 +2,14 @@ import { Bot, InputFile } from "grammy";
 import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, stripAnsi } from "../util.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 import { setTelegramBot } from "../plugins/telegram/plugin.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 function mdToHtml(text: string): string {
-  let html = text;
+  let html = stripAnsi(text);
 
   // Code blocks first — protect from other replacements
   html = html.replace(/```\w*\n([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
@@ -38,7 +38,7 @@ function mdToHtml(text: string): string {
 }
 
 function stripMarkdown(text: string): string {
-  let plain = text;
+  let plain = stripAnsi(text);
   plain = plain.replace(/```\w*\n([\s\S]*?)```/g, "$1");
   plain = plain.replace(/`([^`]+)`/g, "$1");
   plain = plain.replace(/\*\*(.+?)\*\*/g, "$1");
