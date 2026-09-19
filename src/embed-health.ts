@@ -83,6 +83,7 @@ export interface EmbedHealthReport {
     lastIndexedMsg: number | null;
     lagMsgs: number;
     coveragePct: number;
+    scanPct: number;
   };
   chunkStats: ChunkStats;
   chunksVectorHealth: VectorTableHealth;
@@ -171,7 +172,7 @@ export function analyzeEmbedHealth(db: Database.Database, sessionId: string): Em
   const lastIndexedMsg = stateRow?.last_indexed_msg ?? null;
   const effectiveIndexed = lastIndexedMsg !== null ? Math.min(lastIndexedMsg, session.totalMessages) : 0;
   const lagMsgs = Math.max(0, session.totalMessages - effectiveIndexed);
-  const coveragePct = session.totalMessages > 0
+  const scanPct = session.totalMessages > 0
     ? Math.round((effectiveIndexed / session.totalMessages) * 1000) / 10
     : 100;
 
@@ -244,7 +245,16 @@ export function analyzeEmbedHealth(db: Database.Database, sessionId: string): Em
   // 5. Vector Table Invariants for semantic_segments -> vec_segments
   const segmentsVectorHealth = analyzeVirtualVecTable(db, "semantic_segments", "vec_segments", "id", sessionId);
 
-  // 6. Blocker & Stalled tail analysis
+  // 6. True Vector Coverage & Blocker / Stalled tail analysis
+  // True coverage requires both:
+  // (a) messages have been scanned by index_state (scanPct)
+  // (b) generated chunks actually have corresponding vectors in vec_chunks (vectorPct)
+  const vectorPct = chunksVectorHealth.contentRows > 0
+    ? Math.round(((chunksVectorHealth.contentRows - chunksVectorHealth.orphanContent) / chunksVectorHealth.contentRows) * 1000) / 10
+    : (session.totalMessages === 0 ? 100 : 0);
+
+  const coveragePct = Math.round((scanPct * (vectorPct / 100)) * 10) / 10;
+
   const blockers: StalledBlocker[] = [];
   if (lagMsgs > 0 && lastIndexedMsg !== null) {
     // Check candidate unindexed messages from lastIndexedMsg forward
@@ -390,6 +400,7 @@ export function analyzeEmbedHealth(db: Database.Database, sessionId: string): Em
       lastIndexedMsg,
       lagMsgs,
       coveragePct,
+      scanPct,
     },
     chunkStats,
     chunksVectorHealth,
@@ -520,8 +531,8 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
   const dimStr = r.chunksVectorHealth.expectedDim ? `${r.chunksVectorHealth.expectedDim} dims` : "unknown dims";
   out.push(
     `${c.blue}${c.bold}Session ${r.sessionId.slice(0, 8)}${c.reset}  messages ${r.session.minIndex}–${r.session.maxIndex} (${r.session.totalMessages.toLocaleString()} msgs)  ` +
-    `indexed to ${c.cyan}${r.recallState.lastIndexedMsg ?? "—"}${c.reset}` +
-    (r.recallState.lagMsgs > 0 ? ` (${c.yellow}lag ${r.recallState.lagMsgs.toLocaleString()} msgs${c.reset}, ${100 - r.recallState.coveragePct}% unindexed)` : ` (${c.green}100% indexed${c.reset})`)
+    `scanned to ${c.cyan}${r.recallState.lastIndexedMsg ?? "—"}${c.reset}` +
+    (r.recallState.lagMsgs > 0 ? ` (${c.yellow}lag ${r.recallState.lagMsgs.toLocaleString()} msgs${c.reset}, ${100 - r.recallState.scanPct}% unscanned)` : ` (${c.green}100% scanned${c.reset})`)
   );
   out.push(`Vector Table: sqlite-vec (${c.magenta}${dimStr}${c.reset})`);
   out.push("");
@@ -562,17 +573,24 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
     `  ${covCol}${r.recallState.coveragePct}%${cLagStr}${c.reset}`,
   ].join(" "));
 
+  const segCovPct = r.segmentsVectorHealth.contentRows > 0
+    ? Math.round(((r.segmentsVectorHealth.contentRows - r.segmentsVectorHealth.orphanContent) / r.segmentsVectorHealth.contentRows) * 1000) / 10
+    : 100;
+  const segCovCol = segCovPct >= 99 ? c.green : segCovPct >= 90 ? c.yellow : c.red;
+  const segOrphanCol = r.segmentsVectorHealth.orphanContent > 0 ? c.red : c.reset;
+  const segGhostCol = r.segmentsVectorHealth.ghostVectors > 0 ? c.red : c.reset;
+
   out.push([
     pad("Segment Rollups", 18),
     pad(r.segmentsVectorHealth.contentRows.toLocaleString(), 8, true),
     pad(r.segmentsVectorHealth.contentRows.toLocaleString(), 8, true),
     pad(r.segmentsVectorHealth.vectorRows.toLocaleString(), 8, true),
-    pad(r.segmentsVectorHealth.orphanContent, 7, true),
-    pad(r.segmentsVectorHealth.ghostVectors, 6, true),
+    segOrphanCol + pad(r.segmentsVectorHealth.orphanContent, 7, true) + c.reset,
+    segGhostCol + pad(r.segmentsVectorHealth.ghostVectors, 6, true) + c.reset,
     pad(0, 6, true),
     pad(0, 6, true),
     pad(0, 5, true),
-    `  ${c.green}100.0% (L0–L2 covered)${c.reset}`,
+    `  ${segCovCol}${segCovPct}% (L0–L2 vector coverage)${c.reset}`,
   ].join(" "));
   out.push("");
 
