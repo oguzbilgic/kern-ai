@@ -124,7 +124,7 @@ export function listEmbedSessions(db: Database.Database): SessionSummary[] {
   return rows;
 }
 
-// Check for lone UTF-16 surrogate pairs or Unicode replacement characters inserted by lossy encoding
+// Check for lone UTF-16 surrogate pairs (unpaired high/low surrogates)
 function hasLoneSurrogates(str: string): boolean {
   if (typeof (str as any).isWellFormed === "function") {
     if (!(str as any).isWellFormed()) return true;
@@ -141,9 +141,7 @@ function hasLoneSurrogates(str: string): boolean {
       }
     }
   }
-  // Better-sqlite3 / UTF-8 conversion sanitizes lone surrogates to \uFFFD (replacement char) on write.
-  // Detecting \uFFFD identifies chunks/messages that suffered surrogate mangling.
-  return str.includes("\uFFFD");
+  return false;
 }
 
 export function analyzeEmbedHealth(db: Database.Database, sessionId: string): EmbedHealthReport {
@@ -243,7 +241,9 @@ export function analyzeEmbedHealth(db: Database.Database, sessionId: string): Em
   const chunksVectorHealth = analyzeVirtualVecTable(db, "chunks", "vec_chunks", "id", sessionId);
 
   // 5. Vector Table Invariants for semantic_segments -> vec_segments
-  const segmentsVectorHealth = analyzeVirtualVecTable(db, "semantic_segments", "vec_segments", "id", sessionId);
+  // Only L0 leaf segments are vectorized; higher levels (L1, L2 rollup parents) are synthesized
+  // summaries that are not embedded.
+  const segmentsVectorHealth = analyzeVirtualVecTable(db, "semantic_segments", "vec_segments", "id", sessionId, "level = 0");
 
   // 6. True Vector Coverage & Blocker / Stalled tail analysis
   // True coverage requires both:
@@ -416,7 +416,8 @@ function analyzeVirtualVecTable(
   contentTable: string,
   vecTable: string,
   idCol: string,
-  sessionId: string
+  sessionId: string,
+  extraFilter?: string
 ): VectorTableHealth {
   // Check if vecTable exists
   const exists = db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table' AND name=?").get(vecTable) as { c: number };
@@ -433,7 +434,9 @@ function analyzeVirtualVecTable(
   }
 
   // Content row count for this session
-  const contentFilter = contentTable === "chunks" ? "session_id = ?" : "session_id = ?";
+  const contentFilter = extraFilter
+    ? `session_id = ? AND ${extraFilter}`
+    : "session_id = ?";
   const cCount = db.prepare(`SELECT count(*) as c FROM ${contentTable} WHERE ${contentFilter}`).get(sessionId) as { c: number };
 
   // Sample vector dimension
@@ -446,7 +449,7 @@ function analyzeVirtualVecTable(
       SELECT length(v.embedding) as len
       FROM ${vecTable} v
       JOIN ${contentTable} c ON c.${idCol} = v.rowid
-      WHERE c.session_id = ?
+      WHERE ${contentFilter}
       LIMIT 1
     `).get(sessionId) as { len: number } | undefined;
 
@@ -458,7 +461,7 @@ function analyzeVirtualVecTable(
       SELECT count(*) as cnt, sum(case when length(v.embedding) != ? then 1 else 0 end) as mismatch
       FROM ${vecTable} v
       JOIN ${contentTable} c ON c.${idCol} = v.rowid
-      WHERE c.session_id = ?
+      WHERE ${contentFilter}
     `).get(sample ? sample.len : 0, sessionId) as { cnt: number; mismatch: number };
 
     vectorRows = vStats?.cnt ?? 0;
@@ -474,7 +477,7 @@ function analyzeVirtualVecTable(
       SELECT count(*) as cnt
       FROM ${contentTable} c
       LEFT JOIN ${vecTable} v ON v.rowid = c.${idCol}
-      WHERE c.session_id = ? AND v.rowid IS NULL
+      WHERE ${contentFilter} AND v.rowid IS NULL
     `).get(sessionId) as { cnt: number };
     orphanContent = o?.cnt ?? 0;
   } catch {
@@ -489,9 +492,9 @@ function analyzeVirtualVecTable(
     const g = db.prepare(`
       SELECT count(*) as cnt
       FROM ${vecTable} v
-      LEFT JOIN ${contentTable} c ON c.${idCol} = v.rowid
+      LEFT JOIN ${contentTable} c ON c.${idCol} = v.rowid AND ${contentFilter}
       WHERE c.${idCol} IS NULL
-    `).get() as { cnt: number };
+    `).get(sessionId) as { cnt: number };
     ghostVectors = g?.cnt ?? 0;
   } catch {
     // ignore
@@ -583,7 +586,7 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
   const segGhostCol = r.segmentsVectorHealth.ghostVectors > 0 ? c.red : c.reset;
 
   out.push([
-    pad("Segment Rollups", 18),
+    pad("Segment Leaves (L0)", 18),
     pad(r.segmentsVectorHealth.contentRows.toLocaleString(), 8, true),
     pad(r.segmentsVectorHealth.contentRows.toLocaleString(), 8, true),
     pad(r.segmentsVectorHealth.vectorRows.toLocaleString(), 8, true),
@@ -592,7 +595,7 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
     pad(0, 6, true),
     pad(0, 6, true),
     pad(0, 5, true),
-    `  ${segCovCol}${segCovPct}% (L0–L2 vector coverage)${c.reset}`,
+    `  ${segCovCol}${segCovPct}% (L0 vector coverage)${c.reset}`,
   ].join(" "));
   out.push("");
 

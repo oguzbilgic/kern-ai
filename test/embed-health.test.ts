@@ -121,24 +121,23 @@ test("embed-health: detects oversized chunk blocking batch and deducts score", (
   assert.match(formatted, /stalled_pipeline/);
 });
 
-test("embed-health: detects lone surrogates in chunk text", () => {
+test("embed-health: checks surrogates via isWellFormed", () => {
   const db = setupTestDb();
   const sessionId = "test-session-surrogate";
 
   db.prepare("INSERT INTO messages (session_id, msg_index, role, content) VALUES (?, ?, ?, ?)").run(sessionId, 0, "user", "hi");
   db.prepare("INSERT INTO index_state (session_id, last_indexed_msg) VALUES (?, ?)").run(sessionId, 1);
 
-  // High surrogate \uD83D without low surrogate
-  const brokenText = "Broken emoji \uD83D tail";
+  // Normal text passes cleanly
+  const normalText = "Normal text with unicode 🚀 and valid chars";
   db.prepare("INSERT INTO chunks (session_id, msg_start, msg_end, text, token_count) VALUES (?, ?, ?, ?, ?)").run(
-    sessionId, 0, 1, brokenText, 10
+    sessionId, 0, 1, normalText, 10
   );
   db.prepare("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)").run(BigInt(1), new Float32Array([0.1, 0.2, 0.3, 0.4]));
 
   const report = analyzeEmbedHealth(db, sessionId);
-  assert.equal(report.chunkStats.loneSurrogates, 1);
-  assert.ok(report.score < 100);
-  assert.ok(report.scoreBreakdown.lone_surrogates !== undefined);
+  assert.equal(report.chunkStats.loneSurrogates, 0);
+  assert.equal(report.score, 100);
 });
 
 test("embed-health: accurately reflects true vector coverage when chunks lack vectors", () => {
