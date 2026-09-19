@@ -1,40 +1,11 @@
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { existsSync, readFileSync } from "fs";
-import { dirname, join, resolve } from "path";
-import { config as loadDotenv } from "dotenv";
+import { existsSync } from "fs";
+import { resolve } from "path";
 import { listEmbedSessions } from "../embed-health.js";
 import { planRecallRepair, applyRecallRepair } from "../plugins/recall/repair.js";
-import { configDefaults, type KernConfig } from "../config.js";
 
-const USAGE = "Usage: kern scripts recall-repair <recall.db> [--session <id>] [--apply] [--no-backup] [--batch-size <n>] [--json] [--list]";
-
-/**
- * Load agent config & .env from directory next to recall.db.
- */
-function loadAgentConfig(dbPath: string): { config: KernConfig; agentDir: string } {
-  // Typical path: /home/kern/<agent>/.kern/recall.db -> agentDir is /home/kern/<agent>
-  const dotKernDir = dirname(dbPath);
-  const agentDir = dirname(dotKernDir);
-
-  const envPath = join(dotKernDir, ".env");
-  if (existsSync(envPath)) {
-    loadDotenv({ path: envPath, override: true });
-  }
-
-  const cfgPath = join(dotKernDir, "config.json");
-  let config = { ...configDefaults };
-  if (existsSync(cfgPath)) {
-    try {
-      const raw = JSON.parse(readFileSync(cfgPath, "utf-8"));
-      config = { ...config, ...raw };
-    } catch {
-      // use defaults
-    }
-  }
-
-  return { config, agentDir };
-}
+const USAGE = "Usage: kern scripts recall-repair <recall.db> [--session <id>] [--apply] [--no-backup] [--json] [--list]";
 
 export async function recallRepair(args: string[]): Promise<void> {
   const positional: string[] = [];
@@ -67,8 +38,6 @@ export async function recallRepair(args: string[]): Promise<void> {
     console.error(`recall.db not found at ${dbPath}`);
     process.exit(1);
   }
-
-  const { config } = loadAgentConfig(dbPath);
 
   const db = new Database(dbPath, { fileMustExist: true });
   try {
@@ -123,7 +92,7 @@ export async function recallRepair(args: string[]): Promise<void> {
       console.log(`  Orphans:  0 missing vectors`);
       console.log(`  Scan:     ${(plan.lastIndexedMsg ?? 0).toLocaleString()} / ${plan.totalMessages.toLocaleString()} msgs (100.0% scanned, 0 lag)`);
       console.log("");
-      console.log("Nothing to repair. (0 API calls, 0s elapsed)");
+      console.log("Nothing to repair. Zero changes needed.");
       return;
     }
 
@@ -134,9 +103,10 @@ export async function recallRepair(args: string[]): Promise<void> {
     console.log("");
 
     if (!apply) {
-      console.log("Repair plan:");
-      console.log(`  • Vectorize ${plan.orphanChunks.length.toLocaleString()} orphaned chunks (${plan.estBatches} batches of ~100)`);
-      console.log(`  • Estimated text: ~${(plan.totalChars / 1000).toFixed(0)}k characters`);
+      console.log("Repair plan (pure SQLite, zero LLM calls):");
+      console.log(`  • Prune ${plan.orphanChunks.length.toLocaleString()} orphaned chunk rows from chunks table`);
+      console.log(`  • Reset scan cursor: ${plan.lastIndexedMsg ?? 0} → ${plan.resetCursorTo} (earliest missing message)`);
+      console.log(`  • On next agent restart, native indexSession resumes from msg ${plan.resetCursorTo}`);
       console.log("");
       console.log("Dry-run only. To execute repair, run with --apply:");
       console.log(`  kern scripts recall-repair ${dbPath} --apply`);
@@ -150,21 +120,13 @@ export async function recallRepair(args: string[]): Promise<void> {
       console.log(`[backup] Created snapshot: ${backupPath}`);
     }
 
-    console.log(`[provider] ${config.provider}`);
-    console.log(`Repairing ${plan.orphanChunks.length.toLocaleString()} orphaned chunks...`);
+    const result = applyRecallRepair(db, plan);
 
-    const result = await applyRecallRepair(db, config, plan, (p) => {
-      console.log(`  batch ${p.batch}/${p.totalBatches} (${p.chunksInBatch} chunks)... done`);
-    });
-
-    console.log("");
     console.log("Results:");
-    console.log(`  Vectors inserted:  ${result.vectorsInserted.toLocaleString()}`);
-    console.log(`  Vector coverage:   ${result.totalVectors.toLocaleString()} / ${result.totalChunks.toLocaleString()} (${result.coveragePct.toFixed(1)}%)`);
-    console.log(`  Orphans remaining: ${plan.totalChunks - result.totalVectors}`);
-    console.log(`  Elapsed time:      ${(result.elapsedMs / 1000).toFixed(1)}s`);
+    console.log(`  Pruned orphan chunks:  ${result.deletedChunks.toLocaleString()}`);
+    console.log(`  Reset index cursor:    ${result.previousCursor ?? 0} → ${result.resetCursorTo}`);
     console.log("");
-    console.log("Index successfully repaired.");
+    console.log("Repair applied. Agent will cleanly re-index missing chunks on next start or turn.");
   } finally {
     db.close();
   }

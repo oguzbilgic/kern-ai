@@ -307,18 +307,19 @@ Outputs a 0–100 health score with itemized deductions (`lag`, `oversized_chunk
 
 ## kern scripts recall-repair
 
-Inspects and repairs recall index deficiencies (orphaned chunks, missing vectors in `vec_chunks`). Dry-run by default. Zero-op if the index is already healthy (0 API calls, 0 DB writes).
+Inspects and repairs recall index deficiencies (orphaned chunks lacking rows in `vec_chunks`). Pure SQLite — zero LLM calls, zero API credentials needed. Dry-run by default. Zero-op if the index is already healthy (0 changes, 0 DB writes).
 
 ```bash
-kern scripts recall-repair .kern/recall.db                       # dry run: inspects chunks and vec_chunks, plans batch embedding
+kern scripts recall-repair .kern/recall.db                       # dry run: inspects chunks and vec_chunks, displays prune plan
 kern scripts recall-repair .kern/recall.db --session <id>        # specific session (prefix ok)
-kern scripts recall-repair .kern/recall.db --apply               # execute repair: embeds missing chunks, writes to vec_chunks
+kern scripts recall-repair .kern/recall.db --apply               # execute repair: prunes orphaned chunks and resets index cursor
 kern scripts recall-repair .kern/recall.db --apply --no-backup   # skip the SQLite snapshot backup
 kern scripts recall-repair .kern/recall.db --json                # machine-readable plan
 ```
 
-- **Selective**: only embeds chunks that lack corresponding rows in `vec_chunks`. Existing embeddings are never re-evaluated.
-- **Resilient**: uses `capForEmbedding` and shrink-and-retry fallback if batch API calls are rejected.
+- **Zero-op on healthy**: if `embed-health` shows 100% vector coverage and 0 lag, exits immediately with zero changes.
+- **Pure SQLite**: deletes orphaned rows from `chunks` and rewinds `index_state.last_indexed_msg` to the earliest missing message index.
+- **Agent self-heals**: on the next agent start or turn, the agent's native background indexer resumes from the reset cursor, re-chunking and re-vectorizing missing messages cleanly.
 - **Safe**: snapshots `recall.db` to `<recall.db>.backup-<timestamp>` using SQLite's online backup API before applying modifications.
 
 ## kern scripts segment-prune

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { planRecallRepair, applyRecallRepair } from "../src/plugins/recall/repair.js";
-import { configDefaults } from "../src/config.js";
 
 function setupTestDb(): Database.Database {
   const db = new Database(":memory:");
@@ -104,10 +103,11 @@ test("planRecallRepair: identifies orphaned chunks without vec_chunks entries", 
     plan.orphanChunks.map((o) => o.id),
     [2, 3, 4]
   );
-  assert.equal(plan.estBatches, 1);
+  assert.equal(plan.earliestOrphanStart, 2);
+  assert.equal(plan.resetCursorTo, 2);
 });
 
-test("applyRecallRepair: clean plan is immediate no-op", async () => {
+test("applyRecallRepair: clean plan is immediate no-op", () => {
   const db = setupTestDb();
   const sessionId = "noop-session";
 
@@ -120,13 +120,48 @@ test("applyRecallRepair: clean plan is immediate no-op", async () => {
     lastIndexedMsg: 5,
     tailLag: 0,
     isClean: true,
-    estBatches: 0,
-    totalChars: 0,
+    earliestOrphanStart: null,
+    resetCursorTo: 5,
   };
 
-  const result = await applyRecallRepair(db, configDefaults, plan);
+  const result = applyRecallRepair(db, plan);
 
-  assert.equal(result.vectorsInserted, 0);
-  assert.equal(result.totalVectors, 2);
-  assert.equal(result.coveragePct, 100);
+  assert.equal(result.deletedChunks, 0);
+  assert.equal(result.resetCursorTo, 5);
+  assert.equal(result.previousCursor, 5);
+});
+
+test("applyRecallRepair: prunes orphan chunks and rewinds index_state cursor", () => {
+  const db = setupTestDb();
+  const sessionId = "repair-session";
+
+  db.exec(`
+    INSERT INTO chunks (id, session_id, msg_start, msg_end, text) VALUES
+      (1, '${sessionId}', 0, 1, 'chunk 1'),
+      (2, '${sessionId}', 2, 3, 'chunk 2'),
+      (3, '${sessionId}', 4, 5, 'chunk 3');
+
+    INSERT INTO vec_chunks (rowid, embedding) VALUES
+      (1, '[0.1, 0.2, 0.3, 0.4]');
+
+    INSERT INTO index_state (session_id, last_indexed_msg) VALUES
+      ('${sessionId}', 6);
+  `);
+
+  const plan = planRecallRepair(db, sessionId);
+  assert.equal(plan.orphanChunks.length, 2);
+  assert.equal(plan.resetCursorTo, 2);
+
+  const result = applyRecallRepair(db, plan);
+  assert.equal(result.deletedChunks, 2);
+  assert.equal(result.resetCursorTo, 2);
+  assert.equal(result.previousCursor, 6);
+
+  // Verify only chunk 1 remains in chunks table
+  const remainingChunks = db.prepare("SELECT id FROM chunks WHERE session_id = ?").all(sessionId) as Array<{ id: number }>;
+  assert.deepEqual(remainingChunks.map((c) => c.id), [1]);
+
+  // Verify index_state was reset to msg 2
+  const state = db.prepare("SELECT last_indexed_msg FROM index_state WHERE session_id = ?").get(sessionId) as { last_indexed_msg: number };
+  assert.equal(state.last_indexed_msg, 2);
 });

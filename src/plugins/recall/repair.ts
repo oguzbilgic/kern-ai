@@ -1,24 +1,21 @@
 /**
  * Recall Repair Engine.
  *
- * Inspects and repairs recall index deficiencies (orphaned chunks, missing vectors).
- * Pure analysis via planRecallRepair(), transactional execution via applyRecallRepair().
+ * Recovery for recall.db instances that have orphaned chunks (chunks lacking rows
+ * in vec_chunks, e.g. following an embedding dimension change).
  *
- * Guaranteed:
- *  1. Zero-op if already healthy (0 API calls, 0 DB writes).
- *  2. Embeds only chunks that lack rows in vec_chunks.
- *  3. Caps input text and shrinks/retries on batch failures.
- *  4. Transactional batch inserts into vec_chunks.
+ * Strictly follows the segment-prune philosophy (pure SQLite, zero LLM calls):
+ *  1. Inspects chunks vs vec_chunks.
+ *  2. If 100% vector coverage and 0 lag, returns isClean: true (zero-op, 0 writes).
+ *  3. On apply, deletes orphaned chunks from `chunks` and resets `index_state.last_indexed_msg`
+ *     to the earliest missing chunk start (or 0 if all chunks were orphans).
+ *  4. On next agent start or turn, the agent's native recallIndex.indexSession() picks up
+ *     from the reset cursor, re-chunking and re-embedding cleanly in the background.
+ *
+ * planRecallRepair() is pure inspection; applyRecallRepair() runs in one SQLite transaction.
  */
 
 import type Database from "better-sqlite3";
-import { embed, embedMany } from "ai";
-import { capForEmbedding, EMBED_MAX_CHARS } from "../../util.js";
-import { createEmbeddingModel } from "../../model.js";
-import type { KernConfig } from "../../config.js";
-
-const EMBED_BATCH_SIZE = 100;
-const EMBED_MIN_CHARS = 500;
 
 export interface OrphanChunk {
   id: number;
@@ -38,23 +35,14 @@ export interface RecallRepairPlan {
   lastIndexedMsg: number | null;
   tailLag: number;
   isClean: boolean;
-  estBatches: number;
-  totalChars: number;
-}
-
-export interface RepairProgress {
-  batch: number;
-  totalBatches: number;
-  chunksInBatch: number;
-  vectorsInserted: number;
+  earliestOrphanStart: number | null;
+  resetCursorTo: number;
 }
 
 export interface RepairResult {
-  vectorsInserted: number;
-  totalVectors: number;
-  totalChunks: number;
-  coveragePct: number;
-  elapsedMs: number;
+  deletedChunks: number;
+  resetCursorTo: number;
+  previousCursor: number | null;
 }
 
 /**
@@ -111,9 +99,17 @@ export function planRecallRepair(db: Database.Database, sessionId: string): Reca
   const totalMessages = msgCountRow.cnt;
   const tailLag = lastIndexedMsg !== null ? Math.max(0, totalMessages - lastIndexedMsg) : totalMessages;
 
-  const totalChars = orphans.reduce((sum, c) => sum + (c.text?.length || 0), 0);
-  const estBatches = Math.ceil(orphans.length / EMBED_BATCH_SIZE);
   const isClean = orphans.length === 0 && tailLag === 0;
+
+  let earliestOrphanStart: number | null = null;
+  if (orphans.length > 0) {
+    earliestOrphanStart = Math.min(...orphans.map((o) => o.msg_start));
+  }
+
+  // If there are orphaned chunks, reset cursor to earliest missing position
+  // so the agent's indexSession resumes from there on boot.
+  // If no orphans, keep existing lastIndexedMsg or 0.
+  const resetCursorTo = earliestOrphanStart !== null ? earliestOrphanStart : (lastIndexedMsg ?? 0);
 
   return {
     sessionId,
@@ -124,106 +120,43 @@ export function planRecallRepair(db: Database.Database, sessionId: string): Reca
     lastIndexedMsg,
     tailLag,
     isClean,
-    estBatches,
-    totalChars,
+    earliestOrphanStart,
+    resetCursorTo,
   };
 }
 
 /**
- * Apply the repair plan by embedding orphaned chunks and inserting into vec_chunks.
+ * Apply the repair plan purely within SQLite (zero LLM calls):
+ *  - Deletes orphaned chunk rows from `chunks`.
+ *  - Resets `index_state.last_indexed_msg` to `resetCursorTo`.
+ *
+ * On next agent restart or turn, indexSession() re-indexes missing messages cleanly.
  */
-export async function applyRecallRepair(
-  db: Database.Database,
-  config: KernConfig,
-  plan: RecallRepairPlan,
-  onProgress?: (p: RepairProgress) => void
-): Promise<RepairResult> {
-  const start = Date.now();
-  if (plan.orphanChunks.length === 0) {
+export function applyRecallRepair(db: Database.Database, plan: RecallRepairPlan): RepairResult {
+  if (plan.isClean || plan.orphanChunks.length === 0) {
     return {
-      vectorsInserted: 0,
-      totalVectors: plan.vectorChunks,
-      totalChunks: plan.totalChunks,
-      coveragePct: plan.totalChunks > 0 ? (plan.vectorChunks / plan.totalChunks) * 100 : 100,
-      elapsedMs: Date.now() - start,
+      deletedChunks: 0,
+      resetCursorTo: plan.lastIndexedMsg ?? 0,
+      previousCursor: plan.lastIndexedMsg,
     };
   }
 
-  const model = createEmbeddingModel(config);
-  if (!model) {
-    throw new Error("No embedding model available (need OPENROUTER_API_KEY, OPENAI_API_KEY, or Ollama provider)");
-  }
+  const deleteChunk = db.prepare("DELETE FROM chunks WHERE id = ?");
+  const updateState = db.prepare(
+    "INSERT OR REPLACE INTO index_state (session_id, last_indexed_msg) VALUES (?, ?)"
+  );
 
-  const insertVec = db.prepare("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)");
-  const deleteVec = db.prepare("DELETE FROM vec_chunks WHERE rowid = ?");
-
-  let vectorsInserted = 0;
-  const totalBatches = plan.estBatches;
-
-  for (let b = 0; b < plan.orphanChunks.length; b += EMBED_BATCH_SIZE) {
-    const batchChunks = plan.orphanChunks.slice(b, b + EMBED_BATCH_SIZE);
-    const batchTexts = batchChunks.map((c) => capForEmbedding(c.text));
-
-    let embeddings: number[][];
-    try {
-      const result = await embedMany({ model, values: batchTexts });
-      embeddings = result.embeddings;
-    } catch {
-      // Retry values individually with halving fallback
-      embeddings = [];
-      for (const val of batchTexts) {
-        embeddings.push(await embedOne(model, val));
-      }
+  const tx = db.transaction(() => {
+    for (const chunk of plan.orphanChunks) {
+      deleteChunk.run(chunk.id);
     }
+    updateState.run(plan.sessionId, plan.resetCursorTo);
+  });
+  tx();
 
-    // Insert batch transactionally
-    const tx = db.transaction(() => {
-      for (let i = 0; i < batchChunks.length; i++) {
-        const chunk = batchChunks[i];
-        const emb = embeddings[i];
-        const rowid = typeof chunk.id === "bigint" ? chunk.id : BigInt(chunk.id);
-        deleteVec.run(rowid);
-        insertVec.run(rowid, new Float32Array(emb));
-        vectorsInserted++;
-      }
-    });
-    tx();
-
-    if (onProgress) {
-      onProgress({
-        batch: Math.floor(b / EMBED_BATCH_SIZE) + 1,
-        totalBatches,
-        chunksInBatch: batchChunks.length,
-        vectorsInserted,
-      });
-    }
-  }
-
-  const finalVectors = plan.vectorChunks + vectorsInserted;
   return {
-    vectorsInserted,
-    totalVectors: finalVectors,
-    totalChunks: plan.totalChunks,
-    coveragePct: plan.totalChunks > 0 ? (finalVectors / plan.totalChunks) * 100 : 100,
-    elapsedMs: Date.now() - start,
+    deletedChunks: plan.orphanChunks.length,
+    resetCursorTo: plan.resetCursorTo,
+    previousCursor: plan.lastIndexedMsg,
   };
-}
-
-/**
- * Embed a single value with halving fallback.
- */
-async function embedOne(model: Parameters<typeof embed>[0]["model"], value: string): Promise<number[]> {
-  let chars = Math.min(value.length, EMBED_MAX_CHARS);
-  for (;;) {
-    try {
-      const { embedding } = await embed({
-        model,
-        value: capForEmbedding(value, chars),
-      });
-      return embedding;
-    } catch (err: any) {
-      if (chars <= EMBED_MIN_CHARS) throw err;
-      chars = Math.max(EMBED_MIN_CHARS, Math.floor(chars / 2));
-    }
-  }
 }
