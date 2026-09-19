@@ -1,6 +1,8 @@
 import type { KernPlugin, PluginContext, RouteHandler, BeforeContextInfo, ContextInjection } from "../types.js";
 import { RecallIndex } from "./recall.js";
 import { recallTool, setRecallIndex, setContextBounds } from "./tool.js";
+import { analyzeEmbedHealth, formatEmbedHealthReport, listEmbedSessions } from "../../embed-health.js";
+import { analyzeSegmentHealth, formatHealthReport, listSessions } from "../../segment-health.js";
 import { log } from "../../log.js";
 
 let recallIndex: RecallIndex | null = null;
@@ -127,6 +129,53 @@ export const recallPlugin: KernPlugin = {
       log.error("recall", `auto-recall failed: ${err.message}`);
       return null;
     }
+  },
+
+  commands: {
+    "/embed-health": {
+      description: "show recall embedding health and pipeline stalls",
+      handler: async (ctx) => {
+        try {
+          const sessions = listEmbedSessions(ctx.db.db);
+          if (sessions.length === 0) {
+            return "```text\nNo sessions found in recall.db\n```";
+          }
+          const activeId = ctx.sessionId();
+          const targetSession = (activeId && sessions.some(s => s.session_id === activeId))
+            ? activeId
+            : sessions[0].session_id;
+
+          const report = analyzeEmbedHealth(ctx.db.db, targetSession);
+          return "```text\n" + formatEmbedHealthReport(report) + "\n```";
+        } catch (err: any) {
+          return `\`\`\`text\nembed-health error: ${err.message}\n\`\`\``;
+        }
+      },
+    },
+    "/segment-health": {
+      description: "show semantic segment health and rollup tiling",
+      handler: async (ctx) => {
+        try {
+          const sessions = listSessions(ctx.db.db);
+          if (sessions.length === 0) {
+            return "```text\nNo sessions found in recall.db\n```";
+          }
+          const activeId = ctx.sessionId();
+          const targetSession = (activeId && sessions.some(s => s.session_id === activeId))
+            ? activeId
+            : sessions[0].session_id;
+
+          const maxTokens = ctx.config.maxContextTokens ?? 100_000;
+          const ratio = ctx.config.summaryBudget ?? 0.75;
+          const budgetTokens = Math.floor(maxTokens * ratio);
+
+          const report = analyzeSegmentHealth(ctx.db.db, targetSession, { budgetTokens });
+          return "```text\n" + formatHealthReport(report) + "\n```";
+        } catch (err: any) {
+          return `\`\`\`text\nsegment-health error: ${err.message}\n\`\`\``;
+        }
+      },
+    },
   },
 
   onStatus(_ctx) {

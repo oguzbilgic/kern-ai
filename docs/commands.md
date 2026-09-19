@@ -356,6 +356,14 @@ Restart the agent daemon.
 
 List all available skills with active/inactive status. Provided by the skills plugin.
 
+### /embed-health
+
+Inspect recall embedding index health, message lag, chunk size distribution, and exact stalled pipeline blockers for the active session. Provided by the recall plugin.
+
+### /segment-health
+
+Inspect semantic segment summary tree health, rollup levels, parent-child invariants, and simulate summary injection waste under the agent's real context budget. Provided by the recall plugin.
+
 ### /help
 
 List available slash commands with descriptions. Includes commands registered by plugins.
