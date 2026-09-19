@@ -194,7 +194,9 @@ Set `model` for chat and optionally `mediaModel` for image vision. Embedding and
 - [Media](docs/media.md)
 - [Tools](docs/tools.md)
 - [Interfaces](docs/interfaces.md)
-- [CLI commands](docs/commands.md)
+- [CLI commands](docs/cli.md)
+- [Chat commands](docs/chat-commands.md)
+- [Offline scripts](docs/scripts.md)
 - [Pairing](docs/pairing.md)
 
 ## Built with

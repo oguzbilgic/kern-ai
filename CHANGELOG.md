@@ -12,6 +12,7 @@
 ### Improvements
 - **ANSI color and style rendering across chat interfaces** — health reports and code fences render with color in terminals and supported clients, while escape codes are automatically stripped on channels without color support.
 - **Clean YAML code block formatting for slash commands** — slash command responses (`/status`, `/help`, `/skills`, `/subagents`, `/mcp`, `/plugins`) are formatted in clean ````yaml` code blocks for consistent alignment and syntax highlighting across chat interfaces.
+- **Documentation split & Chat Commands unification** ([#376](https://github.com/oguzbilgic/kern-ai/issues/376), [#393](https://github.com/oguzbilgic/kern-ai/issues/393)) — split monolithic `commands.md` into dedicated `docs/cli.md`, `docs/chat-commands.md`, and `docs/scripts.md` matching invocation surfaces, and standardized terminology on **Chat Commands** across documentation and agent prompt templates.
 
 ### Fixes
 - **Recall embedding resilience and dimension rebuild re-vectorization** ([#315](https://github.com/oguzbilgic/kern-ai/issues/315), [#333](https://github.com/oguzbilgic/kern-ai/issues/333)) — prevents embedding stalls on oversized chunks via 8k-char capping with shrink-and-retry fallback, and re-vectorizes existing chunks into `vec_chunks` when dimension changes drop the vector index.

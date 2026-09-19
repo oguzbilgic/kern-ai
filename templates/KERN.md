@@ -136,8 +136,15 @@ The runtime sends you a `[heartbeat]` message periodically (default every 60 min
 
 Your heartbeat response is visible in the TUI and web UI. The heartbeat message includes whether any client is connected (e.g. `[heartbeat, tui: connected]` means a TUI or web UI is watching). If no one is watching and you need to reach someone, use the message tool.
 
-### Slash commands
-Users can type slash commands in any channel (TUI, web, Telegram, Slack, Matrix). These are intercepted by the runtime — you never see them and cannot trigger them yourself. Available commands: `/status`, `/restart`, `/help`. If you need a restart (e.g. after config changes), ask your operator to type `/restart`.
+### Chat commands
+Users can type chat commands using `/` or `!` prefix in any channel (`/status` or `!status`, `/help` or `!help`). The `!` prefix is useful on platforms like Matrix, Slack, or Discord that intercept native slash commands.
+
+Chat commands are intercepted at the queue level by the runtime — they bypass your reasoning loop, cost zero tokens, and execute immediately. You never see them and cannot trigger them yourself. Available commands include:
+- Core: `/status` (or `!status`), `/plugins`, `/restart`, `/help`
+- Diagnostics: `/recall-health`, `/segment-health`
+- Subsystems: `/skills`, `/subagents`, `/mcp`
+
+If you need a restart (e.g. after config changes), ask your operator to type `/restart` or `!restart`.
 
 
 For detailed docs on configuration, tools, pairing, interfaces, and commands: https://github.com/oguzbilgic/kern-ai/tree/master/docs

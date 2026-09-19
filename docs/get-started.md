@@ -119,7 +119,9 @@ Everything is plain text and git-trackable.
 ## What's next
 
 - [Configuration](/docs/config) — model, provider, heartbeat, tool scope
-- [Commands](/docs/commands) — full CLI reference
+- [CLI commands](/docs/cli.md) — full host CLI reference
+- [Chat commands](/docs/chat-commands.md) — in-chat commands across all interfaces
+- [Offline scripts](/docs/scripts.md) — database diagnostic and repair tools
 - [Interfaces](/docs/interfaces) — terminal, web, Telegram, Slack, Matrix
 - [Tools](/docs/tools) — bash, read, write, edit, grep, fetch, recall
 - [Memory](/docs/memory) — how agents remember things between sessions
