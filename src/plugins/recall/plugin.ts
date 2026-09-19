@@ -1,7 +1,7 @@
 import type { KernPlugin, PluginContext, RouteHandler, BeforeContextInfo, ContextInjection } from "../types.js";
 import { RecallIndex } from "./recall.js";
 import { recallTool, setRecallIndex, setContextBounds } from "./tool.js";
-import { analyzeEmbedHealth, formatEmbedHealthReport, listEmbedSessions } from "../../embed-health.js";
+import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../../recall-health.js";
 import { analyzeSegmentHealth, formatHealthReport, listSessions } from "../../segment-health.js";
 import { log } from "../../log.js";
 
@@ -132,11 +132,11 @@ export const recallPlugin: KernPlugin = {
   },
 
   commands: {
-    "/embed-health": {
+    "/recall-health": {
       description: "show recall embedding health and pipeline stalls",
       handler: async (ctx) => {
         try {
-          const sessions = listEmbedSessions(ctx.db.db);
+          const sessions = listRecallSessions(ctx.db.db);
           if (sessions.length === 0) {
             return "```text\nNo sessions found in recall.db\n```";
           }
@@ -145,10 +145,10 @@ export const recallPlugin: KernPlugin = {
             ? activeId
             : sessions[0].session_id;
 
-          const report = analyzeEmbedHealth(ctx.db.db, targetSession);
-          return "```text\n" + formatEmbedHealthReport(report) + "\n```";
+          const report = analyzeRecallHealth(ctx.db.db, targetSession);
+          return "```text\n" + formatRecallHealthReport(report) + "\n```";
         } catch (err: any) {
-          return `\`\`\`text\nembed-health error: ${err.message}\n\`\`\``;
+          return `\`\`\`text\nrecall-health error: ${err.message}\n\`\`\``;
         }
       },
     },

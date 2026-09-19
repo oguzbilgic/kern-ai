@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import { listEmbedSessions } from "../embed-health.js";
+import { listRecallSessions } from "../recall-health.js";
 import { planRecallRepair, applyRecallRepair } from "../plugins/recall/repair.js";
 
 const USAGE = "Usage: kern scripts recall-repair <recall.db> [--session <id>] [--apply] [--no-backup] [--json] [--list]";
@@ -50,7 +50,7 @@ export async function recallRepair(args: string[]): Promise<void> {
   }
 
   try {
-    const sessions = listEmbedSessions(db);
+    const sessions = listRecallSessions(db);
     if (sessions.length === 0) {
       console.error("No sessions found in recall.db");
       process.exit(1);

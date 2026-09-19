@@ -71,13 +71,13 @@ function setupTestDb(): Database.Database {
   return db;
 }
 
-test("recallPlugin registers /embed-health and /segment-health commands", async () => {
+test("recallPlugin registers /recall-health and /segment-health commands", async () => {
   const commands = recallPlugin.commands;
   assert.ok(commands, "commands defined");
-  assert.ok(commands["/embed-health"], "/embed-health registered");
+  assert.ok(commands["/recall-health"], "/recall-health registered");
   assert.ok(commands["/segment-health"], "/segment-health registered");
 
-  assert.match(commands["/embed-health"].description, /embed/i);
+  assert.match(commands["/recall-health"].description, /recall/i);
   assert.match(commands["/segment-health"].description, /segment/i);
 });
 
@@ -90,7 +90,7 @@ test("recallPlugin commands return error when no sessions exist", async () => {
     sessionId: () => null,
   };
 
-  const embedRes = await recallPlugin.commands!["/embed-health"].handler(ctx);
+  const embedRes = await recallPlugin.commands!["/recall-health"].handler(ctx);
   assert.match(embedRes, /No sessions found in recall\.db/);
 
   const segRes = await recallPlugin.commands!["/segment-health"].handler(ctx);
@@ -125,7 +125,7 @@ test("recallPlugin commands run successfully against a populated session", async
     sessionId: () => sessionId,
   };
 
-  const embedRes = await recallPlugin.commands!["/embed-health"].handler(ctx);
+  const embedRes = await recallPlugin.commands!["/recall-health"].handler(ctx);
   assert.ok(embedRes.startsWith("```text\n"));
   assert.match(embedRes, /Session test-ses/);
   assert.match(embedRes, /Target\s+Rows/);

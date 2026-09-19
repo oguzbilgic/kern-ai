@@ -44,7 +44,7 @@ async function showHelp() {
   w(`    ${cyan("kern scripts")} ${dim("recover-session <recall.db>")}  rebuild a session from recall.db`);
   w(`    ${cyan("kern scripts")} ${dim("segment-health <recall.db>")}   analyze summary tree: overlaps, gaps, injected waste`);
   w(`    ${cyan("kern scripts")} ${dim("segment-prune <recall.db>")}    prune overlapping segments to one tiling per level (dry-run by default)`);
-  w(`    ${cyan("kern scripts")} ${dim("embed-health <recall.db>")}      analyze embedding coverage, vector health, batch blockers`);
+  w(`    ${cyan("kern scripts")} ${dim("recall-health <recall.db>")}     analyze embedding coverage, vector health, batch blockers`);
   w(`    ${cyan("kern scripts")} ${dim("recall-repair <recall.db>")}     repair missing vectors and backfill orphaned chunks (dry-run by default)`);
   w(`    ${cyan("kern restore")} ${dim("<file>")}         restore agent from backup`);
   w(`    ${cyan("kern logs")} ${dim("[name] [-f] [-n 50] [--level warn]")}  show agent logs`);
@@ -293,9 +293,9 @@ async function main() {
     } else if (name === "segment-prune") {
       const { segmentPrune } = await import("./scripts/segment-prune.js");
       await segmentPrune(args.slice(2));
-    } else if (name === "embed-health") {
-      const { embedHealth } = await import("./scripts/embed-health.js");
-      await embedHealth(args.slice(2));
+    } else if (name === "recall-health") {
+      const { recallHealth } = await import("./scripts/recall-health.js");
+      await recallHealth(args.slice(2));
     } else if (name === "recall-repair") {
       const { recallRepair } = await import("./scripts/recall-repair.js");
       await recallRepair(args.slice(2));
@@ -304,7 +304,7 @@ async function main() {
       console.error("  kern scripts recover-session <recall.db> [--list] [--session <id>]");
       console.error("  kern scripts segment-health <recall.db> [--session <id>] [--budget <tokens>] [--limit <n>] [--json]");
       console.error("  kern scripts segment-prune <recall.db> [--session <id>] [--budget <tokens>] [--apply] [--no-backup] [--limit <n>] [--json]");
-      console.error("  kern scripts embed-health <recall.db> [--session <id>] [--limit <n>] [--json] [--list]");
+      console.error("  kern scripts recall-health <recall.db> [--session <id>] [--limit <n>] [--json] [--list]");
       console.error("  kern scripts recall-repair <recall.db> [--session <id>] [--apply] [--no-backup] [--json] [--list]");
       process.exit(1);
     }

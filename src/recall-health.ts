@@ -1,5 +1,5 @@
 /**
- * Embedding & Recall Health Analyzer.
+ * Recall Health Analyzer.
  *
  * Read-only diagnostics over the vector embedding index in recall.db.
  * Analyzes both conversational chunks (chunks / vec_chunks) and semantic
@@ -14,7 +14,7 @@
  *  6. Exact identification of blocking stalls in the unindexed message tail.
  *
  * Pure: takes an open better-sqlite3 handle, never writes.
- * Used by `kern scripts embed-health`.
+ * Used by `kern scripts recall-health`.
  */
 
 import type Database from "better-sqlite3";
@@ -76,7 +76,7 @@ export interface StalledBlocker {
   detail: string;
 }
 
-export interface EmbedHealthReport {
+export interface RecallHealthReport {
   sessionId: string;
   session: SessionInfo;
   recallState: {
@@ -100,7 +100,7 @@ export interface SessionSummary {
   last_indexed_msg: number | null;
 }
 
-export function listEmbedSessions(db: Database.Database): SessionSummary[] {
+export function listRecallSessions(db: Database.Database): SessionSummary[] {
   // Find distinct session IDs across index_state, messages, chunks
   const rows = db.prepare(`
     SELECT
@@ -144,7 +144,7 @@ function hasLoneSurrogates(str: string): boolean {
   return false;
 }
 
-export function analyzeEmbedHealth(db: Database.Database, sessionId: string): EmbedHealthReport {
+export function analyzeRecallHealth(db: Database.Database, sessionId: string): RecallHealthReport {
   // 1. Session info from messages table
   const msgStats = db.prepare(`
     SELECT
@@ -516,7 +516,7 @@ function pad(val: string | number, len: number, right = false): string {
   return right ? s.padStart(len) : s.padEnd(len);
 }
 
-export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: number; color?: boolean } = {}): string {
+export function formatRecallHealthReport(r: RecallHealthReport, opts: { limit?: number; color?: boolean } = {}): string {
   const limit = opts.limit ?? 10;
   const color = opts.color ?? true;
   const c = {

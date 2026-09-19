@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { analyzeEmbedHealth, formatEmbedHealthReport, listEmbedSessions } from "../src/embed-health.js";
+import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../src/recall-health.js";
 
 function setupTestDb(): Database.Database {
   const db = new Database(":memory:");
@@ -57,7 +57,7 @@ function setupTestDb(): Database.Database {
   return db;
 }
 
-test("embed-health: reports 100/100 on perfectly indexed session", () => {
+test("recall-health: reports 100/100 on perfectly indexed session", () => {
   const db = setupTestDb();
   const sessionId = "test-session-1";
 
@@ -79,7 +79,7 @@ test("embed-health: reports 100/100 on perfectly indexed session", () => {
     insertVec.run(BigInt(c), new Float32Array([0.1, 0.2, 0.3, 0.4]));
   }
 
-  const report = analyzeEmbedHealth(db, sessionId);
+  const report = analyzeRecallHealth(db, sessionId);
   assert.equal(report.score, 100);
   assert.equal(report.recallState.lagMsgs, 0);
   assert.equal(report.recallState.coveragePct, 100);
@@ -88,12 +88,12 @@ test("embed-health: reports 100/100 on perfectly indexed session", () => {
   assert.equal(report.chunksVectorHealth.ghostVectors, 0);
   assert.equal(report.blockers.length, 0);
 
-  const formatted = formatEmbedHealthReport(report, { color: false });
+  const formatted = formatRecallHealthReport(report, { color: false });
   assert.match(formatted, /Health: 100\/100/);
   assert.match(formatted, /100% scanned/);
 });
 
-test("embed-health: detects oversized chunk blocking batch and deducts score", () => {
+test("recall-health: detects oversized chunk blocking batch and deducts score", () => {
   const db = setupTestDb();
   const sessionId = "test-session-stalled";
 
@@ -109,19 +109,19 @@ test("embed-health: detects oversized chunk blocking batch and deducts score", (
   // Indexed up to 20, lag is 11 msgs
   db.prepare("INSERT INTO index_state (session_id, last_indexed_msg) VALUES (?, ?)").run(sessionId, 20);
 
-  const report = analyzeEmbedHealth(db, sessionId);
+  const report = analyzeRecallHealth(db, sessionId);
   assert.ok(report.recallState.lagMsgs > 0);
   assert.equal(report.blockers.length, 1);
   assert.equal(report.blockers[0].reason, "oversized_chunk");
   assert.ok(report.score < 100);
   assert.ok(report.scoreBreakdown.stalled_pipeline !== undefined);
 
-  const formatted = formatEmbedHealthReport(report);
+  const formatted = formatRecallHealthReport(report);
   assert.match(formatted, /STALL \(oversized chunk\)/);
   assert.match(formatted, /stalled_pipeline/);
 });
 
-test("embed-health: checks surrogates via isWellFormed", () => {
+test("recall-health: checks surrogates via isWellFormed", () => {
   const db = setupTestDb();
   const sessionId = "test-session-surrogate";
 
@@ -135,12 +135,12 @@ test("embed-health: checks surrogates via isWellFormed", () => {
   );
   db.prepare("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)").run(BigInt(1), new Float32Array([0.1, 0.2, 0.3, 0.4]));
 
-  const report = analyzeEmbedHealth(db, sessionId);
+  const report = analyzeRecallHealth(db, sessionId);
   assert.equal(report.chunkStats.loneSurrogates, 0);
   assert.equal(report.score, 100);
 });
 
-test("embed-health: accurately reflects true vector coverage when chunks lack vectors", () => {
+test("recall-health: accurately reflects true vector coverage when chunks lack vectors", () => {
   const db = setupTestDb();
   const sessionId = "test-session-orphans";
 
@@ -162,24 +162,24 @@ test("embed-health: accurately reflects true vector coverage when chunks lack ve
     }
   }
 
-  const report = analyzeEmbedHealth(db, sessionId);
+  const report = analyzeRecallHealth(db, sessionId);
   assert.equal(report.recallState.scanPct, 100);
   // Only 2 of 10 chunks have vectors = 20% coverage
   assert.equal(report.recallState.coveragePct, 20);
   assert.equal(report.chunksVectorHealth.orphanContent, 8);
   assert.ok(report.score < 100);
 
-  const formatted = formatEmbedHealthReport(report, { color: false });
+  const formatted = formatRecallHealthReport(report, { color: false });
   assert.match(formatted, /100% scanned/);
   assert.match(formatted, /20%/);
 });
 
-test("embed-health: listEmbedSessions discovers sessions across tables", () => {
+test("recall-health: listRecallSessions discovers sessions across tables", () => {
   const db = setupTestDb();
   db.prepare("INSERT INTO messages (session_id, msg_index, role, content) VALUES (?, ?, ?, ?)").run("s1", 0, "user", "m1");
   db.prepare("INSERT INTO messages (session_id, msg_index, role, content) VALUES (?, ?, ?, ?)").run("s2", 0, "user", "m2");
 
-  const list = listEmbedSessions(db);
+  const list = listRecallSessions(db);
   assert.equal(list.length, 2);
   const ids = list.map(s => s.session_id).sort();
   assert.deepEqual(ids, ["s1", "s2"]);

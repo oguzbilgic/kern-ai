@@ -2,11 +2,11 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import { analyzeEmbedHealth, formatEmbedHealthReport, listEmbedSessions } from "../embed-health.js";
+import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../recall-health.js";
 
-const USAGE = "Usage: kern scripts embed-health <recall.db> [--session <id>] [--limit <n>] [--json] [--list]";
+const USAGE = "Usage: kern scripts recall-health <recall.db> [--session <id>] [--limit <n>] [--json] [--list]";
 
-export async function embedHealth(args: string[]): Promise<void> {
+export async function recallHealth(args: string[]): Promise<void> {
   const positional: string[] = [];
   let sessionArg: string | undefined;
   let limit = 10;
@@ -41,13 +41,13 @@ export async function embedHealth(args: string[]): Promise<void> {
     sqliteVec.load(db);
   } catch (err: any) {
     console.error(`Error: failed to load sqlite-vec extension: ${err.message}`);
-    console.error("sqlite-vec is required for embed-health to verify vector tables.");
+    console.error("sqlite-vec is required for recall-health to verify vector tables.");
     db.close();
     process.exit(1);
   }
 
   try {
-    const sessions = listEmbedSessions(db);
+    const sessions = listRecallSessions(db);
     if (sessions.length === 0) {
       console.error("No sessions in this recall.db");
       process.exit(1);
@@ -70,7 +70,7 @@ export async function embedHealth(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    const report = analyzeEmbedHealth(db, sessionId);
+    const report = analyzeRecallHealth(db, sessionId);
 
     if (json) {
       console.log(JSON.stringify({ ...report, dbPath }, null, 2));
@@ -79,7 +79,7 @@ export async function embedHealth(args: string[]): Promise<void> {
 
     console.log(`${dbPath}`);
     console.log("");
-    console.log(formatEmbedHealthReport(report, { limit }));
+    console.log(formatRecallHealthReport(report, { limit }));
   } finally {
     db.close();
   }

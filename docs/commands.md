@@ -283,16 +283,16 @@ Then detail lists (truncated at `--limit`): overlaps with both `created_at` stam
 
 The unsegmented tail (messages after the last L0 end) is reported separately — it is pending, not a gap. Never writes to the DB.
 
-## kern scripts embed-health
+## kern scripts recall-health
 
 Offline diagnostic tool for the recall embedding index in `recall.db`. Read-only. Examines both conversation chunks (`chunks` / `vec_chunks`) and semantic segment embeddings (`semantic_segments` / `vec_segments`).
 
 ```bash
-kern scripts embed-health .kern/recall.db                      # largest session
-kern scripts embed-health .kern/recall.db --list               # list sessions with msg & chunk counts
-kern scripts embed-health .kern/recall.db --session <id>       # specific session (prefix ok)
-kern scripts embed-health .kern/recall.db --limit 20           # show up to 20 blockers (default 10)
-kern scripts embed-health .kern/recall.db --json               # machine-readable, no truncation
+kern scripts recall-health .kern/recall.db                      # largest session
+kern scripts recall-health .kern/recall.db --list               # list sessions with msg & chunk counts
+kern scripts recall-health .kern/recall.db --session <id>       # specific session (prefix ok)
+kern scripts recall-health .kern/recall.db --limit 20           # show up to 20 blockers (default 10)
+kern scripts recall-health .kern/recall.db --json               # machine-readable, no truncation
 ```
 
 Checks invariants across six dimensions:
@@ -317,7 +317,7 @@ kern scripts recall-repair .kern/recall.db --apply --no-backup   # skip the SQLi
 kern scripts recall-repair .kern/recall.db --json                # machine-readable plan
 ```
 
-- **Zero-op on healthy**: if `embed-health` shows 100% vector coverage and 0 lag, exits immediately with zero changes.
+- **Zero-op on healthy**: if `recall-health` shows 100% vector coverage and 0 lag, exits immediately with zero changes.
 - **Pure SQLite**: deletes orphaned rows from `chunks` and rewinds `index_state.last_indexed_msg` to the earliest missing message index.
 - **Agent self-heals**: on the next agent start or turn, the agent's native background indexer resumes from the reset cursor, re-chunking and re-vectorizing missing messages cleanly.
 - **Safe**: snapshots `recall.db` to `<recall.db>.backup-<timestamp>` using SQLite's online backup API before applying modifications.
@@ -373,7 +373,7 @@ Restart the agent daemon.
 
 List all available skills with active/inactive status. Provided by the skills plugin.
 
-### /embed-health
+### /recall-health
 
 Inspect recall embedding index health, message lag, chunk size distribution, and exact stalled pipeline blockers for the active session. Provided by the recall plugin.
 
