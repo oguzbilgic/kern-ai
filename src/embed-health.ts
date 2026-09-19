@@ -478,7 +478,9 @@ function analyzeVirtualVecTable(
     `).get(sessionId) as { cnt: number };
     orphanContent = o?.cnt ?? 0;
   } catch {
-    // ignore
+    // If querying vecTable fails (e.g. extension not loaded or module error),
+    // treat all content rows as lacking verified vectors instead of reporting 0 orphans
+    orphanContent = cCount.c;
   }
 
   // Ghost vectors: row in vecTable whose rowid does not exist in contentTable

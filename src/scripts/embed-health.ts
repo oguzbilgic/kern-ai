@@ -39,8 +39,11 @@ export async function embedHealth(args: string[]): Promise<void> {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
     sqliteVec.load(db);
-  } catch {
-    // sqlite-vec load failed or not required
+  } catch (err: any) {
+    console.error(`Error: failed to load sqlite-vec extension: ${err.message}`);
+    console.error("sqlite-vec is required for embed-health to verify vector tables.");
+    db.close();
+    process.exit(1);
   }
 
   try {
