@@ -500,17 +500,30 @@ function pad(val: string | number, len: number, right = false): string {
   return right ? s.padStart(len) : s.padEnd(len);
 }
 
-export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: number } = {}): string {
+export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: number; color?: boolean } = {}): string {
   const limit = opts.limit ?? 10;
+  const color = opts.color ?? true;
+  const c = {
+    reset: color ? "\x1b[0m" : "",
+    bold: color ? "\x1b[1m" : "",
+    dim: color ? "\x1b[90m" : "",
+    green: color ? "\x1b[32m" : "",
+    red: color ? "\x1b[31m" : "",
+    yellow: color ? "\x1b[33m" : "",
+    blue: color ? "\x1b[34m" : "",
+    cyan: color ? "\x1b[36m" : "",
+    magenta: color ? "\x1b[35m" : "",
+  };
+
   const out: string[] = [];
 
   const dimStr = r.chunksVectorHealth.expectedDim ? `${r.chunksVectorHealth.expectedDim} dims` : "unknown dims";
   out.push(
-    `Session ${r.sessionId.slice(0, 8)}  messages ${r.session.minIndex}–${r.session.maxIndex} (${r.session.totalMessages.toLocaleString()} msgs)  ` +
-    `indexed to ${r.recallState.lastIndexedMsg ?? "—"}` +
-    (r.recallState.lagMsgs > 0 ? ` (lag ${r.recallState.lagMsgs.toLocaleString()} msgs, ${100 - r.recallState.coveragePct}% unindexed)` : " (100% indexed)")
+    `${c.blue}${c.bold}Session ${r.sessionId.slice(0, 8)}${c.reset}  messages ${r.session.minIndex}–${r.session.maxIndex} (${r.session.totalMessages.toLocaleString()} msgs)  ` +
+    `indexed to ${c.cyan}${r.recallState.lastIndexedMsg ?? "—"}${c.reset}` +
+    (r.recallState.lagMsgs > 0 ? ` (${c.yellow}lag ${r.recallState.lagMsgs.toLocaleString()} msgs${c.reset}, ${100 - r.recallState.coveragePct}% unindexed)` : ` (${c.green}100% indexed${c.reset})`)
   );
-  out.push(`Vector Table: sqlite-vec (${dimStr})`);
+  out.push(`Vector Table: sqlite-vec (${c.magenta}${dimStr}${c.reset})`);
   out.push("");
 
   // Targets summary table
@@ -526,20 +539,27 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
     pad("Surr", 5, true),
     "  Coverage",
   ];
-  out.push(hdr.join(" "));
+  out.push(`${c.dim}${hdr.join(" ")}${c.reset}`);
 
   const cLagStr = r.recallState.lagMsgs > 0 ? `, ${r.recallState.lagMsgs.toLocaleString()} msgs gapped` : "";
+  const orphanCol = r.chunksVectorHealth.orphanContent > 0 ? c.red : c.reset;
+  const ghostCol = r.chunksVectorHealth.ghostVectors > 0 ? c.red : c.reset;
+  const gt8kCol = r.chunkStats.gt8kTokens > 0 ? c.yellow : c.reset;
+  const gt16kCol = r.chunkStats.gt16kChars > 0 ? c.red : c.reset;
+  const surrCol = r.chunkStats.loneSurrogates > 0 ? c.red : c.reset;
+  const covCol = r.recallState.coveragePct >= 99 ? c.green : r.recallState.coveragePct >= 90 ? c.yellow : c.red;
+
   out.push([
     pad("Chunks", 18),
     pad(r.chunkStats.totalChunks.toLocaleString(), 8, true),
     pad(r.recallState.lastIndexedMsg ?? 0, 8, true),
     pad(r.chunksVectorHealth.vectorRows.toLocaleString(), 8, true),
-    pad(r.chunksVectorHealth.orphanContent, 7, true),
-    pad(r.chunksVectorHealth.ghostVectors, 6, true),
-    pad(r.chunkStats.gt8kTokens, 6, true),
-    pad(r.chunkStats.gt16kChars, 6, true),
-    pad(r.chunkStats.loneSurrogates, 5, true),
-    `  ${r.recallState.coveragePct}%${cLagStr}`,
+    orphanCol + pad(r.chunksVectorHealth.orphanContent, 7, true) + c.reset,
+    ghostCol + pad(r.chunksVectorHealth.ghostVectors, 6, true) + c.reset,
+    gt8kCol + pad(r.chunkStats.gt8kTokens, 6, true) + c.reset,
+    gt16kCol + pad(r.chunkStats.gt16kChars, 6, true) + c.reset,
+    surrCol + pad(r.chunkStats.loneSurrogates, 5, true) + c.reset,
+    `  ${covCol}${r.recallState.coveragePct}%${cLagStr}${c.reset}`,
   ].join(" "));
 
   out.push([
@@ -552,12 +572,12 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
     pad(0, 6, true),
     pad(0, 6, true),
     pad(0, 5, true),
-    `  100.0% (L0–L2 covered)`,
+    `  ${c.green}100.0% (L0–L2 covered)${c.reset}`,
   ].join(" "));
   out.push("");
 
   // Sizing distributions
-  out.push("Chunk Size Distribution:");
+  out.push(`${c.bold}Chunk Size Distribution:${c.reset}`);
   out.push(
     `  Tokens:      min ${r.chunkStats.minTokens} · p50 ${r.chunkStats.p50Tokens} · p95 ${r.chunkStats.p95Tokens} · max ${r.chunkStats.maxTokens.toLocaleString()} · avg ${r.chunkStats.avgTokens}`
   );
@@ -571,45 +591,46 @@ export function formatEmbedHealthReport(r: EmbedHealthReport, opts: { limit?: nu
   const p4to8 = ((b.from4kTo8k / tot) * 100).toFixed(1);
   const pOver = ((b.over8k / tot) * 100).toFixed(1);
   out.push(
-    `  Size buckets:  <1k tok: ${b.under1k.toLocaleString()} (${pUnder}%) · 1k–4k: ${b.from1kTo4k.toLocaleString()} (${p1to4}%) · 4k–8k: ${b.from4kTo8k.toLocaleString()} (${p4to8}%) · >8k: ${b.over8k.toLocaleString()} (${pOver}%)`
+    `  Size buckets:  <1k tok: ${b.under1k.toLocaleString()} (${pUnder}%) · 1k–4k: ${b.from1kTo4k.toLocaleString()} (${p1to4}%) · 4k–8k: ${b.from4kTo8k.toLocaleString()} (${p4to8}%) · >8k: ${b.over8k > 0 ? c.yellow : ""}${b.over8k.toLocaleString()} (${pOver}%)${c.reset}`
   );
   out.push("");
 
   // Blockers & Stalls
   if (r.blockers.length > 0) {
-    out.push(`Blockers & Pipeline Stalls (${r.blockers.length}):`);
+    out.push(`${c.red}${c.bold}Blockers & Pipeline Stalls (${r.blockers.length}):${c.reset}`);
     for (const blk of r.blockers.slice(0, limit)) {
-      const tag = blk.reason === "oversized_chunk" ? "STALL (oversized chunk)"
-        : blk.reason === "lone_surrogate" ? "STALL (lone surrogate)"
-        : "PENDING TAIL";
-      out.push(`  ✦ ${tag} at msg ${blk.firstUnindexedMsg}:`);
+      const tag = blk.reason === "oversized_chunk" ? `${c.red}STALL (oversized chunk)${c.reset}`
+        : blk.reason === "lone_surrogate" ? `${c.red}STALL (lone surrogate)${c.reset}`
+        : `${c.yellow}PENDING TAIL${c.reset}`;
+      out.push(`  ✦ ${tag} at msg ${c.bold}${blk.firstUnindexedMsg}${c.reset}:`);
       out.push(`    Candidate span: ${blk.candidateSpanMsgs} msgs (${blk.candidateChars.toLocaleString()} chars, ~${blk.candidateEstTokens.toLocaleString()} est tokens)`);
       if (blk.largestMsg) {
-        out.push(`    Largest: msg ${blk.largestMsg.index} (${blk.largestMsg.role}, ${blk.largestMsg.chars.toLocaleString()} chars) — "${blk.largestMsg.preview}..."`);
+        out.push(`    Largest: msg ${blk.largestMsg.index} (${blk.largestMsg.role}, ${c.yellow}${blk.largestMsg.chars.toLocaleString()} chars${c.reset}) — "${blk.largestMsg.preview}..."`);
       }
       out.push(`    Detail: ${blk.detail}`);
     }
     out.push("");
   } else {
-    out.push("Blockers: None (indexing pipeline is moving cleanly)");
+    out.push(`Blockers: ${c.green}None (indexing pipeline is moving cleanly)${c.reset}`);
     out.push("");
   }
 
   // Vector table invariants
-  out.push("Vector Invariants:");
+  out.push(`${c.bold}Vector Invariants:${c.reset}`);
   const cMismatch = r.chunksVectorHealth.mismatchedDims + r.segmentsVectorHealth.mismatchedDims;
   const cOrphan = r.chunksVectorHealth.orphanContent + r.segmentsVectorHealth.orphanContent;
   const cGhost = r.chunksVectorHealth.ghostVectors + r.segmentsVectorHealth.ghostVectors;
 
-  out.push(`  Vector dimensions: ${dimStr} across all rows (${cMismatch} mismatched dims)`);
-  out.push(`  Orphan content (chunks without vectors): ${cOrphan}`);
-  out.push(`  Ghost vectors (vectors without chunks): ${cGhost}`);
-  out.push(`  Surrogate pair anomalies in chunks: ${r.chunkStats.loneSurrogates}`);
+  out.push(`  Vector dimensions: ${dimStr} across all rows (${cMismatch > 0 ? c.red : c.green}${cMismatch} mismatched dims${c.reset})`);
+  out.push(`  Orphan content (chunks without vectors): ${cOrphan > 0 ? c.red : c.green}${cOrphan}${c.reset}`);
+  out.push(`  Ghost vectors (vectors without chunks): ${cGhost > 0 ? c.red : c.green}${cGhost}${c.reset}`);
+  out.push(`  Surrogate pair anomalies in chunks: ${r.chunkStats.loneSurrogates > 0 ? c.red : c.green}${r.chunkStats.loneSurrogates}${c.reset}`);
   out.push("");
 
   // Score
   const bd = Object.entries(r.scoreBreakdown).filter(([, v]) => v !== 0).map(([k, v]) => `${k} ${v}`).join(", ");
-  out.push(`Health: ${r.score}/100${bd ? `  (${bd})` : ""}`);
+  const scoreCol = r.score >= 90 ? c.green : r.score >= 70 ? c.yellow : c.red;
+  out.push(`Health: ${scoreCol}${c.bold}${r.score}/100${c.reset}${bd ? `  (${c.dim}${bd}${c.reset})` : ""}`);
 
   return out.join("\n");
 }

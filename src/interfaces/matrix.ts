@@ -1,7 +1,7 @@
 import type { Interface, StartOptions, Attachment } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, ansiToHtml, hasAnsi, stripAnsi } from "../util.js";
 import { setMatrixClient } from "../plugins/matrix/plugin.js";
 import { marked } from "marked";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
@@ -367,9 +367,10 @@ export class MatrixInterface implements Interface {
   private async sendMessage(roomId: string, body: string): Promise<void> {
     const txnId = `kern-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const formatted = mdToMatrixHtml(body);
+    const plainBody = hasAnsi(body) ? stripAnsi(body) : body;
     const payload: Record<string, unknown> = {
       msgtype: "m.text",
-      body,
+      body: plainBody,
     };
     if (formatted) {
       payload.format = "org.matrix.custom.html";
@@ -477,12 +478,26 @@ function sleep(ms: number): Promise<void> {
  * Returns undefined if no markdown constructs are detected.
  */
 export function mdToMatrixHtml(text: string): string | undefined {
-  if (!/[*_`~#\[\]>|\\-]/.test(text)) {
+  const containsAnsi = hasAnsi(text);
+  if (!containsAnsi && !/[*_`~#\[\]>|\\-]/.test(text)) {
     return undefined;
   }
 
+  // If text contains a code fence with ANSI escape codes (e.g. ```text\n\x1b[...m\n``` or ```ansi\n...\n```)
+  // or bare ANSI escapes, convert the ANSI escape codes inside code blocks to styled HTML tags.
+  let markdownText = text;
+  if (containsAnsi) {
+    markdownText = text.replace(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/g, (_match, code) => {
+      // If code contains ANSI, replace code block with pre/code with ansiToHtml rendered
+      if (hasAnsi(code)) {
+        return `<pre><code>${ansiToHtml(code)}</code></pre>`;
+      }
+      return _match;
+    });
+  }
+
   // Parse markdown with marked (GFM tables, tasklists, autolinks, nested lists)
-  let html = marked.parse(text, { gfm: true, breaks: false }) as string;
+  let html = marked.parse(markdownText, { gfm: true, breaks: false }) as string;
 
   // Unwrap <p> directly inside <li> so list markers and text remain inline
   // (CommonMark loose lists wrap <li> text in <p>, which introduces line breaks in Matrix clients)

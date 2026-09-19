@@ -107,6 +107,17 @@ test("mdToMatrixHtml: renders tables with alignments and cell formatting", () =>
   assert.ok(result.includes("</table>"));
 });
 
+test("mdToMatrixHtml: converts ANSI escape sequences in code blocks to colored HTML", () => {
+  const input = "```text\n\x1b[32m\x1b[1mHealth: 100/100\x1b[0m\n\x1b[90mTarget Rows\x1b[0m\n```";
+  const result = mdToMatrixHtml(input);
+  assert.ok(result);
+  assert.ok(result.includes("<pre><code>"));
+  assert.ok(result.includes('<font color="#a6e3a1">'));
+  assert.ok(result.includes("<b>Health: 100/100</b>"));
+  assert.ok(result.includes('<font color="#6c7086">Target Rows</font>'));
+  assert.ok(result.includes("</code></pre>"));
+});
+
 test("MatrixInterface: emits intermediate text on tool-call event (per-step)", async () => {
   const { MatrixInterface } = await import("../src/interfaces/matrix.js");
   const matrix = new MatrixInterface(

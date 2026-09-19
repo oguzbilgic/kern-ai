@@ -88,7 +88,7 @@ test("embed-health: reports 100/100 on perfectly indexed session", () => {
   assert.equal(report.chunksVectorHealth.ghostVectors, 0);
   assert.equal(report.blockers.length, 0);
 
-  const formatted = formatEmbedHealthReport(report);
+  const formatted = formatEmbedHealthReport(report, { color: false });
   assert.match(formatted, /Health: 100\/100/);
   assert.match(formatted, /100% indexed/);
 });

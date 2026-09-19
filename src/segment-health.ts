@@ -386,23 +386,52 @@ function segLabel(s: SegRef): string {
   return `#${s.id} [${s.msg_start}–${s.msg_end})`;
 }
 
-export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {}): string {
+export function formatHealthReport(r: HealthReport, opts: { limit?: number; color?: boolean } = {}): string {
   const limit = opts.limit ?? 10;
+  const color = opts.color ?? true;
+  const c = {
+    reset: color ? "\x1b[0m" : "",
+    bold: color ? "\x1b[1m" : "",
+    dim: color ? "\x1b[90m" : "",
+    green: color ? "\x1b[32m" : "",
+    red: color ? "\x1b[31m" : "",
+    yellow: color ? "\x1b[33m" : "",
+    blue: color ? "\x1b[34m" : "",
+    cyan: color ? "\x1b[36m" : "",
+    magenta: color ? "\x1b[35m" : "",
+  };
+
   const out: string[] = [];
 
-  out.push(`Session ${r.sessionId.slice(0, 8)}  messages ${r.messages.minIndex}–${r.messages.maxIndex} (${r.messages.count})  ` +
-    `indexed to ${r.segmentState.lastSegmentedMsg ?? "—"}` + (r.segmentState.lagMsgs ? ` (lag ${r.segmentState.lagMsgs})` : ""));
+  out.push(`${c.blue}${c.bold}Session ${r.sessionId.slice(0, 8)}${c.reset}  messages ${r.messages.minIndex}–${r.messages.maxIndex} (${r.messages.count})  ` +
+    `indexed to ${c.cyan}${r.segmentState.lastSegmentedMsg ?? "—"}${c.reset}` + (r.segmentState.lagMsgs ? ` (${c.yellow}lag ${r.segmentState.lagMsgs}${c.reset})` : ""));
   if (r.unsegmentedTail) out.push(`Unsegmented tail: ${r.unsegmentedTail.from}–${r.unsegmentedTail.to} (${r.unsegmentedTail.msgs} msgs, pending — not a gap)`);
   out.push("");
 
   // Per-level table
   const hdr = [pad("Level", 6), pad("Segs", 5, true), pad("Summ", 5, true), pad("Orph", 5, true), pad("Strag", 6, true), pad("Ovlp", 5, true), pad("Shad", 5, true), pad("Fence", 6, true), pad("Gaps", 5, true), pad("RedTok", 7, true), "  Coverage"];
-  out.push(hdr.join(" "));
+  out.push(`${c.dim}${hdr.join(" ")}${c.reset}`);
   for (const l of r.levels) {
+    const orphCol = l.orphans > 0 ? c.yellow : c.reset;
+    const stragCol = l.stragglers > 0 ? c.red : c.reset;
+    const ovlpCol = l.overlaps > 0 ? c.red : c.reset;
+    const shadCol = l.shadowed > 0 ? c.yellow : c.reset;
+    const gapCol = l.gaps > 0 ? c.red : c.reset;
+    const redCol = l.redundantTokens > 0 ? c.yellow : c.reset;
+    const covCol = l.coveragePct >= 99 ? c.green : l.coveragePct >= 80 ? c.yellow : c.red;
+
     out.push([
-      pad(`L${l.level}`, 6), pad(l.segments, 5, true), pad(l.summarized, 5, true), pad(l.orphans, 5, true), pad(l.stragglers, 6, true),
-      pad(l.overlaps, 5, true), pad(l.shadowed, 5, true), pad(l.fenceposts, 6, true), pad(l.gaps, 5, true), pad(l.redundantTokens, 7, true),
-      `  ${l.span[0]}–${l.span[1]} (${l.coveragePct}%${l.gapMsgs ? `, ${l.gapMsgs} msgs uncovered` : ""})`,
+      pad(`L${l.level}`, 6),
+      pad(l.segments, 5, true),
+      pad(l.summarized, 5, true),
+      orphCol + pad(l.orphans, 5, true) + c.reset,
+      stragCol + pad(l.stragglers, 6, true) + c.reset,
+      ovlpCol + pad(l.overlaps, 5, true) + c.reset,
+      shadCol + pad(l.shadowed, 5, true) + c.reset,
+      pad(l.fenceposts, 6, true),
+      gapCol + pad(l.gaps, 5, true) + c.reset,
+      redCol + pad(l.redundantTokens, 7, true) + c.reset,
+      `  ${covCol}${l.span[0]}–${l.span[1]} (${l.coveragePct}%${l.gapMsgs ? `, ${l.gapMsgs} msgs uncovered` : ""})${c.reset}`,
     ].join(" "));
   }
   out.push("");
@@ -415,9 +444,9 @@ export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {
   }
 
   if (r.overlaps.length) {
-    out.push(`Overlaps (${r.overlaps.length}):`);
+    out.push(`${c.red}${c.bold}Overlaps (${r.overlaps.length}):${c.reset}`);
     for (const o of r.overlaps.slice(0, limit)) {
-      const tag = o.shadowed ? "⊇ shadowed" : `∩ ${o.pctOfSmaller}%`;
+      const tag = o.shadowed ? `${c.yellow}⊇ shadowed${c.reset}` : `${c.red}∩ ${o.pctOfSmaller}%${c.reset}`;
       out.push(`  L${o.a.level} ${segLabel(o.a)} ${fmtDate(o.a.created_at)}  vs  ${segLabel(o.b)} ${fmtDate(o.b.created_at)}  → ${o.msgs} msgs ${tag}`);
     }
     out.push(...more(r.overlaps.length, "overlaps"));
@@ -425,7 +454,7 @@ export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {
   }
 
   if (r.gaps.length) {
-    out.push(`Gaps (${r.gaps.length}) — message ranges no segment at that level covers:`);
+    out.push(`${c.red}${c.bold}Gaps (${r.gaps.length})${c.reset} — message ranges no segment at that level covers:`);
     for (const g of r.gaps.slice(0, limit)) {
       out.push(`  L${g.level} ${g.from}–${g.to}  (${g.msgs} msgs)`);
     }
@@ -434,7 +463,7 @@ export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {
   }
 
   if (r.stragglers.length) {
-    out.push(`Stragglers (${r.stragglers.length}) — orphans older than the newest parent above them; next rollup will batch them with unrelated segments:`);
+    out.push(`${c.yellow}${c.bold}Stragglers (${r.stragglers.length})${c.reset} — orphans older than the newest parent above them; next rollup will batch them with unrelated segments:`);
     for (const s of r.stragglers.slice(0, limit)) {
       out.push(`  L${s.level} ${segLabel(s)} created ${fmtDate(s.created_at)}`);
     }
@@ -443,7 +472,7 @@ export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {
   }
 
   if (r.parentIssues.length) {
-    out.push(`Parent/child issues (${r.parentIssues.length}):`);
+    out.push(`${c.red}${c.bold}Parent/child issues (${r.parentIssues.length}):${c.reset}`);
     for (const p of r.parentIssues.slice(0, limit)) {
       out.push(`  L${p.parent.level} ${segLabel(p.parent)}  ${p.kind}: ${p.detail}`);
     }
@@ -454,9 +483,10 @@ export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {
   if (r.injection) {
     const i = r.injection;
     const lc = Object.entries(i.levelCounts).sort((a, b) => Number(b[0]) - Number(a[0])).map(([l, n]) => `${n}×L${l}`).join(" ");
-    out.push(`Injected context (budget ${i.budgetTokens.toLocaleString()} tok, trimmed before msg ${i.trimmedBeforeMsg} → snapped ${i.snappedBoundary}):`);
-    out.push(`  ${i.segments} segments (${lc}), ${i.tokens.toLocaleString()} tok, ${i.redundantTokens.toLocaleString()} redundant (${i.wastePct}% waste)` +
-      (i.gapMsgs ? `, ${i.gapMsgs} msgs of trimmed history not covered by any injected summary` : ""));
+    const wasteCol = i.wastePct > 10 ? c.red : i.wastePct > 0 ? c.yellow : c.green;
+    out.push(`${c.bold}Injected context${c.reset} (budget ${i.budgetTokens.toLocaleString()} tok, trimmed before msg ${i.trimmedBeforeMsg} → snapped ${i.snappedBoundary}):`);
+    out.push(`  ${i.segments} segments (${lc}), ${i.tokens.toLocaleString()} tok, ${wasteCol}${i.redundantTokens.toLocaleString()} redundant (${i.wastePct}% waste)${c.reset}` +
+      (i.gapMsgs ? `, ${c.red}${i.gapMsgs} msgs of trimmed history not covered by any injected summary${c.reset}` : ""));
     out.push("");
   } else {
     out.push("Injected context: nothing summarized yet");
@@ -464,6 +494,7 @@ export function formatHealthReport(r: HealthReport, opts: { limit?: number } = {
   }
 
   const bd = Object.entries(r.scoreBreakdown).filter(([, v]) => v !== 0).map(([k, v]) => `${k} ${v}`).join(", ");
-  out.push(`Health: ${r.score}/100${bd ? `  (${bd})` : ""}`);
+  const scoreCol = r.score >= 90 ? c.green : r.score >= 70 ? c.yellow : c.red;
+  out.push(`Health: ${scoreCol}${c.bold}${r.score}/100${c.reset}${bd ? `  (${c.dim}${bd}${c.reset})` : ""}`);
   return out.join("\n");
 }

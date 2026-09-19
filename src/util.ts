@@ -89,6 +89,135 @@ export function stripAnsi(text: string): string {
 }
 
 /**
+ * Check if text contains ANSI escape sequences.
+ */
+export function hasAnsi(text: string): boolean {
+  return /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]|(?:\u001b\][^\u0007\u001b]*[\u0007\u001b\\])/.test(text);
+}
+
+/**
+ * Convert standard ANSI styling codes into HTML (<font color="..."> and <b>).
+ * Designed for Matrix formatted_body rendering inside <pre><code> blocks.
+ */
+export function ansiToHtml(text: string): string {
+  const ANSI_COLOR_MAP: Record<number, string> = {
+    30: "#11111b", // black / mantle
+    31: "#f38ba8", // red
+    32: "#a6e3a1", // green
+    33: "#f9e2af", // yellow
+    34: "#89b4fa", // blue
+    35: "#cba6f7", // magenta / mauve
+    36: "#94e2d5", // cyan / teal
+    37: "#cdd6f4", // white / text
+    90: "#6c7086", // bright black / gray (dim)
+    91: "#eba0ac", // bright red
+    92: "#a6e3a1", // bright green
+    93: "#f9e2af", // bright yellow
+    94: "#89b4fa", // bright blue
+    95: "#f5c2e7", // bright magenta
+    96: "#89dceb", // bright cyan
+    97: "#ffffff", // bright white
+  };
+
+  // Split by ANSI escape sequences: \x1b[<codes>m
+  const regex = /\u001b\[([0-9;]*)m/g;
+  let result = "";
+  let lastIndex = 0;
+  let activeColor: string | null = null;
+  let activeBold = false;
+  let activeDim = false;
+
+  const closeTags = () => {
+    let closing = "";
+    if (activeBold) {
+      closing += "</b>";
+      activeBold = false;
+    }
+    if (activeColor || activeDim) {
+      closing += "</font>";
+      activeColor = null;
+      activeDim = false;
+    }
+    return closing;
+  };
+
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    // Append escaped text before the escape code
+    const chunk = text.slice(lastIndex, match.index);
+    if (chunk) {
+      result += escapeHtml(chunk);
+    }
+    lastIndex = regex.lastIndex;
+
+    const rawCodes = match[1] ? match[1].split(";").map(Number) : [0];
+    for (const code of rawCodes) {
+      if (code === 0) {
+        // Reset all
+        result += closeTags();
+      } else if (code === 1) {
+        // Bold
+        if (!activeBold) {
+          result += "<b>";
+          activeBold = true;
+        }
+      } else if (code === 2) {
+        // Dim
+        if (!activeDim) {
+          if (activeColor) result += "</font>";
+          result += '<font color="#6c7086">';
+          activeDim = true;
+        }
+      } else if (code === 22) {
+        // Normal intensity (unbold, undim)
+        if (activeBold) {
+          result += "</b>";
+          activeBold = false;
+        }
+        if (activeDim) {
+          result += "</font>";
+          activeDim = false;
+        }
+      } else if (code >= 30 && code <= 37 || code >= 90 && code <= 97) {
+        // Foreground color
+        if (activeColor || activeDim) {
+          result += "</font>";
+          activeDim = false;
+        }
+        activeColor = ANSI_COLOR_MAP[code] || null;
+        if (activeColor) {
+          result += `<font color="${activeColor}">`;
+        }
+      } else if (code === 39) {
+        // Default text color
+        if (activeColor) {
+          result += "</font>";
+          activeColor = null;
+        }
+      }
+    }
+  }
+
+  // Remainder
+  const remaining = text.slice(lastIndex);
+  if (remaining) {
+    result += escapeHtml(remaining);
+  }
+  result += closeTags();
+
+  return result;
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+/**
  * Extract plain text from message content (string or array).
  * Used for embeddings, search, summaries — strips media parts.
  */

@@ -133,7 +133,7 @@ test("recallPlugin commands run successfully against a populated session", async
   const segRes = await recallPlugin.commands!["/segment-health"].handler(ctx);
   assert.ok(segRes.startsWith("```text\n"));
   assert.match(segRes, /Session test-ses/);
-  assert.match(segRes, /Health: 100\/100/);
+  assert.match(segRes, /100\/100/);
 
   db.close();
 });

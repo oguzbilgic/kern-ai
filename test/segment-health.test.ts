@@ -265,7 +265,7 @@ test("formatHealthReport: truncates long lists at --limit and says how many more
   }
   const r = analyzeSegmentHealth(makeDb(1500, segs), SID);
   assert.equal(r.overlaps.length, 15);
-  const text = formatHealthReport(r, { limit: 10 });
+  const text = formatHealthReport(r, { limit: 10, color: false });
   assert.match(text, /Overlaps \(15\)/);
   assert.match(text, /… 5 more overlaps \(use --limit 15 to show all\)/);
   assert.equal((text.match(/→ 30 msgs/g) || []).length, 10);
@@ -274,7 +274,7 @@ test("formatHealthReport: truncates long lists at --limit and says how many more
 
 test("formatHealthReport: clean tree prints table, injection line, and 100/100", () => {
   const r = analyzeSegmentHealth(makeDb(100, [{ id: 1, start: 0, end: 100 }], 99), SID, { budgetTokens: 500 });
-  const text = formatHealthReport(r);
+  const text = formatHealthReport(r, { color: false });
   assert.match(text, /^Session sess-1 {2}messages 0–99 \(100\) {2}indexed to 99$/m);
   assert.match(text, /^L0 +1 +1 +1 +0 +0 +0 +0 +0 +0 +0–100 \(100%\)$/m);
   assert.doesNotMatch(text, /Overlaps \(|Gaps \(|Stragglers \(|Parent\/child|Fencepost overlaps/);
