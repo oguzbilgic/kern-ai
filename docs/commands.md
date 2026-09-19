@@ -305,6 +305,22 @@ Checks invariants across six dimensions:
 
 Outputs a 0–100 health score with itemized deductions (`lag`, `oversized_chunks`, `lone_surrogates`, `vector_invariants`, `stalled_pipeline`).
 
+## kern scripts recall-repair
+
+Inspects and repairs recall index deficiencies (orphaned chunks, missing vectors in `vec_chunks`). Dry-run by default. Zero-op if the index is already healthy (0 API calls, 0 DB writes).
+
+```bash
+kern scripts recall-repair .kern/recall.db                       # dry run: inspects chunks and vec_chunks, plans batch embedding
+kern scripts recall-repair .kern/recall.db --session <id>        # specific session (prefix ok)
+kern scripts recall-repair .kern/recall.db --apply               # execute repair: embeds missing chunks, writes to vec_chunks
+kern scripts recall-repair .kern/recall.db --apply --no-backup   # skip the SQLite snapshot backup
+kern scripts recall-repair .kern/recall.db --json                # machine-readable plan
+```
+
+- **Selective**: only embeds chunks that lack corresponding rows in `vec_chunks`. Existing embeddings are never re-evaluated.
+- **Resilient**: uses `capForEmbedding` and shrink-and-retry fallback if batch API calls are rejected.
+- **Safe**: snapshots `recall.db` to `<recall.db>.backup-<timestamp>` using SQLite's online backup API before applying modifications.
+
 ## kern scripts segment-prune
 
 Recovery for a summary tree that `segment-health` shows to be violating the tiling invariant — parallel tilings from a re-index, straggler rollups spanning siblings they never summarized, shadowed duplicates. Prune is pure selection: it decides which existing segments form the one true branch and deletes the rest. **Zero LLM calls.** Dry-run by default.
