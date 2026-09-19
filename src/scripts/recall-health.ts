@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../recall-health.js";
+import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../plugins/recall/health.js";
 
 const USAGE = "Usage: kern scripts recall-health <recall.db> [--session <id>] [--limit <n>] [--json] [--list]";
 

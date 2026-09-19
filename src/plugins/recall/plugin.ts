@@ -1,7 +1,7 @@
 import type { KernPlugin, PluginContext, RouteHandler, BeforeContextInfo, ContextInjection } from "../types.js";
 import { RecallIndex } from "./recall.js";
 import { recallTool, setRecallIndex, setContextBounds } from "./tool.js";
-import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../../recall-health.js";
+import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "./health.js";
 import { analyzeSegmentHealth, formatHealthReport, listSessions } from "../../segment-health.js";
 import { log } from "../../log.js";
 

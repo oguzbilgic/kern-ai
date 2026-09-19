@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../src/recall-health.js";
+import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "../src/plugins/recall/health.js";
 
 function setupTestDb(): Database.Database {
   const db = new Database(":memory:");
