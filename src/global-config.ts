@@ -68,12 +68,24 @@ export async function promoteToSystemManaged(): Promise<string> {
 
 /**
  * Resolve the active global config path:
- * - /etc/kern/config.json if it exists (or if running as root)
+ * - /etc/kern/config.json if it exists (system-managed fleet host)
  * - ~/.kern/config.json otherwise
+ * 
+ * If running as root without /etc/kern/config.json, warns that root user-level
+ * config is discouraged and recommends running 'sudo kern install' to promote to /etc/kern.
  */
+let rootWarned = false;
 export function getGlobalConfigPath(): string {
-  if (isSystemManaged() || isRoot()) {
+  if (isSystemManaged()) {
     return SYSTEM_CONFIG_FILE;
+  }
+  if (isRoot() && !rootWarned) {
+    // Only warn once per process, and not in test environment or non-interactive pipe
+    if (process.env.NODE_ENV !== "test" && process.stderr.isTTY) {
+      console.warn("\x1b[33mWarning:\x1b[0m Running as root with local ~/.kern/config.json.");
+      console.warn("To configure this machine as a standard multi-agent fleet host, run: sudo kern install\n");
+    }
+    rootWarned = true;
   }
   return USER_CONFIG_FILE;
 }
@@ -123,7 +135,7 @@ export function loadGlobalConfigSync(): GlobalConfig {
 }
 
 export async function saveGlobalConfig(config: GlobalConfig): Promise<void> {
-  if (isSystemManaged() || isRoot()) {
+  if (isSystemManaged()) {
     if (!isRoot()) {
       throw new Error(`Permission denied: cannot write to ${SYSTEM_CONFIG_FILE} without root privileges.`);
     }

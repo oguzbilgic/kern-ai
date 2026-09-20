@@ -138,8 +138,7 @@ After=network.target
 Type=simple
 User=%i
 Group=%i
-WorkingDirectory=/home/%i/workspace
-ExecStart=${nodeBin} --no-deprecation ${kernEntry} run /home/%i/workspace
+ExecStart=${nodeBin} --no-deprecation ${kernEntry} run %i
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
@@ -406,6 +405,20 @@ export async function install(nameOrFlag?: string): Promise<void> {
     process.exit(1);
   }
 
+  if (nameOrFlag === "--web") {
+    w("");
+    await installWeb();
+    w("");
+    return;
+  }
+
+  if (nameOrFlag === "--proxy") {
+    w("");
+    await installProxy();
+    w("");
+    return;
+  }
+
   // kern install is strictly a host-level administrative command
   if (!isRoot()) {
     console.error(`\x1b[31mError:\x1b[0m 'kern install' configures host-level systemd persistence and requires root.`);
@@ -501,10 +514,28 @@ export async function uninstall(name?: string): Promise<void> {
   }
 
   if (name) {
-    spawnSync("systemctl", ["stop", `kern@${name}`], { stdio: "inherit" });
-    spawnSync("systemctl", ["disable", `kern@${name}`], { stdio: "inherit" });
-    console.log(`  ${dim("●")} ${bold(name)} disabled and stopped`);
+    const agent = findAgent(name);
+    const instance = agent?.user || name;
+    spawnSync("systemctl", ["stop", `kern@${instance}`], { stdio: "inherit" });
+    spawnSync("systemctl", ["disable", `kern@${instance}`], { stdio: "inherit" });
+    console.log(`  ${dim("●")} ${bold(name)} [${instance}] disabled and stopped`);
   } else {
+    w(`  ${bold("stopping and disabling all kern agent services")}`);
+    w("");
+
+    const entries = await loadRegistryEntries();
+    for (const entry of entries) {
+      const user = getAgentUser(entry);
+      const ws = getAgentWorkspace(entry);
+      const info = readAgentInfo(ws, user);
+      const agentName = info?.name || basename(ws);
+      const instance = user || agentName;
+
+      spawnSync("systemctl", ["stop", `kern@${instance}`], { stdio: "inherit" });
+      spawnSync("systemctl", ["disable", `kern@${instance}`], { stdio: "inherit" });
+      console.log(`  ${dim("●")} ${bold(agentName)} [${instance}] disabled and stopped`);
+    }
+
     if (existsSync(SYSTEM_TEMPLATE_PATH)) {
       await unlink(SYSTEM_TEMPLATE_PATH).catch(() => {});
       spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
