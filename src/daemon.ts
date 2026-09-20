@@ -1,7 +1,7 @@
 import { spawn, SpawnOptions, execFileSync } from "child_process";
 import { basename } from "path";
 import { existsSync } from "fs";
-import { mkdir } from "fs/promises";
+import { mkdir, chown } from "fs/promises";
 import { join } from "path";
 import { openSync } from "fs";
 import {
@@ -133,6 +133,21 @@ async function startOne(name: string, path: string, targetUser?: string | null):
   const pid = child.pid!;
   await registerAgent(path);
   await writePidFile(path, pid);
+
+  // Everything this (root) parent created under the workspace must belong to
+  // the agent user: the child rewrites agent.pid and appends to kern.log after
+  // it has dropped privileges, and a root-owned 0644 file would fail that with
+  // EACCES and kill the agent on startup.
+  if (userInfo) {
+    const { uid, gid } = userInfo;
+    for (const p of [logDir, logFile, join(path, ".kern", "agent.pid")]) {
+      try {
+        await chown(p, uid, gid);
+      } catch (e: any) {
+        console.log(`  ${red("●")} ${bold(name)} chown ${p} failed: ${e.message}`);
+      }
+    }
+  }
 
   // Wait and verify the process stays alive
   await new Promise((resolve) => setTimeout(resolve, 2000));
