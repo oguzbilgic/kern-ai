@@ -95,12 +95,19 @@ export function getProxyServiceStatus(): "active" | "installed" | null {
   return isActive(PROXY_SERVICE) ? "active" : "installed";
 }
 
-function systemServiceTemplate(): string {
-  const nodeBin = process.execPath;
-  const kernEntry = join(import.meta.dirname, "index.js");
+/**
+ * The per-agent template unit. It deliberately has no `User=`: the fleet
+ * registry is 0600 root, so `kern run %i` must start as root to resolve its
+ * own entry, then drops to that user in-process before loading the agent
+ * (see daemon.ts dropPrivileges). NoNewPrivileges keeps the dropped process
+ * from regaining privilege through setuid binaries (sudo, su); PrivateTmp
+ * keeps agents from seeing each other's /tmp.
+ */
+export function systemServiceTemplate(nodeBin: string = process.execPath, kernEntry: string = join(import.meta.dirname, "index.js")): string {
   return `[Unit]
 Description=kern agent: %i
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
@@ -109,6 +116,8 @@ Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
 ProtectSystem=full
+PrivateTmp=yes
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -362,7 +371,7 @@ export async function install(nameOrFlag?: string): Promise<void> {
     const info = readAgentInfo(ws, user);
     const name = info?.name || basename(ws);
 
-    // The template runs User=%i; a bare path entry has no declared Unix user, so
+    // The template runs `kern run %i` and drops to that user; a bare path entry has no declared Unix user, so
     // enabling it would make systemd try to run as a user named after the agent.
     if (!user) {
       console.log(`  ${yellow("●")} ${bold(name)} skipped — no user declared for ${ws}`);

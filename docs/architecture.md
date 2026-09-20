@@ -27,7 +27,7 @@ kern operates in two modes depending on machine configuration:
    - For dedicated Linux servers and VMs running multiple agents (e.g. `agents.homelab`).
    - Declares agents with isolated Linux user accounts: `agents: [{ user: "alice", workspace: "/home/alice/workspace" }]`.
    - Fleet lifecycle commands (`start`, `stop`, `restart`, `remove`, `init`, `install`, `uninstall`) must be executed by `root`.
-   - `kern start` drops privileges to each declared agent user via `setpriv` (`uid`/`gid`/supplementary groups/`HOME`).
+   - Agent processes start as root (from systemd or `kern start`), read the root-only registry, and drop to the declared agent user in-process (`initgroups`/`setgid`/`setuid`) before any agent code runs. The environment is rewritten for that user (`HOME`, `USER`, an explicit `PATH`, no `SUDO_*`).
    - Supervised via a single system-wide template unit: `/etc/systemd/system/kern@.service`, running instances as `kern@<user>`.
 2. **Single-User Environment (`~/.kern/config.json`)**:
    - For dev laptops, macOS workstations, and single-container Docker environments.
@@ -142,9 +142,10 @@ Every message reaching the model — from humans on any interface, from heartbea
 `kern install` (root only) configures system-level systemd persistence for agents and the optional web/proxy servers:
 
 - Promotes the host to `/etc/kern/config.json` and installs a single template unit at `/etc/systemd/system/kern@.service`.
-- Enables and starts each agent as `kern@<user>` with POSIX privilege isolation (`User=%i`) and independent systemd management (`systemctl restart kern@alice` or fleet-wide `systemctl restart 'kern@*'`).
+- Enables and starts each agent as `kern@<user>`. The unit runs `kern run %i` as root; `kern run` resolves `%i` against `/etc/kern/config.json` and drops to that user before loading the agent, so systemd sees one root-started service per agent while the agent itself runs unprivileged. Manage with `systemctl restart kern@alice` or fleet-wide `systemctl restart 'kern@*'`.
 - `--web` / `--proxy` install `kern-web.service` / `kern-proxy.service` as system units.
-- There is no user-level systemd integration. Single-user hosts (laptops, macOS, Docker) use `kern start` (detached PID daemon, privilege-dropping via `setpriv` when root starts a `{ user, workspace }` entry) or `kern run` (foreground).
+- There is no user-level systemd integration. Single-user hosts (laptops, macOS, Docker) use `kern start` (detached PID daemon) or `kern run` (foreground). On a managed host `kern start` spawns the same root `kern run` the unit does, so both paths share one privilege-drop implementation.
+- Why not `User=%i` in the unit: the registry is `0600 root`, so the process must start as root to resolve its own entry. The drop happens before the agent loads, and the unit adds `NoNewPrivileges=yes` and `PrivateTmp=yes` so the dropped process cannot regain privilege or see other agents' `/tmp`.
 
 ```bash
 sudo kern install           # install system template & enable all fleet agents

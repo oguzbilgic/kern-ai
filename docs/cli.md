@@ -51,7 +51,7 @@ Start agents as background daemons.
 - Waits 2 seconds after fork, verifies process is alive
 - Shows error log if startup fails
 - Writes PID to agent's `.kern/agent.pid`
-- On managed hosts with the `kern@.service` template installed, delegates to systemd (`systemctl start kern@<user>`). Otherwise spawns a detached process; when run as root for a `{ user, workspace }` entry, execs through `setpriv --init-groups` so the agent runs as that user with its own supplementary groups (root's are not inherited).
+- On managed hosts with the `kern@.service` template installed, delegates to systemd (`systemctl start kern@<user>`). Otherwise spawns a detached `kern run` as root; `kern run` resolves the fleet entry, reads the root-only registry, and drops to the declared user in-process (`initgroups`/`setgid`/`setuid`, then `HOME`/`PATH`/`USER` rewritten) before loading the agent — the same sequence the `kern@.service` unit goes through.
 
 ```bash
 kern start          # start all agents

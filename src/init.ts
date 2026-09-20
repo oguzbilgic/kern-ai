@@ -314,7 +314,7 @@ function linuxUserExists(user: string): boolean {
 /**
  * Validate the dedicated Linux user for a fleet agent. Creates it only when
  * `create` is set; otherwise a missing user is a hard error so we never register
- * a `{ user, workspace }` entry that systemd (User=%i) cannot run.
+ * a `{ user, workspace }` entry that systemd (`kern run %i`) cannot resolve or drop to.
  */
 function ensureLinuxUser(user: string, create: boolean): void {
   if (!UNIX_USER_RE.test(user)) {
