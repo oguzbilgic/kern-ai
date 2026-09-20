@@ -91,10 +91,12 @@ The web UI includes a Memory overlay with five tabs for inspecting sessions, seg
 ```
 Terminal ─────┐
 Web UI ───────┤
-Telegram ─────┤── one session
-Slack ────────┤
+Telegram ─────┤
+Slack ────────┤── one session
 Matrix ───────┤
-Nostr ────────┘
+Discord ──────┤
+Nostr ────────┤
+IRC ──────────┘
 ```
 
 Every interface feeds into the same session. Message from Telegram, pick up in the terminal, continue in the browser. Each message carries metadata — who said it, which channel, when — so the agent connects context across all of them without losing track.
@@ -125,12 +127,15 @@ Agents bind to `0.0.0.0` on sticky ports (4100-4999), accessible over Tailscale 
 
 Optionally, `kern proxy start` launches an authenticated reverse proxy that discovers and forwards to local agents.
 
-### Slash commands
+### Chat commands
+
+Available via `/` or `!` (`/status` or `!status`) across all interfaces:
 
 ```
 /status     # agent status, model, uptime, session size
 /restart    # restart the agent daemon
 /help       # list available commands
+/wyd        # activity narration — what the agent is currently working on
 ```
 
 ## Interfaces
@@ -142,10 +147,12 @@ Optionally, `kern proxy start` launches an authenticated reverse proxy that disc
 | **Telegram** | Set `TELEGRAM_BOT_TOKEN` in `.kern/.env` |
 | **Slack** | Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.kern/.env` |
 | **Matrix** | Set `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` in `.kern/.env` |
+| **Discord** | Set `DISCORD_BOT_TOKEN` in `.kern/.env` |
 | **Nostr** | Set `NOSTR_NSEC` in `.kern/.env` — DM the agent's npub from any Nostr client |
+| **IRC** | Set `IRC_URL` in `.kern/.env` (e.g. `ircs://nick:pass@irc.server:6697/#channel`) |
 | **Desktop** | macOS app via Tauri ([releases](https://github.com/oguzbilgic/kern-ai/releases)) |
 
-First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair with `KERN-XXXX` codes.
+First user to message on Telegram, Slack, Matrix, Discord, Nostr, or IRC is auto-paired as operator. Others pair with `KERN-XXXX` codes.
 
 ## Configuration
 
