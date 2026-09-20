@@ -5,6 +5,29 @@
 ### Features
 - **Multi-agent Linux architecture: machine-wide config and systemd supervision** ([#402](https://github.com/oguzbilgic/kern-ai/issues/402)) — introduces support for managed multi-agent Linux hosts where `/etc/kern/config.json` serves as the system-wide directory (`agents: [{ user, workspace }]`). Enforces strict root authority on managed hosts to prevent rogue local fleets, enables process spawning with POSIX privilege dropping (`uid`/`gid`/`HOME`), and supervises agents with a single system-level systemd template unit (`/etc/systemd/system/kern@.service`). Laptops, single-user setups, and Docker containers seamlessly fall back to `~/.kern/config.json` with zero systemd complexity.
 
+#### Migration Guide for Operators
+- **Single-user workstations / dev laptops (macOS / Linux / Docker)**:
+  - *No action required.* If `/etc/kern/config.json` does not exist, kern continues reading `~/.kern/config.json` with string paths (`agents: ["/path/to/workspace"]`) exactly as before. Existing installations and Docker volume workflows remain 100% backwards-compatible.
+- **Dedicated multi-agent Linux servers (e.g. LXC / VM hosts running multiple agents)**:
+  - Previously, running multiple isolated agents on a single Linux machine required manually maintaining per-user lingering (`loginctl enable-linger <user>`) and user-level systemd units (`~/.config/systemd/user/`), or running ad-hoc background processes under different users.
+  - To migrate to the new managed architecture:
+    1. Create `/etc/kern/config.json` (owned by `root:root`, permissions `644`):
+       ```json
+       {
+         "agents": [
+           { "user": "alice", "workspace": "/home/alice/workspace" },
+           { "user": "bob", "workspace": "/home/bob/workspace" }
+         ]
+       }
+       ```
+    2. Run `sudo kern install` to deploy the unified system template unit `/etc/systemd/system/kern@.service`. It enables and starts each agent service as `kern@<user>`.
+    3. Manage agents directly via standard systemd:
+       - `systemctl status kern@alice`
+       - `systemctl restart kern@bob`
+       - `systemctl restart 'kern@*'` (fleet-wide restart)
+    4. Remove any legacy user units (`systemctl --user disable --now kern-agent-*`) and disable lingering if no longer needed.
+    5. Fleet management commands (`kern start`, `kern stop`, `kern restart`, `kern remove`, `kern init`) must now be executed with `sudo` / `root`. Non-root invocations will cleanly exit with an authority error instead of accidentally creating a split-brain fleet in `~/.kern/config.json`.
+
 ### Improvements
 - **npm: automated test and build workflows in GitHub Actions** ([#390](https://github.com/oguzbilgic/kern-ai/issues/390)) — runs `npm test` and server/web builds across all pull requests and pushes to `master`, automatically preventing test regressions and broken builds.
 - **Code organization: relocate session importers and segment tools** ([#400](https://github.com/oguzbilgic/kern-ai/pull/400)) — moves `import-opencode.ts` and `import-openclaw-lcm.ts` from root `src/` to `src/scripts/`, and moves `segment-health.ts` and `segment-prune.ts` into `src/plugins/recall/` alongside other memory health and repair modules.
