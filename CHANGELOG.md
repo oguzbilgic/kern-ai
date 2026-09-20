@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+- **Code organization: relocate session importers and segment tools** ([#400](https://github.com/oguzbilgic/kern-ai/pull/400)) — moves `import-opencode.ts` and `import-openclaw-lcm.ts` from root `src/` to `src/scripts/`, and moves `segment-health.ts` and `segment-prune.ts` into `src/plugins/recall/` alongside other memory health and repair modules.
+
 ## 0.40.0 (2026-09-20)
 
 ### Features
