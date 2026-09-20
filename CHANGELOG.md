@@ -19,7 +19,7 @@
 - **Dedicated multi-agent Linux servers (e.g. LXC / VM hosts running multiple agents)**:
   - Previously, running multiple isolated agents on a single Linux machine required manually maintaining per-user lingering (`loginctl enable-linger <user>`) and user-level systemd units (`~/.config/systemd/user/`), or running ad-hoc background processes under different users.
   - To migrate to the new managed architecture:
-    1. Create `/etc/kern/config.json` (owned by `root:root`, permissions `644`):
+    1. Create `/etc/kern/config.json` (owned by `root:root`, permissions `0600`):
        ```json
        {
          "agents": [

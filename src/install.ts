@@ -104,13 +104,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=%i
-Group=%i
 ExecStart=${nodeBin} --no-deprecation ${kernEntry} run %i
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
-NoNewPrivileges=true
 ProtectSystem=full
 
 [Install]

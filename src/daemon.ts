@@ -23,12 +23,15 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
-const USERNAME_REGEX = /^[a-z_][a-z0-9_-]*[$]?$/i;
+/**
+ * Regular expression matching safe Unix usernames.
+ */
+export const USERNAME_REGEX = /^[a-z_][a-z0-9_-]*[$]?$/i;
 
 /**
  * Resolve UID, GID, and HOME directory for a Unix username.
  */
-function resolveUserInfo(username: string): { uid: number; gid: number; home: string } | null {
+export function resolveUserInfo(username: string): { uid: number; gid: number; home: string } | null {
   if (!USERNAME_REGEX.test(username)) {
     return null;
   }
@@ -45,6 +48,35 @@ function resolveUserInfo(username: string): { uid: number; gid: number; home: st
   } catch {
     return null;
   }
+}
+
+/**
+ * Drop privileges from root to the specified target Unix user.
+ * Calls initgroups, setgid, and setuid in order and sets HOME/USER env vars.
+ */
+export function dropPrivileges(targetUser: string): void {
+  if (!isRoot()) return;
+  const userInfo = resolveUserInfo(targetUser);
+  if (!userInfo) {
+    throw new Error(`Cannot drop privileges: failed to resolve user '${targetUser}'`);
+  }
+  const proc = process as NodeJS.Process & {
+    initgroups?: (user: string, extraGroup: number) => void;
+    setgid?: (gid: number) => void;
+    setuid?: (uid: number) => void;
+  };
+  if (typeof proc.initgroups === "function") {
+    proc.initgroups(targetUser, userInfo.gid);
+  }
+  if (typeof proc.setgid === "function") {
+    proc.setgid(userInfo.gid);
+  }
+  if (typeof proc.setuid === "function") {
+    proc.setuid(userInfo.uid);
+  }
+  process.env.HOME = userInfo.home;
+  process.env.USER = targetUser;
+  process.env.LOGNAME = targetUser;
 }
 
 async function startOne(name: string, path: string, targetUser?: string | null): Promise<void> {

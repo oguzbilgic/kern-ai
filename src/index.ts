@@ -7,7 +7,8 @@ import { runInit } from "./init.js";
 import { showStatus } from "./status.js";
 import { startAgent, stopAgent } from "./daemon.js";
 import { findAgent, loadRegistry, readAgentInfo } from "./registry.js";
-import { assertFleetAuthority } from "./global-config.js";
+import { assertFleetAuthority, isRoot, isSystemManaged } from "./global-config.js";
+import { dropPrivileges } from "./daemon.js";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -411,8 +412,25 @@ async function main() {
   }
 
   if (cmd === "run") {
+    // On system-managed hosts, running agents must be executed as root (via systemd or sudo)
+    // so it can read /etc/kern/config.json (0600) and safely drop privileges to the target agent user.
+    if (isSystemManaged() && !isRoot()) {
+      console.error(`\x1b[31mError:\x1b[0m This host is managed via /etc/kern/config.json.`);
+      console.error(`Running agents must be started as root (or via systemd).`);
+      process.exit(1);
+    }
+
     const initIfNeeded = args.includes("--init-if-needed");
     const dirArg = args.filter((a: string) => a !== "--init-if-needed")[1];
+    let targetUser: string | null = null;
+
+    if (isSystemManaged() && dirArg) {
+      const agent = findAgent(dirArg);
+      if (agent && agent.user) {
+        targetUser = agent.user;
+      }
+    }
+
     const agentDir = initIfNeeded ? resolve(dirArg || ".") : await resolveAgentDir(dirArg);
 
     if (initIfNeeded && !existsSync(join(agentDir, ".kern", "config.json"))) {
@@ -428,6 +446,14 @@ async function main() {
         slackBotToken: process.env.SLACK_BOT_TOKEN || "",
         slackAppToken: process.env.SLACK_APP_TOKEN || "",
       });
+    }
+
+    // Switch working directory to workspace
+    process.chdir(agentDir);
+
+    // Drop privileges to the assigned agent user if running as root
+    if (isRoot() && targetUser) {
+      dropPrivileges(targetUser);
     }
 
     await startApp(agentDir);
