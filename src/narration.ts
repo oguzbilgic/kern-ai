@@ -25,12 +25,9 @@ export function stripEnvelope(text: string): string {
   return text.replace(/^\[via [^\]]+\]\s*/, "").trim();
 }
 
-/** Blockquote of the original request (first line, capped) followed by a blank line. */
-export function goalQuote(snapshot: TurnSnapshot): string {
-  const goal = stripEnvelope(snapshot.originalGoal).split("\n")[0];
-  if (!goal) return "";
-  const snippet = goal.length > 80 ? `${goal.slice(0, 80)}…` : goal;
-  return `> ${snippet}\n\n`;
+/** Render narration text as a markdown blockquote so it reads as a status aside, not a chat reply. */
+export function quote(text: string): string {
+  return text.trim().split("\n").map((l) => `> ${l}`).join("\n");
 }
 
 /**
@@ -39,18 +36,16 @@ export function goalQuote(snapshot: TurnSnapshot): string {
 export function buildFallbackNarration(reason: NarrationReason, snapshot: TurnSnapshot): string {
   const lastTool = snapshot.toolCalls.length > 0 ? snapshot.toolCalls[snapshot.toolCalls.length - 1] : null;
   const toolDesc = lastTool ? ` while running \`${lastTool.tool}${lastTool.detail ? ` ${lastTool.detail}` : ""}\`` : "";
-  const cleanGoal = stripEnvelope(snapshot.originalGoal);
-
   switch (reason) {
     case "step_limit":
-      return `⏳ Reached step limit (${snapshot.maxSteps} steps)${toolDesc}. Work is partially completed. Reply "continue" to proceed.`;
+      return `⏳ Reached step limit (${snapshot.maxSteps} steps).\n${quote(`Work is partially completed${toolDesc}.`)}\n\nReply "continue" to proceed.`;
     case "timeout":
-      return `⏱️ Turn reached idle timeout${toolDesc}. Partial progress was preserved. Reply "continue" to resume.`;
+      return `⏱️ Idle timeout reached.\n${quote(`Partial progress was preserved${toolDesc}.`)}\n\nReply "continue" to resume.`;
     case "wyd":
       if (snapshot.stepCount === 0) {
-        return "Idle — waiting for input.";
+        return quote("Idle — waiting for input.");
       }
-      return `${goalQuote(snapshot)}Working on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`;
+      return quote(`Working on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`);
   }
 }
 
@@ -98,12 +93,12 @@ Tone: Terse, direct, factual. No preamble, no filler.`;
     }
 
     if (reason === "step_limit") {
-      return `⏳ Reached step limit (${snapshot.maxSteps} steps).\n${narrative}\n\nReply "continue" to proceed.`;
+      return `⏳ Reached step limit (${snapshot.maxSteps} steps).\n${quote(narrative)}\n\nReply "continue" to proceed.`;
     }
     if (reason === "timeout") {
-      return `⏱️ Idle timeout reached.\n${narrative}\n\nReply "continue" to resume.`;
+      return `⏱️ Idle timeout reached.\n${quote(narrative)}\n\nReply "continue" to resume.`;
     }
-    return `${goalQuote(snapshot)}${narrative}`;
+    return quote(narrative);
   } catch (err: any) {
     log.error("narration", `failed to generate AI narration: ${err.message}`);
     return fallback;

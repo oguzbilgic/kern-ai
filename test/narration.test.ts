@@ -14,6 +14,7 @@ test("buildFallbackNarration handles step_limit with tool activity", () => {
 
   const text = buildFallbackNarration("step_limit", snapshot);
   assert.match(text, /Reached step limit \(30 steps\)/);
+  assert.match(text, /\n> Work is partially completed/);
   assert.match(text, /kubectl get nodes/);
   assert.match(text, /Reply "continue" to proceed/);
 });
@@ -29,7 +30,8 @@ test("buildFallbackNarration handles timeout with tool activity", () => {
   };
 
   const text = buildFallbackNarration("timeout", snapshot);
-  assert.match(text, /Turn reached idle timeout/);
+  assert.match(text, /Idle timeout reached/);
+  assert.match(text, /\n> Partial progress/);
   assert.match(text, /webfetch https:\/\/example\.com\/data\.csv/);
   assert.match(text, /Reply "continue" to resume/);
 });
@@ -42,7 +44,7 @@ test("buildFallbackNarration handles wyd command when active vs idle", () => {
     toolCalls: [],
   };
 
-  assert.equal(buildFallbackNarration("wyd", idleSnapshot), "Idle — waiting for input.");
+  assert.equal(buildFallbackNarration("wyd", idleSnapshot), "> Idle — waiting for input.");
 
   const activeSnapshot: TurnSnapshot = {
     originalGoal: "[via matrix, matrix:!room123, user: @user:matrix, time: 2026-09-19T17:00:00-07:00]\nFixing network routes in pfSense",
@@ -54,7 +56,7 @@ test("buildFallbackNarration handles wyd command when active vs idle", () => {
   };
 
   const activeText = buildFallbackNarration("wyd", activeSnapshot);
-  assert.match(activeText, /^> Fixing network routes in pfSense\n\n/);
+  assert.match(activeText, /^> Working on step/);
   assert.doesNotMatch(activeText, /via matrix/);
   assert.match(activeText, /step 12\/30/);
   assert.match(activeText, /read knowledge\/pfsense\.md/);
