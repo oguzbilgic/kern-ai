@@ -108,39 +108,25 @@ async function startOne(name: string, path: string, targetUser?: string | null):
     cwd: path,
   };
 
-  let bin = nodeBin;
-  let argv = ["--no-deprecation", kernBin, "run", path];
+  const argv = ["--no-deprecation", kernBin, "run", path];
 
-  // Privilege dropping if running as root with a declared user.
-  // Node's spawn({ uid, gid }) only calls setuid/setgid and leaves root's
-  // supplementary groups attached to the child, so we exec through setpriv
-  // (util-linux) which runs initgroups(3) before switching IDs and then
-  // exec()s directly (no intermediate fork, so the pid we record is the agent).
+  // On managed hosts the child is spawned as root, exactly like the systemd
+  // unit does: `kern run` resolves the fleet entry, chdirs into the workspace,
+  // and drops to the declared user in-process (initgroups/setgid/setuid) before
+  // loading the agent. Doing the drop here instead (setpriv, spawn({uid,gid}))
+  // would hand `kern run` a non-root process, which its managed-host guard
+  // rejects — and it would leave two privilege-drop paths to keep in sync.
+  let userInfo: ReturnType<typeof resolveUserInfo> = null;
   if (isRoot() && targetUser) {
-    const userInfo = resolveUserInfo(targetUser);
+    userInfo = resolveUserInfo(targetUser);
     if (!userInfo) {
       console.log(`  ${red("●")} ${bold(name)} failed to resolve user '${targetUser}'`);
       return;
     }
-    bin = "setpriv";
-    argv = [
-      `--reuid=${userInfo.uid}`,
-      `--regid=${userInfo.gid}`,
-      "--init-groups",
-      "--",
-      nodeBin,
-      ...argv,
-    ];
-    spawnOpts.env = {
-      ...process.env,
-      HOME: userInfo.home,
-      USER: targetUser,
-      LOGNAME: targetUser,
-    };
   }
 
   // Fork detached process using kern run
-  const child = spawn(bin, argv, spawnOpts);
+  const child = spawn(nodeBin, argv, spawnOpts);
 
   child.unref();
 
