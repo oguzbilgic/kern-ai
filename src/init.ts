@@ -329,10 +329,11 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
-    const dir = resolve(name);
+    const targetUser = flags["user"] || (isSystemManaged() ? name : undefined);
+    const dir = flags["workspace"] || (isSystemManaged() && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
 
     await scaffoldAgent({
-      name, dir, provider, model, apiKey, envVar,
+      name, dir, user: targetUser, provider, model, apiKey, envVar,
       telegramToken, slackBotToken, slackAppToken,
     });
     return;
@@ -350,7 +351,21 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     required: true,
   });
 
-  const dir = resolve(targetArg || name);
+  let targetUser: string | undefined = undefined;
+  let dir = resolve(targetArg || name);
+
+  if (isSystemManaged()) {
+    targetUser = await input({
+      message: "Dedicated Linux user",
+      default: name,
+      required: true,
+    });
+    dir = await input({
+      message: "Workspace directory",
+      default: `/home/${targetUser}/workspace`,
+      required: true,
+    });
+  }
 
   // Provider
   const provider = await select({
@@ -396,7 +411,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   }
 
   await scaffoldAgent({
-    name, dir, provider, model, apiKey, envVar,
+    name, dir, user: targetUser, provider, model, apiKey, envVar,
     telegramToken, slackBotToken, slackAppToken,
   });
 }
@@ -539,6 +554,18 @@ node_modules/
     // When managed via /etc/kern/config.json, register user/workspace entry
     const globalConfig = await loadGlobalConfig();
     const targetUser = opts.user || name;
+
+    // Chown workspace recursively to targetUser if running as root
+    if (isRoot()) {
+      try {
+        const { execFileSync } = await import("child_process");
+        execFileSync("chown", ["-R", `${targetUser}:`, dir]);
+        print(`  ✓ Set ownership to ${targetUser}`);
+      } catch (err: any) {
+        print(`  ⚠ Failed to set ownership to ${targetUser}: ${err.message}`);
+      }
+    }
+
     const existsInFleet = globalConfig.agents.some((entry) => {
       const ws = typeof entry === "string" ? entry : entry.workspace;
       return ws === dir;

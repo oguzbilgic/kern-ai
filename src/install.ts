@@ -108,7 +108,8 @@ export function getProxyServiceStatus(): "active" | "installed" | null {
 }
 
 function systemServiceTemplate(): string {
-  const kernBin = "/usr/bin/kern";
+  const nodeBin = process.execPath;
+  const kernEntry = join(import.meta.dirname, "index.js");
   return `[Unit]
 Description=kern agent: %i
 After=network.target
@@ -118,7 +119,7 @@ Type=simple
 User=%i
 Group=%i
 WorkingDirectory=/home/%i/workspace
-ExecStart=${kernBin} run /home/%i/workspace
+ExecStart=${nodeBin} --no-deprecation ${kernEntry} run /home/%i/workspace
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production

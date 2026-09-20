@@ -206,8 +206,8 @@ async function main() {
     }
     // Uninstall systemd service if installed
     const { isServiceInstalled, uninstall } = await import("./install.js");
-    if (isServiceInstalled(name)) {
-      await uninstall(name);
+    if (isServiceInstalled(name, agent.user)) {
+      await uninstall(agent.user || name);
     }
     if (agent.pid && isProcessRunning(agent.pid)) {
       await stopAgent(name);

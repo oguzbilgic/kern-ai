@@ -1,4 +1,4 @@
-import { spawn, SpawnOptions } from "child_process";
+import { spawn, SpawnOptions, execFileSync } from "child_process";
 import { basename } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
@@ -15,7 +15,7 @@ import {
   removePidFile,
   isProcessRunning,
 } from "./registry.js";
-import { isServiceInstalled } from "./install.js";
+import { isServiceInstalled, serviceControl } from "./install.js";
 import { isRoot, isSystemManaged, getAgentWorkspace, getAgentUser } from "./global-config.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -23,16 +23,22 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
+const USERNAME_REGEX = /^[a-z_][a-z0-9_-]*[$]?$/i;
+
 /**
  * Resolve UID, GID, and HOME directory for a Unix username.
  */
 function resolveUserInfo(username: string): { uid: number; gid: number; home: string } | null {
+  if (!USERNAME_REGEX.test(username)) {
+    return null;
+  }
   try {
-    const { execSync } = require("child_process");
-    const uid = parseInt(execSync(`id -u ${username}`, { encoding: "utf-8" }).trim(), 10);
-    const gid = parseInt(execSync(`id -g ${username}`, { encoding: "utf-8" }).trim(), 10);
+    const uidStr = execFileSync("id", ["-u", username], { encoding: "utf-8" }).trim();
+    const gidStr = execFileSync("id", ["-g", username], { encoding: "utf-8" }).trim();
+    const uid = parseInt(uidStr, 10);
+    const gid = parseInt(gidStr, 10);
     // Read home from getent passwd
-    const passwdLine = execSync(`getent passwd ${username}`, { encoding: "utf-8" }).trim();
+    const passwdLine = execFileSync("getent", ["passwd", username], { encoding: "utf-8" }).trim();
     const parts = passwdLine.split(":");
     const home = parts[5] || `/home/${username}`;
     return { uid, gid, home };
@@ -62,6 +68,7 @@ async function startOne(name: string, path: string, targetUser?: string | null):
 
   // Find the kern entry point
   const kernBin = join(import.meta.dirname, "index.js");
+  const nodeBin = process.execPath;
 
   const spawnOpts: SpawnOptions = {
     detached: true,
@@ -87,7 +94,7 @@ async function startOne(name: string, path: string, targetUser?: string | null):
   }
 
   // Fork detached process using kern run
-  const child = spawn("node", ["--no-deprecation", kernBin, "run", path], spawnOpts);
+  const child = spawn(nodeBin, ["--no-deprecation", kernBin, "run", path], spawnOpts);
 
   child.unref();
 
@@ -103,7 +110,7 @@ async function startOne(name: string, path: string, targetUser?: string | null):
     const portStr = info?.port ? `, :${info.port}` : "";
     const userStr = targetUser ? ` [${targetUser}]` : "";
     console.log(`  ${green("●")} ${bold(name)}${userStr} started ${dim(`(pid ${pid}${portStr})`)}`);
-    if (!isServiceInstalled(name)) {
+    if (!isServiceInstalled(name, targetUser)) {
       try {
         const { execSync } = await import("child_process");
         execSync("which systemctl", { stdio: "ignore" });
@@ -203,12 +210,16 @@ export async function stopAgent(name?: string): Promise<void> {
       process.exit(1);
       return;
     }
+    if (isServiceInstalled(agent.name, agent.user)) {
+      serviceControl("stop", agent.name, agent.user);
+      return;
+    }
     console.log("");
     await stopOne(agent.name, agent.path);
     console.log("");
   } else {
-    const paths = await loadRegistry();
-    if (paths.length === 0) {
+    const entries = await loadRegistryEntries();
+    if (entries.length === 0) {
       console.error("No agents registered.");
       process.exit(1);
       return;
@@ -216,10 +227,16 @@ export async function stopAgent(name?: string): Promise<void> {
     console.log("");
     console.log(`  ${bold("stopping all agents")}`);
     console.log("");
-    for (const agentPath of paths) {
-      const info = readAgentInfo(agentPath);
+    for (const entry of entries) {
+      const agentPath = getAgentWorkspace(entry);
+      const user = getAgentUser(entry);
+      const info = readAgentInfo(agentPath, user);
       const agentName = info?.name || basename(agentPath);
-      await stopOne(agentName, agentPath);
+      if (isServiceInstalled(agentName, user)) {
+        serviceControl("stop", agentName, user);
+      } else {
+        await stopOne(agentName, agentPath);
+      }
     }
     console.log("");
   }
