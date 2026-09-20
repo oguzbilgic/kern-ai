@@ -201,7 +201,8 @@ Install system-level systemd units for agents, the web UI, or the proxy. Provide
 - Installs a system-level template unit at `/etc/systemd/system/kern@.service`.
 - Enables and starts each agent as `kern@<user>` (e.g. `kern@alice`). Entries without a declared `user` are skipped.
 - Native systemd control: `systemctl restart kern@alice` or fleet wildcards `systemctl restart 'kern@*'`.
-- `--web` / `--proxy` install `/etc/systemd/system/kern-web.service` / `kern-proxy.service` as system units (running as root, so the proxy can read agent tokens across workspaces).
+- `--web` / `--proxy` install `/etc/systemd/system/kern-web.service` / `kern-proxy.service` as system units (running as root, so the proxy can read agent tokens across workspaces). Promotion/migration runs first, so the service reads the fleet registry in `/etc/kern/config.json`.
+- `kern install <name>` fails with `Agent not found` if the name/user/path does not match a registry entry (nothing is written).
 
 There is no user-level (`~/.config/systemd/user/`) integration. On single-user hosts and macOS, use `kern start` / `kern run`.
 

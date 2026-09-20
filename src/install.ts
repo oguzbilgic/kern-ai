@@ -299,20 +299,6 @@ export async function install(nameOrFlag?: string): Promise<void> {
     process.exit(1);
   }
 
-  if (nameOrFlag === "--web") {
-    w("");
-    await installWeb();
-    w("");
-    return;
-  }
-
-  if (nameOrFlag === "--proxy") {
-    w("");
-    await installProxy();
-    w("");
-    return;
-  }
-
   // Verify kern is globally installed in PATH so systemd and unprivileged users can execute it
   const globalBin = findGlobalKernBinary();
   if (!globalBin) {
@@ -334,12 +320,21 @@ export async function install(nameOrFlag?: string): Promise<void> {
   // Scan for legacy user-level configs to migrate and clean up ghosts
   await migrateAndCleanLegacyUserConfigs();
 
-  w("");
-  w(`  ${bold("installing systemd template unit (/etc/systemd/system/kern@.service)")}`);
-  w("");
+  // Auxiliary services are installed only after the host is promoted, so the
+  // unit reads the fleet registry in /etc/kern/config.json rather than root's ~/.kern.
+  if (nameOrFlag === "--web") {
+    w("");
+    await installWeb();
+    w("");
+    return;
+  }
 
-  await writeFile(SYSTEM_TEMPLATE_PATH, systemServiceTemplate());
-  spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
+  if (nameOrFlag === "--proxy") {
+    w("");
+    await installProxy();
+    w("");
+    return;
+  }
 
   const entries = await loadRegistryEntries();
   const targets = nameOrFlag
@@ -350,6 +345,19 @@ export async function install(nameOrFlag?: string): Promise<void> {
         return info?.name === nameOrFlag || user === nameOrFlag || ws === nameOrFlag;
       })
     : entries;
+
+  if (nameOrFlag && targets.length === 0) {
+    console.error(`\x1b[31mError:\x1b[0m Agent '${nameOrFlag}' not found in /etc/kern/config.json.`);
+    console.error(`Run 'kern list' to see registered agents, or 'sudo kern init ${nameOrFlag}' to create it.`);
+    process.exit(1);
+  }
+
+  w("");
+  w(`  ${bold("installing systemd template unit (/etc/systemd/system/kern@.service)")}`);
+  w("");
+
+  await writeFile(SYSTEM_TEMPLATE_PATH, systemServiceTemplate());
+  spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
 
   for (const entry of targets) {
     const user = getAgentUser(entry);
