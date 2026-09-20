@@ -1,7 +1,8 @@
 import { mkdir, writeFile, readFile } from "fs/promises";
 import { join, resolve, basename } from "path";
 import { existsSync } from "fs";
-import { input, select, password } from "@inquirer/prompts";
+import { input, select, password, confirm } from "@inquirer/prompts";
+import { execFileSync } from "child_process";
 import { registerAgent, findAgent, isProcessRunning, readPid, removePidFile, assignPort } from "./registry.js";
 import { isSystemManaged, isRoot, loadGlobalConfig, saveGlobalConfig } from "./global-config.js";
 import { startAgent } from "./daemon.js";
@@ -299,6 +300,42 @@ async function runConfig(name: string, dir: string): Promise<void> {
   await startAgent(name);
 }
 
+const UNIX_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+function linuxUserExists(user: string): boolean {
+  try {
+    execFileSync("id", ["-u", user], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate the dedicated Linux user for a fleet agent. Creates it only when
+ * `create` is set; otherwise a missing user is a hard error so we never register
+ * a `{ user, workspace }` entry that systemd (User=%i) cannot run.
+ */
+function ensureLinuxUser(user: string, create: boolean): void {
+  if (!UNIX_USER_RE.test(user)) {
+    console.error(`\x1b[31mError:\x1b[0m '${user}' is not a valid Linux username.`);
+    process.exit(1);
+  }
+  if (linuxUserExists(user)) return;
+  if (!create) {
+    console.error(`\x1b[31mError:\x1b[0m Linux user '${user}' does not exist.`);
+    console.error(`Create it first (useradd -m -s /bin/bash ${user}) or pass --create-user.`);
+    process.exit(1);
+  }
+  try {
+    execFileSync("useradd", ["-m", "-s", "/bin/bash", user], { stdio: "pipe" });
+    print(`  ✓ Created Linux user '${user}'`);
+  } catch (err: any) {
+    console.error(`\x1b[31mError:\x1b[0m Could not create user '${user}': ${err.message}`);
+    process.exit(1);
+  }
+}
+
 export async function runInit(targetArg?: string, flags?: Record<string, string>): Promise<void> {
   // If host is managed via /etc/kern, non-root users are blocked immediately
   if (isSystemManaged() && !isRoot()) {
@@ -338,6 +375,9 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
     const targetUser = flags["user"] || (isSystemManaged() ? name : undefined);
+    if (isSystemManaged() && targetUser) {
+      ensureLinuxUser(targetUser, flags["create-user"] === "true");
+    }
     const dir = flags["workspace"] || (isSystemManaged() && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
 
     await scaffoldAgent({
@@ -373,21 +413,17 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
       required: true,
     });
 
-    // Check if user exists on system; if not and running as root, offer to create it
-    try {
-      const { execFileSync } = await import("child_process");
-      try {
-        execFileSync("id", ["-u", targetUser], { stdio: "ignore" });
-      } catch {
-        print(`  Notice: Linux user '${targetUser}' does not exist yet.`);
-        try {
-          execFileSync("useradd", ["-m", "-s", "/bin/bash", targetUser]);
-          print(`  ✓ Created Linux user '${targetUser}'`);
-        } catch (err: any) {
-          print(`  ⚠ Could not auto-create user '${targetUser}': ${err.message}`);
-        }
-      }
-    } catch {}
+    if (!UNIX_USER_RE.test(targetUser)) {
+      console.error(`\x1b[31mError:\x1b[0m '${targetUser}' is not a valid Linux username.`);
+      process.exit(1);
+    }
+    if (!linuxUserExists(targetUser)) {
+      const create = await confirm({
+        message: `Linux user '${targetUser}' does not exist. Create it now (useradd -m)?`,
+        default: true,
+      });
+      ensureLinuxUser(targetUser, create);
+    }
 
     dir = await input({
       message: "Workspace directory",
@@ -587,7 +623,6 @@ node_modules/
     // Chown workspace recursively to targetUser if running as root
     if (isRoot() && targetUser) {
       try {
-        const { execFileSync } = await import("child_process");
         execFileSync("chown", ["-R", `${targetUser}:`, dir]);
         print(`  ✓ Set ownership to ${targetUser}`);
       } catch (err: any) {

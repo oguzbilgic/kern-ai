@@ -5,11 +5,13 @@
 ### Features
 - **Multi-agent Linux architecture: machine-wide config and systemd supervision** ([#402](https://github.com/oguzbilgic/kern-ai/issues/402)) — introduces support for managed multi-agent Linux hosts where `/etc/kern/config.json` serves as the system-wide directory (`agents: [{ user, workspace }]`). Enforces strict root authority on managed hosts to prevent rogue local fleets, enables process spawning with POSIX privilege dropping (`uid`/`gid`/`HOME`), and supervises agents with a single system-level systemd template unit (`/etc/systemd/system/kern@.service`). Laptops, single-user setups, and Docker containers seamlessly fall back to `~/.kern/config.json` with zero systemd complexity.
 
-#### Deprecation: User-Level systemd Units (`~/.config/systemd/user/`)
-User-level systemd units (`kern-agent-<name>.service`) are now deprecated for multi-agent Linux environments:
+#### Removed: User-Level systemd Units (`~/.config/systemd/user/`)
+`kern install` no longer writes user-level units (`kern-agent-<name>.service`, `kern-web.service`, `kern-proxy.service` under `~/.config/systemd/user/`) and no longer manages lingering:
 - **Why**: Running systemd under unprivileged users requires lingering (`loginctl enable-linger`), cannot bind privileged ports, fails to survive certain session logouts, and complicates fleet orchestration.
-- **Replacement**: On managed Linux hosts, `kern install` installs a single system-wide template unit `/etc/systemd/system/kern@.service`. Individual agents run isolated as `kern@<user>`, with clean system-level lifecycle commands (`systemctl restart 'kern@*'`).
-- Single-user machines (laptops/workstations without `/etc/kern/config.json`) can continue using legacy user units if desired, but running under foreground daemon / PID management (`kern start` / `kern run`) is recommended.
+- **Replacement**: `kern install` is root-only and installs system units: the agent template `/etc/systemd/system/kern@.service` (agents run isolated as `kern@<user>`, `systemctl restart 'kern@*'`) and, with `--web` / `--proxy`, `kern-web.service` / `kern-proxy.service`.
+- Single-user machines (laptops/workstations without `/etc/kern/config.json`) use `kern start` / `kern run` (PID daemon / foreground). Existing user units keep working but are no longer touched by kern; remove them with `systemctl --user disable --now kern-agent-<name>`.
+- `kern start` as root for a `{ user, workspace }` entry now execs through `setpriv --reuid --regid --init-groups`, so the agent process gets the target user's supplementary groups instead of inheriting root's (Node's `spawn({ uid, gid })` does not call `initgroups`).
+- Non-interactive `kern init <name> --api-key ...` on a managed host now fails fast if the Linux user does not exist (pass `--create-user` to `useradd -m` it) instead of registering a fleet entry systemd cannot run. Interactive mode asks before creating the user.
 
 #### Migration Guide for Operators
 - **Single-user workstations / dev laptops (macOS / Linux / Docker)**:

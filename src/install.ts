@@ -4,13 +4,10 @@ import { mkdir, writeFile, unlink, readFile } from "fs/promises";
 import { join, basename } from "path";
 import { homedir } from "os";
 import {
-  loadRegistry,
   loadRegistryEntries,
   findAgent,
   readAgentInfo,
   isProcessRunning,
-  readPid,
-  removePidFile,
 } from "./registry.js";
 import {
   isSystemManaged,
@@ -29,11 +26,10 @@ const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 
-const SERVICE_PREFIX = "kern-agent-";
 const WEB_SERVICE = "kern-web";
 const PROXY_SERVICE = "kern-proxy";
-const SYSTEM_TEMPLATE_PATH = "/etc/systemd/system/kern@.service";
-const SYSTEMD_DIR = join(homedir(), ".config", "systemd", "user");
+const SYSTEM_UNIT_DIR = "/etc/systemd/system";
+const SYSTEM_TEMPLATE_PATH = `${SYSTEM_UNIT_DIR}/kern@.service`;
 
 function hasSystemd(): boolean {
   try {
@@ -55,28 +51,13 @@ function findGlobalKernBinary(): string | null {
   return null;
 }
 
-function hasLinger(): boolean {
+function unitPath(name: string): string {
+  return join(SYSTEM_UNIT_DIR, `${name}.service`);
+}
+
+function isActive(name: string): boolean {
   try {
-    const user = execSync("whoami", { encoding: "utf-8" }).trim();
-    const lingerDir = `/var/lib/systemd/linger`;
-    return existsSync(join(lingerDir, user));
-  } catch {
-    return false;
-  }
-}
-
-function serviceName(agentName: string): string {
-  return `${SERVICE_PREFIX}${agentName}`;
-}
-
-function isInstalled(name: string): boolean {
-  return existsSync(join(SYSTEMD_DIR, `${name}.service`));
-}
-
-function isActive(name: string, isSystem: boolean = false): boolean {
-  try {
-    const args = isSystem ? ["is-active", name] : ["--user", "is-active", name];
-    const result = spawnSync("systemctl", args, { encoding: "utf-8" });
+    const result = spawnSync("systemctl", ["is-active", name], { encoding: "utf-8" });
     return result.stdout.trim() === "active";
   } catch {
     return false;
@@ -84,46 +65,33 @@ function isActive(name: string, isSystem: boolean = false): boolean {
 }
 
 export function isServiceInstalled(agentName: string, user?: string | null): boolean {
-  if (isSystemManaged()) {
-    const instance = user || agentName;
-    try {
-      const result = spawnSync("systemctl", ["is-enabled", `kern@${instance}`], { encoding: "utf-8" });
-      return result.status === 0 || existsSync(SYSTEM_TEMPLATE_PATH);
-    } catch {
-      return existsSync(SYSTEM_TEMPLATE_PATH);
-    }
-  }
-  return isInstalled(serviceName(agentName));
+  // Agent units exist only on system-managed hosts (kern@<user> template). There is
+  // no user-level systemd integration.
+  if (!isSystemManaged() || !existsSync(SYSTEM_TEMPLATE_PATH)) return false;
+  const instance = user || agentName;
+  const result = spawnSync("systemctl", ["is-enabled", `kern@${instance}`], { encoding: "utf-8" });
+  return result.status === 0;
 }
 
 export function serviceControl(action: "start" | "stop" | "restart", agentName: string, user?: string | null): boolean {
-  if (isSystemManaged()) {
-    const instance = user || agentName;
-    const result = spawnSync("systemctl", [action, `kern@${instance}`], { stdio: "inherit" });
-    return result.status === 0;
-  }
-  const svc = serviceName(agentName);
-  return systemctl(action, svc);
+  const instance = user || agentName;
+  const result = spawnSync("systemctl", [action, `kern@${instance}`], { stdio: "inherit" });
+  return result.status === 0;
 }
 
 export function getServiceStatus(agentName: string, user?: string | null): "active" | "installed" | null {
-  if (isSystemManaged()) {
-    if (!existsSync(SYSTEM_TEMPLATE_PATH)) return null;
-    const instance = user || agentName;
-    return isActive(`kern@${instance}`, true) ? "active" : "installed";
-  }
-  const svc = serviceName(agentName);
-  if (!isInstalled(svc)) return null;
-  return isActive(svc) ? "active" : "installed";
+  if (!isServiceInstalled(agentName, user)) return null;
+  const instance = user || agentName;
+  return isActive(`kern@${instance}`) ? "active" : "installed";
 }
 
 export function getWebServiceStatus(): "active" | "installed" | null {
-  if (!isInstalled(WEB_SERVICE)) return null;
+  if (!existsSync(unitPath(WEB_SERVICE))) return null;
   return isActive(WEB_SERVICE) ? "active" : "installed";
 }
 
 export function getProxyServiceStatus(): "active" | "installed" | null {
-  if (!isInstalled(PROXY_SERVICE)) return null;
+  if (!existsSync(unitPath(PROXY_SERVICE))) return null;
   return isActive(PROXY_SERVICE) ? "active" : "installed";
 }
 
@@ -150,26 +118,6 @@ WantedBy=multi-user.target
 `;
 }
 
-function agentServiceUnit(agentName: string, agentPath: string): string {
-  const kernEntry = join(import.meta.dirname, "index.js");
-  const nodeBin = process.execPath;
-  return `[Unit]
-Description=kern agent: ${agentName}
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${nodeBin} --no-deprecation ${kernEntry} run ${agentPath}
-Restart=always
-RestartSec=5
-WorkingDirectory=${agentPath}
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=default.target
-`;
-}
-
 function webServiceUnit(): string {
   const webEntry = join(import.meta.dirname, "web.js");
   const nodeBin = process.execPath;
@@ -185,7 +133,7 @@ RestartSec=5
 Environment=NODE_ENV=production
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 `;
 }
 
@@ -204,131 +152,60 @@ RestartSec=5
 Environment=NODE_ENV=production
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 `;
 }
 
-function systemctl(...args: string[]): boolean {
-  const result = spawnSync("systemctl", ["--user", ...args], { stdio: "pipe" });
-  return result.status === 0;
-}
+/**
+ * Install a host-level auxiliary service (web UI or proxy) as a system unit.
+ * Runs as root: the proxy needs to read per-agent tokens from agent-owned workspaces,
+ * and both need /etc/kern/config.json for discovery.
+ */
+async function installAux(svc: string, label: string, unit: string, pidFileName: string): Promise<void> {
+  const path = unitPath(svc);
 
-async function installAgent(agentName: string, agentPath: string): Promise<void> {
-  const svc = serviceName(agentName);
-  const unitPath = join(SYSTEMD_DIR, `${svc}.service`);
-
-  // Already installed and running — skip
-  if (existsSync(unitPath) && isActive(svc)) {
-    console.log(`  ${green("●")} ${bold(agentName)} already installed and running`);
+  if (existsSync(path) && isActive(svc)) {
+    console.log(`  ${green("●")} ${bold(label)} already installed and running`);
     return;
   }
 
-  // Stop PID-based daemon if running (but not if it's the systemd-managed process)
-  if (!existsSync(unitPath)) {
-    const agent = findAgent(agentName);
-    const pid = agent ? readPid(agent.path) : null;
-    if (pid && isProcessRunning(pid)) {
+  // Stop a PID-based daemon left over from `kern web start` / `kern proxy start`
+  if (!existsSync(path)) {
+    const pidFile = join(homedir(), ".kern", pidFileName);
+    if (existsSync(pidFile)) {
       try {
-        process.kill(pid, "SIGTERM");
-        console.log(`  ${dim("stopped pid-based daemon")} ${dim(`(pid ${pid})`)}`);
-        if (agent) await removePidFile(agent.path);
-        await new Promise((r) => setTimeout(r, 1000));
+        const pid = parseInt(await readFile(pidFile, "utf-8"), 10);
+        if (pid && isProcessRunning(pid)) {
+          process.kill(pid, "SIGTERM");
+          console.log(`  ${dim(`stopped pid-based ${label} daemon`)} ${dim(`(pid ${pid})`)}`);
+          await new Promise((r) => setTimeout(r, 1000));
+          await unlink(pidFile).catch(() => {});
+        }
       } catch {}
     }
   }
 
-  // Write unit file
-  await writeFile(unitPath, agentServiceUnit(agentName, agentPath));
+  await writeFile(path, unit);
 
-  // Enable and start
-  systemctl("daemon-reload");
-  systemctl("enable", svc);
-  systemctl("restart", svc);
+  spawnSync("systemctl", ["daemon-reload"], { stdio: "pipe" });
+  spawnSync("systemctl", ["enable", svc], { stdio: "pipe" });
+  spawnSync("systemctl", ["restart", svc], { stdio: "pipe" });
 
-  // Verify
   await new Promise((r) => setTimeout(r, 1500));
   if (isActive(svc)) {
-    console.log(`  ${green("●")} ${bold(agentName)} installed and running`);
+    console.log(`  ${green("●")} ${bold(label)} installed and running`);
   } else {
-    console.log(`  ${red("●")} ${bold(agentName)} installed but failed to start`);
-    console.log(`    ${dim(`journalctl --user -u ${svc} -n 10`)}`);
+    console.log(`  ${red("●")} ${bold(label)} installed but failed to start`);
+    console.log(`    ${dim(`journalctl -u ${svc} -n 10`)}`);
   }
 }
 
 async function installWeb(): Promise<void> {
-  const unitPath = join(SYSTEMD_DIR, `${WEB_SERVICE}.service`);
-
-  if (existsSync(unitPath) && isActive(WEB_SERVICE)) {
-    console.log(`  ${green("●")} ${bold("web")} already installed and running`);
-    return;
-  }
-
-  if (!existsSync(unitPath)) {
-    const pidFile = join(homedir(), ".kern", "web.pid");
-    if (existsSync(pidFile)) {
-      try {
-        const pid = parseInt(await readFile(pidFile, "utf-8"), 10);
-        if (pid && isProcessRunning(pid)) {
-          process.kill(pid, "SIGTERM");
-          console.log(`  ${dim("stopped pid-based web daemon")} ${dim(`(pid ${pid})`)}`);
-          await new Promise((r) => setTimeout(r, 1000));
-          await unlink(pidFile).catch(() => {});
-        }
-      } catch {}
-    }
-  }
-
-  await writeFile(unitPath, webServiceUnit());
-
-  systemctl("daemon-reload");
-  systemctl("enable", WEB_SERVICE);
-  systemctl("restart", WEB_SERVICE);
-
-  await new Promise((r) => setTimeout(r, 1500));
-  if (isActive(WEB_SERVICE)) {
-    console.log(`  ${green("●")} ${bold("web")} installed and running`);
-  } else {
-    console.log(`  ${red("●")} ${bold("web")} installed but failed to start`);
-    console.log(`    ${dim(`journalctl --user -u ${WEB_SERVICE} -n 10`)}`);
-  }
+  await installAux(WEB_SERVICE, "web", webServiceUnit(), "web.pid");
 }
 
 async function installProxy(): Promise<void> {
-  const unitPath = join(SYSTEMD_DIR, `${PROXY_SERVICE}.service`);
-
-  if (existsSync(unitPath) && isActive(PROXY_SERVICE)) {
-    console.log(`  ${green("●")} ${bold("proxy")} already installed and running`);
-    return;
-  }
-
-  if (!existsSync(unitPath)) {
-    const pidFile = join(homedir(), ".kern", "proxy.pid");
-    if (existsSync(pidFile)) {
-      try {
-        const pid = parseInt(await readFile(pidFile, "utf-8"), 10);
-        if (pid && isProcessRunning(pid)) {
-          process.kill(pid, "SIGTERM");
-          console.log(`  ${dim("stopped pid-based proxy daemon")} ${dim(`(pid ${pid})`)}`);
-          await new Promise((r) => setTimeout(r, 1000));
-          await unlink(pidFile).catch(() => {});
-        }
-      } catch {}
-    }
-  }
-
-  await writeFile(unitPath, proxyServiceUnit());
-
-  systemctl("daemon-reload");
-  systemctl("enable", PROXY_SERVICE);
-  systemctl("restart", PROXY_SERVICE);
-
-  await new Promise((r) => setTimeout(r, 1500));
-  if (isActive(PROXY_SERVICE)) {
-    console.log(`  ${green("●")} ${bold("proxy")} installed and running`);
-  } else {
-    console.log(`  ${red("●")} ${bold("proxy")} installed but failed to start`);
-    console.log(`    ${dim(`journalctl --user -u ${PROXY_SERVICE} -n 10`)}`);
-  }
+  await installAux(PROXY_SERVICE, "proxy", proxyServiceUnit(), "proxy.pid");
 }
 
 /**
@@ -414,6 +291,14 @@ export async function install(nameOrFlag?: string): Promise<void> {
     process.exit(1);
   }
 
+  // kern install is strictly a host-level administrative command — including
+  // the auxiliary --web / --proxy services, which are installed as system units.
+  if (!isRoot()) {
+    console.error(`\x1b[31mError:\x1b[0m 'kern install' configures host-level systemd persistence and requires root.`);
+    console.error(`Run: sudo kern install${nameOrFlag ? ` ${nameOrFlag}` : ""}`);
+    process.exit(1);
+  }
+
   if (nameOrFlag === "--web") {
     w("");
     await installWeb();
@@ -426,13 +311,6 @@ export async function install(nameOrFlag?: string): Promise<void> {
     await installProxy();
     w("");
     return;
-  }
-
-  // kern install is strictly a host-level administrative command
-  if (!isRoot()) {
-    console.error(`\x1b[31mError:\x1b[0m 'kern install' configures host-level systemd persistence and requires root.`);
-    console.error(`Run: sudo kern install${nameOrFlag ? ` ${nameOrFlag}` : ""}`);
-    process.exit(1);
   }
 
   // Verify kern is globally installed in PATH so systemd and unprivileged users can execute it
@@ -491,7 +369,7 @@ export async function install(nameOrFlag?: string): Promise<void> {
     spawnSync("systemctl", ["enable", `kern@${instance}`], { stdio: "inherit" });
     spawnSync("systemctl", ["restart", `kern@${instance}`], { stdio: "inherit" });
 
-    if (isActive(`kern@${instance}`, true)) {
+    if (isActive(`kern@${instance}`)) {
       console.log(`  ${green("●")} ${bold(name)} [${instance}] enabled and running`);
     } else {
       console.log(`  ${red("●")} ${bold(name)} [${instance}] enabled but failed to start`);
@@ -501,18 +379,16 @@ export async function install(nameOrFlag?: string): Promise<void> {
   w("");
 }
 
-async function uninstallOne(svc: string, label: string): Promise<void> {
-  const unitPath = join(SYSTEMD_DIR, `${svc}.service`);
-
-  if (!existsSync(unitPath)) {
+async function uninstallAux(svc: string, label: string): Promise<void> {
+  const path = unitPath(svc);
+  if (!existsSync(path)) {
     console.log(`  ${dim("●")} ${bold(label)} not installed`);
     return;
   }
-
-  systemctl("stop", svc);
-  systemctl("disable", svc);
-  await unlink(unitPath).catch(() => {});
-
+  spawnSync("systemctl", ["stop", svc], { stdio: "pipe" });
+  spawnSync("systemctl", ["disable", svc], { stdio: "pipe" });
+  await unlink(path).catch(() => {});
+  spawnSync("systemctl", ["daemon-reload"], { stdio: "pipe" });
   console.log(`  ${dim("●")} ${bold(label)} uninstalled`);
 }
 
@@ -528,6 +404,15 @@ export async function uninstall(name?: string): Promise<void> {
     console.error(`\x1b[31mError:\x1b[0m 'kern uninstall' manages system services and requires root.`);
     console.error(`Run: sudo kern uninstall${name ? ` ${name}` : ""}`);
     process.exit(1);
+  }
+
+  if (name === "--web") {
+    await uninstallAux(WEB_SERVICE, "web");
+    return;
+  }
+  if (name === "--proxy") {
+    await uninstallAux(PROXY_SERVICE, "proxy");
+    return;
   }
 
   if (name) {
@@ -558,5 +443,8 @@ export async function uninstall(name?: string): Promise<void> {
       spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
       console.log(`  ${dim("●")} Removed ${SYSTEM_TEMPLATE_PATH}`);
     }
+
+    await uninstallAux(WEB_SERVICE, "web");
+    await uninstallAux(PROXY_SERVICE, "proxy");
   }
 }

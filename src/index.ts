@@ -107,7 +107,10 @@ async function main() {
       if (args[i].startsWith("--") && i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[args[i].slice(2)] = args[i + 1];
         i++;
-      } else if (!args[i].startsWith("--")) {
+      } else if (args[i].startsWith("--")) {
+        // boolean flag (e.g. --create-user)
+        flags[args[i].slice(2)] = "true";
+      } else {
         initTarget = args[i];
       }
     }
@@ -438,7 +441,7 @@ async function main() {
       const { getWebServiceStatus } = await import("./install.js");
       if (getWebServiceStatus() !== null) {
         const { spawnSync } = await import("child_process");
-        spawnSync("systemctl", ["--user", subcmd, "kern-web"], { stdio: "pipe" });
+        spawnSync("systemctl", [subcmd, "kern-web"], { stdio: "inherit" });
         return;
       }
       if (subcmd === "start") await webStart();
@@ -463,7 +466,7 @@ async function main() {
       const { getProxyServiceStatus } = await import("./install.js");
       if (getProxyServiceStatus() !== null) {
         const { spawnSync } = await import("child_process");
-        spawnSync("systemctl", ["--user", subcmd, "kern-proxy"], { stdio: "pipe" });
+        spawnSync("systemctl", [subcmd, "kern-proxy"], { stdio: "inherit" });
         return;
       }
       if (subcmd === "start") await proxyStart();

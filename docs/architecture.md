@@ -139,29 +139,20 @@ Every message reaching the model — from humans on any interface, from heartbea
 
 ## Service management
 
-`kern install` configures systemd persistence for agents and optional web/proxy servers:
+`kern install` (root only) configures system-level systemd persistence for agents and the optional web/proxy servers:
 
-- **On System-Managed Hosts (`/etc/kern/config.json`)**:
-  - Run via `sudo kern install`.
-  - Installs a system-level template unit at `/etc/systemd/system/kern@.service`.
-  - Enables and starts each agent as `kern@<user>` with POSIX privilege isolation and independent systemd management (`systemctl restart kern@alice` or fleet-wide `systemctl restart 'kern@*'`).
-- **On Single-User Hosts (`~/.kern/config.json`)**:
-  - Installs systemd user services in `~/.config/systemd/user/`: `kern-agent-<name>.service` and `kern-web.service`.
-  - Auto-restarts on crash and persists across logins (with lingering enabled).
+- Promotes the host to `/etc/kern/config.json` and installs a single template unit at `/etc/systemd/system/kern@.service`.
+- Enables and starts each agent as `kern@<user>` with POSIX privilege isolation (`User=%i`) and independent systemd management (`systemctl restart kern@alice` or fleet-wide `systemctl restart 'kern@*'`).
+- `--web` / `--proxy` install `kern-web.service` / `kern-proxy.service` as system units.
+- There is no user-level systemd integration. Single-user hosts (laptops, macOS, Docker) use `kern start` (detached PID daemon, privilege-dropping via `setpriv` when root starts a `{ user, workspace }` entry) or `kern run` (foreground).
 
 ```bash
-# On managed fleet hosts (root):
 sudo kern install           # install system template & enable all fleet agents
 sudo kern install atlas     # enable single agent service
+sudo kern install --web     # web UI as a system unit
 sudo kern uninstall atlas   # disable single agent service
-
-# On single-user hosts:
-kern install vega       # install agent as systemd user service
-kern install --web      # install web server as systemd service
-kern uninstall vega     # remove user service
+sudo kern uninstall         # remove everything kern install created
 ```
-
-Without `kern install`, agents run as plain daemons managed by PID files.
 
 ## File layout
 

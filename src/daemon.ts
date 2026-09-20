@@ -76,15 +76,29 @@ async function startOne(name: string, path: string, targetUser?: string | null):
     cwd: path,
   };
 
-  // Privilege dropping if running as root with a declared user
+  let bin = nodeBin;
+  let argv = ["--no-deprecation", kernBin, "run", path];
+
+  // Privilege dropping if running as root with a declared user.
+  // Node's spawn({ uid, gid }) only calls setuid/setgid and leaves root's
+  // supplementary groups attached to the child, so we exec through setpriv
+  // (util-linux) which runs initgroups(3) before switching IDs and then
+  // exec()s directly (no intermediate fork, so the pid we record is the agent).
   if (isRoot() && targetUser) {
     const userInfo = resolveUserInfo(targetUser);
     if (!userInfo) {
       console.log(`  ${red("●")} ${bold(name)} failed to resolve user '${targetUser}'`);
       return;
     }
-    spawnOpts.uid = userInfo.uid;
-    spawnOpts.gid = userInfo.gid;
+    bin = "setpriv";
+    argv = [
+      `--reuid=${userInfo.uid}`,
+      `--regid=${userInfo.gid}`,
+      "--init-groups",
+      "--",
+      nodeBin,
+      ...argv,
+    ];
     spawnOpts.env = {
       ...process.env,
       HOME: userInfo.home,
@@ -94,7 +108,7 @@ async function startOne(name: string, path: string, targetUser?: string | null):
   }
 
   // Fork detached process using kern run
-  const child = spawn(nodeBin, ["--no-deprecation", kernBin, "run", path], spawnOpts);
+  const child = spawn(bin, argv, spawnOpts);
 
   child.unref();
 
