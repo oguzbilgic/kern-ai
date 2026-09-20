@@ -1,4 +1,5 @@
 import { streamText, type ModelMessage, stepCountIs } from "ai";
+import { narrateTurnStatus, type TurnSnapshot, type ToolCallRecord } from "./narration.js";
 import { log } from "./log.js";
 import { createModel } from "./model.js";
 import { allTools, type ToolName } from "./tools/index.js";
@@ -54,6 +55,13 @@ export class Runtime {
 
   /** Tool descriptions from plugins for system prompt */
   private pluginToolDescriptions: Record<string, string> = {};
+
+  /** Current active turn snapshot for activity narration and inspection */
+  private currentTurnSnapshot: TurnSnapshot | null = null;
+
+  getCurrentTurnSnapshot(): TurnSnapshot | null {
+    return this.currentTurnSnapshot;
+  }
 
   constructor(agentDir: string) {
     this.agentDir = agentDir;
@@ -260,6 +268,12 @@ export class Runtime {
 
       const pendingInjections = this.pendingInjections;
       let persistedCount = 0;
+      this.currentTurnSnapshot = {
+        originalGoal: userMessage,
+        stepCount: 0,
+        maxSteps: this.config.maxSteps,
+        toolCalls: [],
+      };
       // Accumulate mid-turn injections so they persist across all subsequent steps.
       // Each injection records the chronological position (insertAt) where it arrived,
       // so we can splice it back into that position on later steps instead of pinning
@@ -323,6 +337,10 @@ export class Runtime {
             await this.session.append(newMsgs);
             persistedCount = allMsgs.length;
             log("runtime", `step ${step.stepNumber} persisted ${newMsgs.length} new message(s)`);
+          }
+          if (this.currentTurnSnapshot) {
+            this.currentTurnSnapshot.stepCount = step.stepNumber + 1;
+            this.currentTurnSnapshot.lastEmittedText = fullText;
           }
         },
         prepareStep: ({ messages, stepNumber }) => {
@@ -413,10 +431,24 @@ export class Runtime {
           if (args.offset) detail += ` +${args.offset}`;
           if (args.limit && args.limit !== 2000) detail += ` limit:${args.limit}`;
           onEvent({ type: "tool-call", toolName: part.toolName, toolDetail: detail, toolInput: args });
+          if (this.currentTurnSnapshot) {
+            this.currentTurnSnapshot.toolCalls.push({
+              tool: part.toolName,
+              detail,
+              input: args,
+            });
+            this.currentTurnSnapshot.activeCommand = detail;
+          }
         } else if (part.type === "tool-result") {
           const output = (part as any).output;
           const rawResultText = typeof output === "string" ? output : JSON.stringify(output);
           const resultText = (this.config.stripAnsi ?? true) ? stripAnsi(rawResultText) : rawResultText;
+          if (this.currentTurnSnapshot && this.currentTurnSnapshot.toolCalls.length > 0) {
+            const last = this.currentTurnSnapshot.toolCalls[this.currentTurnSnapshot.toolCalls.length - 1];
+            if (last.tool === part.toolName && !last.output) {
+              last.output = resultText;
+            }
+          }
           onEvent({ type: "tool-result", toolName: part.toolName, toolResult: resultText });
 
           // Dispatch to plugins for custom event emission
@@ -438,11 +470,20 @@ export class Runtime {
       }
 
       if (hitStepLimit) {
-        const unit = this.config.maxSteps === 1 ? "step" : "steps";
+        if (this.currentTurnSnapshot) {
+          this.currentTurnSnapshot.lastEmittedText = fullText;
+        }
         const hasEmittedText = fullText.trim().length > 0;
-        const stepNotice = hasEmittedText
-          ? `\n\n⏳ Reached step limit (${this.config.maxSteps} ${unit}). Reply \"continue\" to proceed.`
-          : `⏳ Reached step limit (${this.config.maxSteps} ${unit}). Work is partially completed. Reply \"continue\" to proceed.`;
+        let stepNotice = "";
+        if (this.currentTurnSnapshot) {
+          stepNotice = await narrateTurnStatus("step_limit", this.currentTurnSnapshot, this.config);
+        } else {
+          const unit = this.config.maxSteps === 1 ? "step" : "steps";
+          stepNotice = `⏳ Reached step limit (${this.config.maxSteps} ${unit}). Work is partially completed. Reply "continue" to proceed.`;
+        }
+        if (hasEmittedText) {
+          stepNotice = `\n\n${stepNotice}`;
+        }
         fullText += stepNotice;
         onEvent({ type: "text-delta", text: stepNotice });
         // If the model emitted text, onStepFinish already persisted the assistant message;
@@ -472,6 +513,7 @@ export class Runtime {
 
       onEvent({ type: "finish", text: fullText });
 
+      this.currentTurnSnapshot = null;
       return fullText || "(no text response)";
     } catch (error: any) {
       // Aborted by the queue's idle timeout — the queue already rejected the
@@ -482,6 +524,7 @@ export class Runtime {
         log("runtime", `turn aborted (idle timeout) — stream stopped [${category}: ${msg}]`);
         throw error;
       }
+      this.currentTurnSnapshot = null;
       const { message: msg, category } = parseProviderError(streamError, error);
       log.error("runtime", `[${category}] ${msg}`);
       onEvent({ type: "error", error: msg });

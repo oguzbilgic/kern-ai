@@ -7,7 +7,7 @@ import { MatrixInterface } from "./interfaces/matrix.js";
 import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
-import { loadConfig, saveConfigField } from "./config.js";
+import { loadConfig, saveConfigField, type KernConfig } from "./config.js";
 import { readFile, appendFile } from "fs/promises";
 import { join, basename } from "path";
 import { randomBytes } from "crypto";
@@ -27,6 +27,8 @@ import { formatLocalISO, resolveHostTimezone } from "./util.js";
 import { log } from "./log.js";
 
 let _pluginCtx: PluginContext | null = null;
+let _runtime: Runtime | null = null;
+let _config: KernConfig | null = null;
 
 async function handleSlashCommand(cmd: string, userId: string, iface: string, agentName: string, agentDir: string): Promise<string | null> {
   switch (cmd) {
@@ -56,6 +58,19 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
       return formatStatus(getStatusDataFn());
     }
 
+    case "/wyd": {
+      const snapshot = _runtime?.getCurrentTurnSnapshot();
+      if (!snapshot) {
+        return "Idle — waiting for input.";
+      }
+      if (_config) {
+        const { narrateTurnStatus } = await import("./narration.js");
+        return await narrateTurnStatus("wyd", snapshot, _config);
+      }
+      const { buildFallbackNarration } = await import("./narration.js");
+      return buildFallbackNarration("wyd", snapshot);
+    }
+
     case "/plugins": {
       if (!_pluginCtx) return "```yaml\nplugins: {}\n```";
       const status = plugins.collectStatus(_pluginCtx);
@@ -79,6 +94,7 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
     case "/help": {
       const cmds: Record<string, string> = {
         status: "show agent status, uptime, token usage",
+        wyd: "show what the agent is currently working on",
         plugins: "show detailed plugin status and metrics",
         restart: "restart the agent process",
       };
@@ -133,6 +149,8 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   }
 
   const runtime = new Runtime(agentDir);
+  _runtime = runtime;
+  _config = config;
 
   // Probe embedding model dimensions before creating DB
   const embeddingDims = await MemoryDB.detectEmbeddingDimensions(config);
@@ -327,6 +345,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   server.setCommandsFn(() => {
     const cmds: Record<string, string> = {
       "/status": "show agent status, uptime, token usage",
+      "/wyd": "show what the agent is currently working on",
       "/restart": "restart the agent process",
     };
     const pluginCmds = plugins.collectCommandDescriptions();

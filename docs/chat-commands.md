@@ -34,6 +34,16 @@ Displays the runtime status of the active agent:
 !status
 ```
 
+### /wyd (or !wyd)
+
+Surfaces what the agent is currently working on:
+- If idle, reports waiting for input.
+- If processing a turn, returns a concise summary of the active user request, current step progress, and recent tool invocations.
+
+```text
+!wyd
+```
+
 ### /plugins (or !plugins)
 
 Shows status, registered tools, routes, and active configuration for all loaded plugins (MCP, Skills, Dashboards, Sub-agents, Recall, Media, Slack, Matrix, Telegram, Discord, etc.).
