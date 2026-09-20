@@ -337,8 +337,8 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
-    const targetUser = flags["user"] || (isSystemManaged() || isRoot() ? name : undefined);
-    const dir = flags["workspace"] || ((isSystemManaged() || isRoot()) && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
+    const targetUser = flags["user"] || (isSystemManaged() ? name : undefined);
+    const dir = flags["workspace"] || (isSystemManaged() && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
 
     await scaffoldAgent({
       name, dir, user: targetUser, provider, model, apiKey, envVar,
@@ -366,7 +366,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   let targetUser: string | undefined = undefined;
   let dir = resolve(targetArg || name);
 
-  if (isSystemManaged() || isRoot()) {
+  if (isSystemManaged()) {
     targetUser = await input({
       message: "Dedicated Linux user",
       default: name,
@@ -579,13 +579,13 @@ node_modules/
   }
 
   // Register and start
-  if (isSystemManaged() || isRoot()) {
+  if (isSystemManaged()) {
     // When managed via /etc/kern/config.json, register user/workspace entry
     const globalConfig = await loadGlobalConfig();
     const targetUser = opts.user || name;
 
     // Chown workspace recursively to targetUser if running as root
-    if (isRoot()) {
+    if (isRoot() && targetUser) {
       try {
         const { execFileSync } = await import("child_process");
         execFileSync("chown", ["-R", `${targetUser}:`, dir]);

@@ -173,7 +173,11 @@ export async function startAgent(nameOrPath?: string): Promise<void> {
       const user = getAgentUser(entry);
       const info = readAgentInfo(agentPath, user);
       const name = info?.name || basename(agentPath);
-      await startOne(name, agentPath, user);
+      if (isServiceInstalled(name, user)) {
+        serviceControl("start", name, user);
+      } else {
+        await startOne(name, agentPath, user);
+      }
     }
     console.log("");
   }

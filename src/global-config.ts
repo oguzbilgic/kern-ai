@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, unlink, appendFile } from "fs/promises";
+import { readFile, writeFile, mkdir, unlink, appendFile, chmod } from "fs/promises";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
@@ -61,8 +61,11 @@ export async function promoteToSystemManaged(): Promise<string> {
   }
   await mkdir("/etc/kern", { recursive: true });
   if (!existsSync(SYSTEM_CONFIG_FILE)) {
-    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify({ ...defaults }, null, 2) + "\n", "utf-8");
+    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify({ ...defaults }, null, 2) + "\n", { encoding: "utf-8", mode: 0o644 });
   }
+  try {
+    await chmod(SYSTEM_CONFIG_FILE, 0o644);
+  } catch {}
   return SYSTEM_CONFIG_FILE;
 }
 
@@ -140,7 +143,10 @@ export async function saveGlobalConfig(config: GlobalConfig): Promise<void> {
       throw new Error(`Permission denied: cannot write to ${SYSTEM_CONFIG_FILE} without root privileges.`);
     }
     await mkdir("/etc/kern", { recursive: true });
-    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", { encoding: "utf-8", mode: 0o644 });
+    try {
+      await chmod(SYSTEM_CONFIG_FILE, 0o644);
+    } catch {}
     return;
   }
 
