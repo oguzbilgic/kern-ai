@@ -25,6 +25,14 @@ export function stripEnvelope(text: string): string {
   return text.replace(/^\[via [^\]]+\]\s*/, "").trim();
 }
 
+/** Blockquote of the original request (first line, capped) followed by a blank line. */
+export function goalQuote(snapshot: TurnSnapshot): string {
+  const goal = stripEnvelope(snapshot.originalGoal).split("\n")[0];
+  if (!goal) return "";
+  const snippet = goal.length > 80 ? `${goal.slice(0, 80)}…` : goal;
+  return `> ${snippet}\n\n`;
+}
+
 /**
  * Clean, safe fallback status lines if fast model narration is disabled or fails.
  */
@@ -42,8 +50,7 @@ export function buildFallbackNarration(reason: NarrationReason, snapshot: TurnSn
       if (snapshot.stepCount === 0) {
         return "Idle — waiting for input.";
       }
-      const goalSnippet = cleanGoal.length > 80 ? `${cleanGoal.slice(0, 80)}…` : cleanGoal;
-      return `> "${goalSnippet}"\n\nWorking on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`;
+      return `${goalQuote(snapshot)}Working on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`;
   }
 }
 
@@ -85,7 +92,10 @@ Tone: Terse, direct, factual. No preamble, no filler.`;
     });
 
     const narrative = result.text.trim();
-    if (!narrative) return fallback;
+    if (!narrative) {
+      log.warn("narration", `model returned empty text for ${reason}, using fallback`);
+      return fallback;
+    }
 
     if (reason === "step_limit") {
       return `⏳ Reached step limit (${snapshot.maxSteps} steps).\n${narrative}\n\nReply "continue" to proceed.`;
@@ -93,7 +103,7 @@ Tone: Terse, direct, factual. No preamble, no filler.`;
     if (reason === "timeout") {
       return `⏱️ Idle timeout reached.\n${narrative}\n\nReply "continue" to resume.`;
     }
-    return narrative;
+    return `${goalQuote(snapshot)}${narrative}`;
   } catch (err: any) {
     log.error("narration", `failed to generate AI narration: ${err.message}`);
     return fallback;

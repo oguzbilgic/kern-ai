@@ -54,7 +54,7 @@ test("buildFallbackNarration handles wyd command when active vs idle", () => {
   };
 
   const activeText = buildFallbackNarration("wyd", activeSnapshot);
-  assert.match(activeText, /> "Fixing network routes in pfSense"/);
+  assert.match(activeText, /^> Fixing network routes in pfSense\n\n/);
   assert.doesNotMatch(activeText, /via matrix/);
   assert.match(activeText, /step 12\/30/);
   assert.match(activeText, /read knowledge\/pfsense\.md/);
