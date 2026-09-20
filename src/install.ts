@@ -44,6 +44,16 @@ function hasSystemd(): boolean {
   }
 }
 
+function findGlobalKernBinary(): string | null {
+  try {
+    const res = spawnSync("which", ["kern"], { encoding: "utf-8" });
+    if (res.status === 0 && res.stdout.trim()) {
+      return res.stdout.trim();
+    }
+  } catch {}
+  return null;
+}
+
 function hasLinger(): boolean {
   try {
     const user = execSync("whoami", { encoding: "utf-8" }).trim();
@@ -376,8 +386,15 @@ async function migrateAndCleanLegacyUserConfigs(): Promise<void> {
 export async function install(nameOrFlag?: string): Promise<void> {
   const w = (s: string) => process.stdout.write(s + "\n");
 
+  if (process.platform !== "linux") {
+    console.error(`\x1b[31mError:\x1b[0m 'kern install' configures system-level systemd units and is only supported on Linux.`);
+    console.error(`On macOS or development machines, run 'kern start' or 'kern run' instead.`);
+    process.exit(1);
+  }
+
   if (!hasSystemd()) {
-    console.error("systemd not available. Use 'kern start' for daemon mode instead.");
+    console.error(`\x1b[31mError:\x1b[0m systemd is not available on this system.`);
+    console.error(`Use 'kern start' (detached daemon) or 'kern run' (foreground process) instead.`);
     process.exit(1);
   }
 
@@ -385,6 +402,16 @@ export async function install(nameOrFlag?: string): Promise<void> {
   if (!isRoot()) {
     console.error(`\x1b[31mError:\x1b[0m 'kern install' configures host-level systemd persistence and requires root.`);
     console.error(`Run: sudo kern install${nameOrFlag ? ` ${nameOrFlag}` : ""}`);
+    process.exit(1);
+  }
+
+  // Verify kern is globally installed in PATH so systemd and unprivileged users can execute it
+  const globalBin = findGlobalKernBinary();
+  if (!globalBin) {
+    console.error(`\x1b[31mError:\x1b[0m 'kern' was not found in system PATH.`);
+    console.error(`Systemd services run as dedicated agent users who need access to the global CLI.`);
+    console.error(`Install kern globally first:`);
+    console.error(`  sudo npm install -g kern-ai`);
     process.exit(1);
   }
 
