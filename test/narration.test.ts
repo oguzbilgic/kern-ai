@@ -45,7 +45,7 @@ test("buildFallbackNarration handles wyd command when active vs idle", () => {
   assert.equal(buildFallbackNarration("wyd", idleSnapshot), "Idle — waiting for input.");
 
   const activeSnapshot: TurnSnapshot = {
-    originalGoal: "Fixing network routes in pfSense",
+    originalGoal: "[via matrix, matrix:!room123, user: @user:matrix, time: 2026-09-19T17:00:00-07:00]\nFixing network routes in pfSense",
     stepCount: 12,
     maxSteps: 30,
     toolCalls: [
@@ -54,7 +54,8 @@ test("buildFallbackNarration handles wyd command when active vs idle", () => {
   };
 
   const activeText = buildFallbackNarration("wyd", activeSnapshot);
-  assert.match(activeText, /Working on: "Fixing network routes in pfSense"/);
+  assert.match(activeText, /> "Fixing network routes in pfSense"/);
+  assert.doesNotMatch(activeText, /via matrix/);
   assert.match(activeText, /step 12\/30/);
   assert.match(activeText, /read knowledge\/pfsense\.md/);
 });

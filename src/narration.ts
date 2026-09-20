@@ -21,12 +21,17 @@ export interface TurnSnapshot {
   activeCommand?: string;
 }
 
+export function stripEnvelope(text: string): string {
+  return text.replace(/^\[via [^\]]+\]\s*/, "").trim();
+}
+
 /**
  * Clean, safe fallback status lines if fast model narration is disabled or fails.
  */
 export function buildFallbackNarration(reason: NarrationReason, snapshot: TurnSnapshot): string {
   const lastTool = snapshot.toolCalls.length > 0 ? snapshot.toolCalls[snapshot.toolCalls.length - 1] : null;
   const toolDesc = lastTool ? ` while running \`${lastTool.tool}${lastTool.detail ? ` ${lastTool.detail}` : ""}\`` : "";
+  const cleanGoal = stripEnvelope(snapshot.originalGoal);
 
   switch (reason) {
     case "step_limit":
@@ -37,7 +42,8 @@ export function buildFallbackNarration(reason: NarrationReason, snapshot: TurnSn
       if (snapshot.stepCount === 0) {
         return "Idle — waiting for input.";
       }
-      return `Working on: "${snapshot.originalGoal.slice(0, 80)}" (step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}).`;
+      const goalSnippet = cleanGoal.length > 80 ? `${cleanGoal.slice(0, 80)}…` : cleanGoal;
+      return `> "${goalSnippet}"\n\nWorking on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`;
   }
 }
 
@@ -62,7 +68,7 @@ export async function narrateTurnStatus(
 
     const prompt = `You are a homelab AI assistant summarizing active progress.
 Trigger: ${reason}
-Original user request: "${snapshot.originalGoal}"
+Original user request: "${stripEnvelope(snapshot.originalGoal)}"
 Steps completed: ${snapshot.stepCount} of ${snapshot.maxSteps}
 Recent tool activity:
 ${recentTools || "  (none)"}
@@ -89,7 +95,7 @@ Tone: Terse, direct, factual. No preamble, no filler.`;
     }
     return narrative;
   } catch (err: any) {
-    log("narration", `failed to generate AI narration: ${err.message}`);
+    log.error("narration", `failed to generate AI narration: ${err.message}`);
     return fallback;
   }
 }
