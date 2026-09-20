@@ -10,6 +10,7 @@ import {
   getAgentWorkspace,
   getAgentUser,
   isSystemManaged,
+  FleetConfigAccessError,
   AgentEntry,
 } from "./global-config.js";
 import { log } from "./log.js";
@@ -43,12 +44,10 @@ export async function loadRegistryEntries(): Promise<AgentEntry[]> {
 export async function registerAgent(path: string, user?: string): Promise<void> {
   // On managed hosts (/etc/kern/config.json), agents are registered explicitly by root during setup.
   // Runtime foreground processes (kern run) should not self-mutate /etc/kern/config.json.
+  // The agent has usually dropped privileges by the time it gets here and
+  // cannot read the 0600 fleet config anyway — don't try.
   if (isSystemManaged()) {
-    const config = await loadGlobalConfig();
-    const alreadyRegistered = config.agents.some((entry) => getAgentWorkspace(entry) === path);
-    if (!alreadyRegistered) {
-      log.debug("registry", `system-managed host: skipping self-registration for ${path}`);
-    }
+    log.debug("registry", `system-managed host: skipping self-registration for ${path}`);
     return;
   }
 
@@ -159,12 +158,22 @@ function checkPort(port: number): Promise<boolean> {
  * and bind-checking to avoid cross-user collisions.
  */
 export async function assignPort(): Promise<number> {
-  const config = loadGlobalConfigSync();
   const knownPorts = new Set<number>();
-  for (const entry of config.agents) {
-    const ws = getAgentWorkspace(entry);
-    const info = readAgentInfo(ws);
-    if (info && info.port > 0) knownPorts.add(info.port);
+  try {
+    const config = loadGlobalConfigSync();
+    for (const entry of config.agents) {
+      const ws = getAgentWorkspace(entry);
+      const info = readAgentInfo(ws);
+      if (info && info.port > 0) knownPorts.add(info.port);
+    }
+  } catch (err) {
+    if (!(err instanceof FleetConfigAccessError)) throw err;
+    // Dropped-privilege agent on a managed host: the registry is unreadable,
+    // and sibling workspaces are other users' anyway. The bind check below
+    // still guarantees we don't collide with a running agent; a stopped
+    // sibling's sticky port can be taken, which its own bind check resolves
+    // on its next start.
+    log.debug("kern", "fleet config unreadable — assigning port by bind check only");
   }
 
   for (let port = 4100; port <= 4999; port++) {
