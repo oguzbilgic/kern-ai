@@ -1,6 +1,11 @@
 import type { StreamEvent } from "./runtime.js";
 import type { Attachment } from "./interfaces/types.js";
 
+export interface TimeoutNarrator<T> {
+  capture: () => T;
+  narrate: (captured: T) => Promise<string>;
+}
+
 export interface QueuedMessage {
   text: string;
   userId: string;
@@ -37,11 +42,15 @@ export class MessageQueue {
   private idleTimeoutMs = 5 * 60 * 1000;
   // Resets the current turn's idle timer. Null when no turn is active.
   private touchFn: (() => void) | null = null;
-  private timeoutNarrator: (() => Promise<string>) | null = null;
+  private timeoutNarrator: TimeoutNarrator<any> | null = null;
 
-  /** Optional hook producing a human-readable status when a turn hits the idle timeout. */
-  setTimeoutNarrator(fn: () => Promise<string>) {
-    this.timeoutNarrator = fn;
+  /**
+   * Optional hook producing a human-readable status when a turn hits the idle timeout.
+   * `capture` runs synchronously *before* the turn is aborted (the runtime drops its
+   * turn state on abort); `narrate` receives that captured state afterwards.
+   */
+  setTimeoutNarrator<T>(narrator: TimeoutNarrator<T>) {
+    this.timeoutNarrator = narrator;
   }
 
   setHandler(fn: (msg: QueuedMessage, pendingMessages: () => QueuedMessage[], signal: AbortSignal) => Promise<string>) {
@@ -133,6 +142,8 @@ export class MessageQueue {
       // stream event (via touch()), so only turns with no activity die.
       const idleTimeout = new Promise<string>((_, reject) => {
         const fire = async () => {
+          // Snapshot turn state before abort — the runtime clears it on abort.
+          const captured = this.timeoutNarrator?.capture();
           controller.abort();
           const base = `Message processing timed out (no activity for ${this.idleTimeoutMs / 1000}s)`;
           let text = base;
@@ -140,7 +151,7 @@ export class MessageQueue {
             // Cap narration so a slow model can't hold the queue hostage
             try {
               text = await Promise.race([
-                this.timeoutNarrator(),
+                this.timeoutNarrator.narrate(captured),
                 new Promise<string>((res) => setTimeout(() => res(base), 10_000)),
               ]);
             } catch {

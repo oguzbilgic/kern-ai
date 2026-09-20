@@ -268,11 +268,14 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   });
 
   // Idle-timeout notices get the same narration treatment as step-limit notices
-  queue.setTimeoutNarrator(async () => {
-    const snapshot = runtime.getCurrentTurnSnapshot();
-    const { narrateTurnStatus, buildFallbackNarration } = await import("./narration.js");
-    if (!snapshot) return `⏱️ Idle timeout reached. Reply "continue" to resume.`;
-    return narrateTurnStatus("timeout", snapshot, config).catch(() => buildFallbackNarration("timeout", snapshot));
+  // The snapshot is captured before the abort fires — the runtime nulls it on abort.
+  queue.setTimeoutNarrator({
+    capture: () => runtime.getCurrentTurnSnapshot(),
+    narrate: async (snapshot) => {
+      const { narrateTurnStatus, buildFallbackNarration } = await import("./narration.js");
+      if (!snapshot) return `⏱️ Idle timeout reached. Reply "continue" to resume.`;
+      return narrateTurnStatus("timeout", snapshot, config).catch(() => buildFallbackNarration("timeout", snapshot));
+    },
   });
 
   queue.setHandler(async (msg, getPendingMessages, signal) => {

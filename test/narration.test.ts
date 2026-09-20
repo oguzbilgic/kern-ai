@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildFallbackNarration, type TurnSnapshot } from "../src/narration.js";
+import { buildFallbackNarration, buildNarrationPrompt, type TurnSnapshot } from "../src/narration.js";
 
 test("buildFallbackNarration handles step_limit with tool activity", () => {
   const snapshot: TurnSnapshot = {
@@ -8,7 +8,7 @@ test("buildFallbackNarration handles step_limit with tool activity", () => {
     stepCount: 30,
     maxSteps: 30,
     toolCalls: [
-      { tool: "bash", detail: "kubectl get nodes", output: "node-1 NotReady" },
+      { tool: "bash", detail: "kubectl get nodes" },
     ],
   };
 
@@ -58,4 +58,49 @@ test("step limit notice pluralizes correctly", () => {
     originalGoal: "x", stepCount: 1, maxSteps: 1, toolCalls: [], lastEmittedText: "",
   });
   assert.match(text, /Reached step limit \(1 step\)/);
+});
+
+test("buildNarrationPrompt includes every tool call and never tool output", () => {
+  const snapshot: TurnSnapshot = {
+    originalGoal: "[via tui, user: op, time: 2026-09-19T17:00:00-07:00]\ncheck disks",
+    stepCount: 7,
+    maxSteps: 30,
+    toolCalls: Array.from({ length: 7 }, (_, i) => ({ tool: "bash", detail: `df -h host${i}` })),
+    lastEmittedText: "Checking all hosts now.",
+  };
+  const prompt = buildNarrationPrompt("wyd", snapshot);
+  assert.match(prompt, /Original user request: "check disks"/);
+  assert.doesNotMatch(prompt, /via tui/);
+  assert.match(prompt, /Tool activity this turn:/);
+  for (let i = 0; i < 7; i++) assert.match(prompt, new RegExp(`${i + 1}\\. bash\\(df -h host${i}\\)`));
+  assert.doesNotMatch(prompt, /output/);
+  assert.match(prompt, /Agent text so far: "Checking all hosts now."/);
+});
+
+test("buildNarrationPrompt chains off the previous narration and only includes the delta", () => {
+  const snapshot: TurnSnapshot = {
+    originalGoal: "check disks",
+    stepCount: 5,
+    maxSteps: 30,
+    toolCalls: [
+      { tool: "bash", detail: "df -h kamrui" },
+      { tool: "bash", detail: "df -h vega" },
+      { tool: "bash", detail: "pct exec 130 -- df -h" },
+    ],
+    lastEmittedText: "kamrui and vega fine. Now checking LXC 130.",
+    lastNarration: {
+      text: "Checked kamrui and vega disks, both healthy.",
+      step: 3,
+      toolIndex: 2,
+      textLen: "kamrui and vega fine.".length,
+    },
+  };
+  const prompt = buildNarrationPrompt("step_limit", snapshot);
+  assert.match(prompt, /Previous status \(given at step 3\): "Checked kamrui and vega disks, both healthy."/);
+  assert.match(prompt, /Tool activity since then:/);
+  assert.doesNotMatch(prompt, /df -h kamrui/);
+  assert.doesNotMatch(prompt, /df -h vega/);
+  assert.match(prompt, /3\. bash\(pct exec 130 -- df -h\)/);
+  assert.match(prompt, /Agent text since then: "Now checking LXC 130."/);
+  assert.match(prompt, /Do not repeat the previous status/);
 });
