@@ -2,9 +2,9 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { existsSync, rmSync } from "fs";
 import { resolve } from "path";
-import { analyzeSegmentHealth, listSessions } from "../segment-health.js";
+import { analyzeSegmentHealth, listSessions } from "../plugins/recall/segment-health.js";
 import { budgetFromConfig } from "./segment-health.js";
-import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune, sessionStart } from "../segment-prune.js";
+import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune, sessionStart } from "../plugins/recall/segment-prune.js";
 
 const USAGE = "Usage: kern scripts segment-prune <recall.db> [--session <id>] [--budget <tokens>] [--apply] [--no-backup] [--limit <n>] [--json]";
 

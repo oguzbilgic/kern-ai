@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
-import { analyzeSegmentHealth } from "../src/segment-health.js";
-import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune } from "../src/segment-prune.js";
+import { analyzeSegmentHealth } from "../src/plugins/recall/segment-health.js";
+import { applyPrune, formatPrunePlan, loadSegmentRows, planPrune } from "../src/plugins/recall/segment-prune.js";
 
 const SID = "sess-1";
 

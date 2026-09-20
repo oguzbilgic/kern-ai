@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
-import { analyzeSegmentHealth, formatHealthReport } from "../src/segment-health.js";
+import { analyzeSegmentHealth, formatHealthReport } from "../src/plugins/recall/segment-health.js";
 import { selectHistorySegments, type HistorySegment } from "../src/segments.js";
 
 const SID = "sess-1";

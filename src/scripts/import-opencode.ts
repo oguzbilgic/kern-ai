@@ -9,7 +9,7 @@ import { join } from "path";
 import { existsSync } from "fs";
 import { writeFile } from "fs/promises";
 import { homedir } from "os";
-import { log } from "./log.js";
+import { log } from "../log.js";
 
 interface OpenCodeMessage {
   id: string;

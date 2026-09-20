@@ -12,7 +12,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { selectHistorySegments, type HistorySegment } from "./segments.js";
+import { selectHistorySegments, type HistorySegment } from "../../segments.js";
 
 // msg_end is EXCLUSIVE throughout (segments.ts stores messages[end-1].msg_index + 1),
 // so [3,52) and [52,73) are contiguous with zero overlap.

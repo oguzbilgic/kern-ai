@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, readFileSync } from "fs";
 import { dirname, join, resolve } from "path";
-import { analyzeSegmentHealth, formatHealthReport, listSessions } from "../segment-health.js";
+import { analyzeSegmentHealth, formatHealthReport, listSessions } from "../plugins/recall/segment-health.js";
 
 const USAGE = "Usage: kern scripts segment-health <recall.db> [--session <id>] [--budget <tokens>] [--trim <msg>] [--limit <n>] [--json] [--list]";
 

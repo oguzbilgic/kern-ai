@@ -2,7 +2,7 @@ import type { KernPlugin, PluginContext, RouteHandler, BeforeContextInfo, Contex
 import { RecallIndex } from "./recall.js";
 import { recallTool, setRecallIndex, setContextBounds } from "./tool.js";
 import { analyzeRecallHealth, formatRecallHealthReport, listRecallSessions } from "./health.js";
-import { analyzeSegmentHealth, formatHealthReport, listSessions } from "../../segment-health.js";
+import { analyzeSegmentHealth, formatHealthReport, listSessions } from "./segment-health.js";
 import { log } from "../../log.js";
 
 let recallIndex: RecallIndex | null = null;
