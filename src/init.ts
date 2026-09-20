@@ -300,6 +300,14 @@ async function runConfig(name: string, dir: string): Promise<void> {
 }
 
 export async function runInit(targetArg?: string, flags?: Record<string, string>): Promise<void> {
+  // If host is managed via /etc/kern, non-root users are blocked immediately
+  if (isSystemManaged() && !isRoot()) {
+    console.error(`\x1b[31mError:\x1b[0m This machine is configured as a multi-agent fleet host (/etc/kern/config.json).`);
+    console.error(`You cannot create local user agents here. To add an agent to the fleet, run:`);
+    console.error(`  sudo kern init ${targetArg || "<name>"}`);
+    process.exit(1);
+  }
+
   // Check if target is an existing agent — go straight to config
   if (targetArg && !flags) {
     const registered = findAgent(targetArg);
@@ -329,8 +337,8 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
-    const targetUser = flags["user"] || (isSystemManaged() ? name : undefined);
-    const dir = flags["workspace"] || (isSystemManaged() && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
+    const targetUser = flags["user"] || (isSystemManaged() || isRoot() ? name : undefined);
+    const dir = flags["workspace"] || ((isSystemManaged() || isRoot()) && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
 
     await scaffoldAgent({
       name, dir, user: targetUser, provider, model, apiKey, envVar,
@@ -342,6 +350,10 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   // Interactive mode
   print("");
   print("  kern init");
+
+  if (!isRoot() && !isSystemManaged()) {
+    print(`  \x1b[2mRunning in user mode (~/.kern). To set up a multi-agent fleet host: sudo kern install\x1b[0m`);
+  }
   print("");
 
   // Agent name
@@ -354,12 +366,29 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   let targetUser: string | undefined = undefined;
   let dir = resolve(targetArg || name);
 
-  if (isSystemManaged()) {
+  if (isSystemManaged() || isRoot()) {
     targetUser = await input({
       message: "Dedicated Linux user",
       default: name,
       required: true,
     });
+
+    // Check if user exists on system; if not and running as root, offer to create it
+    try {
+      const { execFileSync } = await import("child_process");
+      try {
+        execFileSync("id", ["-u", targetUser], { stdio: "ignore" });
+      } catch {
+        print(`  Notice: Linux user '${targetUser}' does not exist yet.`);
+        try {
+          execFileSync("useradd", ["-m", "-s", "/bin/bash", targetUser]);
+          print(`  ✓ Created Linux user '${targetUser}'`);
+        } catch (err: any) {
+          print(`  ⚠ Could not auto-create user '${targetUser}': ${err.message}`);
+        }
+      }
+    } catch {}
+
     dir = await input({
       message: "Workspace directory",
       default: `/home/${targetUser}/workspace`,
@@ -550,7 +579,7 @@ node_modules/
   }
 
   // Register and start
-  if (isSystemManaged()) {
+  if (isSystemManaged() || isRoot()) {
     // When managed via /etc/kern/config.json, register user/workspace entry
     const globalConfig = await loadGlobalConfig();
     const targetUser = opts.user || name;

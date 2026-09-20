@@ -12,7 +12,16 @@ import {
   readPid,
   removePidFile,
 } from "./registry.js";
-import { isSystemManaged, isRoot, getAgentWorkspace, getAgentUser } from "./global-config.js";
+import {
+  isSystemManaged,
+  isRoot,
+  getAgentWorkspace,
+  getAgentUser,
+  promoteToSystemManaged,
+  loadGlobalConfig,
+  saveGlobalConfig,
+  type AgentEntry,
+} from "./global-config.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
@@ -312,6 +321,58 @@ async function installProxy(): Promise<void> {
   }
 }
 
+/**
+ * Migrate legacy user-level configs to /etc/kern/config.json and clean up ghost registries.
+ */
+async function migrateAndCleanLegacyUserConfigs(): Promise<void> {
+  const candidateDirs: string[] = ["/root/.kern"];
+  const sudoUser = process.env.SUDO_USER;
+  if (sudoUser && sudoUser !== "root") {
+    candidateDirs.push(`/home/${sudoUser}/.kern`);
+  }
+
+  const globalConfig = await loadGlobalConfig();
+  let mutated = false;
+
+  for (const dir of candidateDirs) {
+    const cfgPath = join(dir, "config.json");
+    if (!existsSync(cfgPath)) continue;
+
+    try {
+      const raw = await readFile(cfgPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed.agents) && parsed.agents.length > 0) {
+        for (const entry of parsed.agents) {
+          const ws = getAgentWorkspace(entry);
+          const declaredUser = getAgentUser(entry);
+          // If no declared user, infer from workspace path or sudoUser
+          let targetUser = declaredUser;
+          if (!targetUser) {
+            const match = ws.match(/^\/home\/([^/]+)/);
+            targetUser = match ? match[1] : (sudoUser || "root");
+          }
+
+          const exists = globalConfig.agents.some((e) => getAgentWorkspace(e) === ws);
+          if (!exists) {
+            globalConfig.agents.push({ user: targetUser, workspace: ws });
+            mutated = true;
+          }
+        }
+      }
+
+      // Delete the legacy config so no ghost setup remains
+      await unlink(cfgPath);
+      console.log(`  ${green("✓")} Migrated and removed ghost config: ${cfgPath}`);
+    } catch (err: any) {
+      console.log(`  ⚠ Failed to migrate ${cfgPath}: ${err.message}`);
+    }
+  }
+
+  if (mutated) {
+    await saveGlobalConfig(globalConfig);
+  }
+}
+
 export async function install(nameOrFlag?: string): Promise<void> {
   const w = (s: string) => process.stdout.write(s + "\n");
 
@@ -320,105 +381,58 @@ export async function install(nameOrFlag?: string): Promise<void> {
     process.exit(1);
   }
 
-  // System-wide template unit on managed hosts
-  if (isSystemManaged()) {
-    if (!isRoot()) {
-      console.error(`\x1b[31mError:\x1b[0m On managed hosts, 'kern install' must be run as root.`);
-      process.exit(1);
-    }
-
-    w("");
-    w(`  ${bold("installing systemd template unit (/etc/systemd/system/kern@.service)")}`);
-    w("");
-
-    await writeFile(SYSTEM_TEMPLATE_PATH, systemServiceTemplate());
-    spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
-
-    const entries = await loadRegistryEntries();
-    const targets = nameOrFlag
-      ? entries.filter((e) => {
-          const user = getAgentUser(e);
-          const ws = getAgentWorkspace(e);
-          const info = readAgentInfo(ws, user);
-          return info?.name === nameOrFlag || user === nameOrFlag || ws === nameOrFlag;
-        })
-      : entries;
-
-    for (const entry of targets) {
-      const user = getAgentUser(entry);
-      const ws = getAgentWorkspace(entry);
-      const info = readAgentInfo(ws, user);
-      const name = info?.name || basename(ws);
-      const instance = user || name;
-
-      spawnSync("systemctl", ["enable", `kern@${instance}`], { stdio: "inherit" });
-      spawnSync("systemctl", ["restart", `kern@${instance}`], { stdio: "inherit" });
-
-      if (isActive(`kern@${instance}`, true)) {
-        console.log(`  ${green("●")} ${bold(name)} [${instance}] enabled and running`);
-      } else {
-        console.log(`  ${red("●")} ${bold(name)} [${instance}] enabled but failed to start`);
-        console.log(`    ${dim(`journalctl -u kern@${instance} -n 10`)}`);
-      }
-    }
-    w("");
-    return;
+  // kern install is strictly a host-level administrative command
+  if (!isRoot()) {
+    console.error(`\x1b[31mError:\x1b[0m 'kern install' configures host-level systemd persistence and requires root.`);
+    console.error(`Run: sudo kern install${nameOrFlag ? ` ${nameOrFlag}` : ""}`);
+    process.exit(1);
   }
 
-  // Single-user laptop/dev fallback
-  await mkdir(SYSTEMD_DIR, { recursive: true });
-
-  if (!hasLinger()) {
+  // Auto-promote host to /etc/kern/config.json if not already promoted
+  const wasManaged = isSystemManaged();
+  if (!wasManaged) {
+    await promoteToSystemManaged();
     w("");
-    w(`  ${yellow("⚠")}  Linger not enabled. Services will stop when you log out.`);
-    w(`     Run: ${bold("sudo loginctl enable-linger $(whoami)")}`);
-    w("");
+    w(`  ${green("✓")} ${bold("Promoted host to multi-agent fleet")} (/etc/kern/config.json)`);
   }
 
-  if (nameOrFlag === "--web") {
-    w("");
-    await installWeb();
-    w("");
-    return;
-  }
-
-  if (nameOrFlag === "--proxy") {
-    w("");
-    await installProxy();
-    w("");
-    return;
-  }
-
-  let agentPaths: string[];
-  if (nameOrFlag) {
-    const agent = findAgent(nameOrFlag);
-    if (!agent) {
-      console.error(`Agent not found: ${nameOrFlag}`);
-      process.exit(1);
-    }
-    agentPaths = [agent.path];
-  } else {
-    agentPaths = await loadRegistry();
-    if (agentPaths.length === 0) {
-      console.error("No agents registered. Run 'kern init <name>' first.");
-      process.exit(1);
-    }
-  }
+  // Scan for legacy user-level configs to migrate and clean up ghosts
+  await migrateAndCleanLegacyUserConfigs();
 
   w("");
-  w(`  ${bold("installing kern services")}`);
+  w(`  ${bold("installing systemd template unit (/etc/systemd/system/kern@.service)")}`);
   w("");
 
-  for (const agentPath of agentPaths) {
-    const info = readAgentInfo(agentPath);
-    const name = info?.name || basename(agentPath);
-    await installAgent(name, agentPath);
-  }
+  await writeFile(SYSTEM_TEMPLATE_PATH, systemServiceTemplate());
+  spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
 
-  if (!nameOrFlag) {
-    await installWeb();
-  }
+  const entries = await loadRegistryEntries();
+  const targets = nameOrFlag
+    ? entries.filter((e) => {
+        const user = getAgentUser(e);
+        const ws = getAgentWorkspace(e);
+        const info = readAgentInfo(ws, user);
+        return info?.name === nameOrFlag || user === nameOrFlag || ws === nameOrFlag;
+      })
+    : entries;
 
+  for (const entry of targets) {
+    const user = getAgentUser(entry);
+    const ws = getAgentWorkspace(entry);
+    const info = readAgentInfo(ws, user);
+    const name = info?.name || basename(ws);
+    const instance = user || name;
+
+    spawnSync("systemctl", ["enable", `kern@${instance}`], { stdio: "inherit" });
+    spawnSync("systemctl", ["restart", `kern@${instance}`], { stdio: "inherit" });
+
+    if (isActive(`kern@${instance}`, true)) {
+      console.log(`  ${green("●")} ${bold(name)} [${instance}] enabled and running`);
+    } else {
+      console.log(`  ${red("●")} ${bold(name)} [${instance}] enabled but failed to start`);
+      console.log(`    ${dim(`journalctl -u kern@${instance} -n 10`)}`);
+    }
+  }
   w("");
 }
 
@@ -445,42 +459,21 @@ export async function uninstall(name?: string): Promise<void> {
     process.exit(1);
   }
 
-  if (isSystemManaged()) {
-    if (!isRoot()) {
-      console.error(`\x1b[31mError:\x1b[0m On managed hosts, 'kern uninstall' must be run as root.`);
-      process.exit(1);
-    }
-    if (name) {
-      spawnSync("systemctl", ["stop", `kern@${name}`], { stdio: "inherit" });
-      spawnSync("systemctl", ["disable", `kern@${name}`], { stdio: "inherit" });
-      console.log(`  ${dim("●")} ${bold(name)} disabled and stopped`);
-    } else {
-      if (existsSync(SYSTEM_TEMPLATE_PATH)) {
-        await unlink(SYSTEM_TEMPLATE_PATH).catch(() => {});
-        spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
-        console.log(`  ${dim("●")} Removed ${SYSTEM_TEMPLATE_PATH}`);
-      }
-    }
-    return;
+  if (!isRoot()) {
+    console.error(`\x1b[31mError:\x1b[0m 'kern uninstall' manages system services and requires root.`);
+    console.error(`Run: sudo kern uninstall${name ? ` ${name}` : ""}`);
+    process.exit(1);
   }
-
-  w("");
 
   if (name) {
-    await uninstallOne(serviceName(name), name);
+    spawnSync("systemctl", ["stop", `kern@${name}`], { stdio: "inherit" });
+    spawnSync("systemctl", ["disable", `kern@${name}`], { stdio: "inherit" });
+    console.log(`  ${dim("●")} ${bold(name)} disabled and stopped`);
   } else {
-    w(`  ${bold("uninstalling kern services")}`);
-    w("");
-
-    const paths = await loadRegistry();
-    for (const agentPath of paths) {
-      const info = readAgentInfo(agentPath);
-      const name = info?.name || basename(agentPath);
-      await uninstallOne(serviceName(name), name);
+    if (existsSync(SYSTEM_TEMPLATE_PATH)) {
+      await unlink(SYSTEM_TEMPLATE_PATH).catch(() => {});
+      spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
+      console.log(`  ${dim("●")} Removed ${SYSTEM_TEMPLATE_PATH}`);
     }
-    await uninstallOne(WEB_SERVICE, "web");
-    await uninstallOne(PROXY_SERVICE, "proxy");
   }
-
-  w("");
 }

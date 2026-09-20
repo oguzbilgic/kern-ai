@@ -53,12 +53,26 @@ export function assertFleetAuthority(action: string): void {
 }
 
 /**
+ * Initialize /etc/kern/config.json if running as root.
+ */
+export async function promoteToSystemManaged(): Promise<string> {
+  if (!isRoot()) {
+    throw new Error("Cannot promote host to system-managed without root privileges.");
+  }
+  await mkdir("/etc/kern", { recursive: true });
+  if (!existsSync(SYSTEM_CONFIG_FILE)) {
+    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify({ ...defaults }, null, 2) + "\n", "utf-8");
+  }
+  return SYSTEM_CONFIG_FILE;
+}
+
+/**
  * Resolve the active global config path:
- * - /etc/kern/config.json if it exists
+ * - /etc/kern/config.json if it exists (or if running as root)
  * - ~/.kern/config.json otherwise
  */
 export function getGlobalConfigPath(): string {
-  if (isSystemManaged()) {
+  if (isSystemManaged() || isRoot()) {
     return SYSTEM_CONFIG_FILE;
   }
   return USER_CONFIG_FILE;
@@ -109,7 +123,7 @@ export function loadGlobalConfigSync(): GlobalConfig {
 }
 
 export async function saveGlobalConfig(config: GlobalConfig): Promise<void> {
-  if (isSystemManaged()) {
+  if (isSystemManaged() || isRoot()) {
     if (!isRoot()) {
       throw new Error(`Permission denied: cannot write to ${SYSTEM_CONFIG_FILE} without root privileges.`);
     }
