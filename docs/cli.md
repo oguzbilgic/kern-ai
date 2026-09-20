@@ -170,20 +170,34 @@ kern pair atlas KERN-7X4M
 
 ## Daemons & Services
 
+### System-Wide vs Single-User Architecture
+
+kern adapts to its deployment environment:
+
+- **System-wide (Dedicated Linux Servers)**: When `/etc/kern/config.json` exists, kern operates as a multi-agent system host. The registry declares agents with their dedicated Linux user accounts and workspace paths:
+  ```json
+  {
+    "agents": [
+      { "user": "alice", "workspace": "/home/alice/workspace" },
+      { "user": "bob", "workspace": "/home/bob/workspace" }
+    ]
+  }
+  ```
+  Fleet management commands (`start`, `stop`, `restart`, `remove`, `init`, `install`, `uninstall`) must be run by `root` (or with `sudo`). Running `kern start` automatically drops POSIX privileges (`uid`, `gid`, `HOME`) to the declared agent user.
+- **Single-User (Laptops, macOS, Docker)**: When `/etc/kern/config.json` is absent, kern uses `~/.kern/config.json` where `agents` is an array of directory paths running under the current user.
+
 ### kern install [name|--web]
 
-Install systemd user services for agents and the web daemon. Provides auto-restart on crash and boot persistence.
+Install systemd services for agents and the web daemon. Provides auto-restart on crash and boot persistence.
 
-- No argument: installs all registered agents + web
-- With name: installs a single agent
-- `--web`: installs only the web daemon
-- Migrates from PID-based daemon: stops existing process before installing
-- Warns if `loginctl enable-linger` is not enabled (required for services to survive logout)
-- Idempotent — safe to run again after adding new agents
-
-Services are written to `~/.config/systemd/user/`:
-- `kern-agent-<name>.service` for each agent
-- `kern-web.service` for the web daemon
+- **On System-Managed Hosts (`/etc/kern/config.json`)**:
+  - Must be run as `root`.
+  - Installs a system-level template unit at `/etc/systemd/system/kern@.service`.
+  - Enables and starts each agent as `kern@<user>` (e.g. `kern@alice`).
+  - Native systemd control: `systemctl restart kern@alice` or fleet wildcards `systemctl restart 'kern@*'`.
+- **On Single-User Hosts**:
+  - Services are written to `~/.config/systemd/user/`: `kern-agent-<name>.service` and `kern-web.service`.
+  - Warns if `loginctl enable-linger` is not enabled.
 
 ```bash
 kern install          # all agents + web
@@ -197,9 +211,8 @@ Requires Linux with systemd. On systems without systemd, use `kern start` instea
 
 Remove systemd services installed by `kern install`.
 
-- No argument: uninstalls all agent services + web
-- With name: uninstalls a single agent service
-- Stops and disables the service, deletes the unit file
+- On managed hosts (as root): disables and stops `kern@<name>` or removes `/etc/systemd/system/kern@.service`.
+- On single-user hosts: stops and disables user services, deletes the unit file.
 
 ```bash
 kern uninstall        # all

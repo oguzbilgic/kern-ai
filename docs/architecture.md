@@ -19,6 +19,21 @@ Matrix ←──────────────────────→ 
 
 Each agent is a separate process. `kern web` serves the UI as static files. `kern proxy` is an optional authenticated reverse proxy for multi-agent access. Browsers can connect directly to agents or through the proxy.
 
+## Multi-Agent Host Architecture
+
+kern operates in two modes depending on machine configuration:
+
+1. **System-Managed Multi-User Fleet (`/etc/kern/config.json`)**:
+   - For dedicated Linux servers and VMs running multiple agents (e.g. `agents.homelab`).
+   - Declares agents with isolated Linux user accounts: `agents: [{ user: "alice", workspace: "/home/alice/workspace" }]`.
+   - Fleet lifecycle commands (`start`, `stop`, `restart`, `remove`, `init`, `install`, `uninstall`) must be executed by `root`.
+   - `kern start` drops privileges to each declared agent user (`uid`/`gid`/`HOME`).
+   - Supervised via a single system-wide template unit: `/etc/systemd/system/kern@.service`, running instances as `kern@<user>`.
+2. **Single-User Environment (`~/.kern/config.json`)**:
+   - For dev laptops, macOS workstations, and single-container Docker environments.
+   - All agents run under the current user's privileges with workspace paths in `agents: ["/path/to/agent"]`.
+   - Optional user-level systemd supervision via `~/.config/systemd/user/kern-agent-<name>.service`.
+
 ## Agent process
 
 `kern start` launches an agent as a background daemon. Each agent process:
