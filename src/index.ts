@@ -236,11 +236,6 @@ async function main() {
     }
 
     const agentDir = await resolveAgentDir(nameArg);
-    const logFile = join(agentDir, ".kern", "logs", "kern.log");
-    if (!existsSync(logFile)) {
-      console.error("No logs yet. Start the agent first.");
-      process.exit(1);
-    }
 
     // Level filtering: map level to minimum set of labels to show
     const LEVEL_FILTERS: Record<string, string[]> = {
@@ -253,6 +248,36 @@ async function main() {
 
     // Default: follow unless -n was specified
     const shouldFollow = follow !== null ? follow : !logArgs.some(a => a === "-n");
+
+    // Under systemd the agent's stderr goes to the journal, not .kern/logs/kern.log —
+    // that file is stale or absent for a kern@<user> instance. Read the journal instead.
+    {
+      const { isServiceInstalled } = await import("./install.js");
+      const agent = findAgent(nameArg || agentDir);
+      if (agent && isServiceInstalled(agent.name, agent.user)) {
+        const unit = `kern@${agent.user || agent.name}`;
+        const jArgs = ["-u", unit, "-o", "cat", "--no-pager", "-n", String(lines)];
+        if (shouldFollow) jArgs.push("-f");
+        const { spawn } = await import("child_process");
+        if (!filterLabels || filterLabels.length === 0) {
+          const j = spawn("journalctl", jArgs, { stdio: "inherit" });
+          process.on("SIGINT", () => { j.kill(); process.exit(0); });
+          j.on("exit", (code) => { if (!shouldFollow) process.exit(code ?? 0); });
+        } else {
+          const pattern = filterLabels.join("\\|");
+          const j = spawn("sh", ["-c", `journalctl ${jArgs.map((a) => `'${a}'`).join(" ")} | grep --line-buffered "${pattern}"`], { stdio: "inherit" });
+          process.on("SIGINT", () => { j.kill(); process.exit(0); });
+          j.on("exit", (code) => { if (!shouldFollow) process.exit(code ?? 0); });
+        }
+        return;
+      }
+    }
+
+    const logFile = join(agentDir, ".kern", "logs", "kern.log");
+    if (!existsSync(logFile)) {
+      console.error("No logs yet. Start the agent first.");
+      process.exit(1);
+    }
 
     if (shouldFollow) {
       const { spawn } = await import("child_process");
