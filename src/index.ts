@@ -7,6 +7,7 @@ import { runInit } from "./init.js";
 import { showStatus } from "./status.js";
 import { startAgent, stopAgent } from "./daemon.js";
 import { findAgent, loadRegistry, readAgentInfo } from "./registry.js";
+import { assertFleetAuthority } from "./global-config.js";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -98,6 +99,7 @@ async function main() {
   }
 
   if (cmd === "init") {
+    assertFleetAuthority("init");
     // Parse flags for non-interactive mode
     const flags: Record<string, string> = {};
     let initTarget = args[1];
@@ -119,10 +121,12 @@ async function main() {
   }
 
   if (cmd === "start") {
+    assertFleetAuthority("start");
     if (args[1]) {
       const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("start", args[1]);
+      const agent = findAgent(args[1]);
+      if (isServiceInstalled(args[1], agent?.user)) {
+        const ok = serviceControl("start", args[1], agent?.user);
         if (!ok) {
           console.error(`Failed to start service-managed agent: ${args[1]}`);
           process.exit(1);
@@ -135,10 +139,12 @@ async function main() {
   }
 
   if (cmd === "stop") {
+    assertFleetAuthority("stop");
     if (args[1]) {
       const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("stop", args[1]);
+      const agent = findAgent(args[1]);
+      if (isServiceInstalled(args[1], agent?.user)) {
+        const ok = serviceControl("stop", args[1], agent?.user);
         if (!ok) {
           console.error(`Failed to stop service-managed agent: ${args[1]}`);
           process.exit(1);
@@ -151,10 +157,12 @@ async function main() {
   }
 
   if (cmd === "restart") {
+    assertFleetAuthority("restart");
     if (args[1]) {
       const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("restart", args[1]);
+      const agent = findAgent(args[1]);
+      if (isServiceInstalled(args[1], agent?.user)) {
+        const ok = serviceControl("restart", args[1], agent?.user);
         if (!ok) {
           console.error(`Failed to restart service-managed agent: ${args[1]}`);
           process.exit(1);
@@ -169,18 +177,21 @@ async function main() {
   }
 
   if (cmd === "install") {
+    assertFleetAuthority("install");
     const { install } = await import("./install.js");
     await install(args[1]);
     process.exit(0);
   }
 
   if (cmd === "uninstall") {
+    assertFleetAuthority("uninstall");
     const { uninstall } = await import("./install.js");
     await uninstall(args[1]);
     process.exit(0);
   }
 
   if (cmd === "remove" || cmd === "rm") {
+    assertFleetAuthority("remove");
     const name = args[1];
     if (!name) {
       console.error("Usage: kern remove <name>");

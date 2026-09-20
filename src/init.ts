@@ -3,6 +3,7 @@ import { join, resolve, basename } from "path";
 import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
 import { registerAgent, findAgent, isProcessRunning, readPid, removePidFile, assignPort } from "./registry.js";
+import { isSystemManaged, isRoot, loadGlobalConfig, saveGlobalConfig } from "./global-config.js";
 import { startAgent } from "./daemon.js";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
@@ -403,6 +404,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
 export interface ScaffoldOpts {
   name: string;
   dir: string;
+  user?: string;
   provider: string;
   model: string;
   apiKey: string;
@@ -533,7 +535,21 @@ node_modules/
   }
 
   // Register and start
-  await registerAgent(dir);
+  if (isSystemManaged()) {
+    // When managed via /etc/kern/config.json, register user/workspace entry
+    const globalConfig = await loadGlobalConfig();
+    const targetUser = opts.user || name;
+    const existsInFleet = globalConfig.agents.some((entry) => {
+      const ws = typeof entry === "string" ? entry : entry.workspace;
+      return ws === dir;
+    });
+    if (!existsInFleet) {
+      globalConfig.agents.push({ user: targetUser, workspace: dir });
+      await saveGlobalConfig(globalConfig);
+    }
+  } else {
+    await registerAgent(dir);
+  }
 
   if (!skipStart) {
     print("");

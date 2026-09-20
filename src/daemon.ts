@@ -1,18 +1,47 @@
-import { spawn } from "child_process";
+import { spawn, SpawnOptions } from "child_process";
 import { basename } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { join } from "path";
 import { openSync } from "fs";
-import { findAgent, loadRegistry, registerAgent, readAgentInfo, readPid, writePidFile, removePidFile, isProcessRunning } from "./registry.js";
+import {
+  findAgent,
+  loadRegistry,
+  loadRegistryEntries,
+  registerAgent,
+  readAgentInfo,
+  readPid,
+  writePidFile,
+  removePidFile,
+  isProcessRunning,
+} from "./registry.js";
 import { isServiceInstalled } from "./install.js";
+import { isRoot, isSystemManaged, getAgentWorkspace, getAgentUser } from "./global-config.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
-async function startOne(name: string, path: string): Promise<void> {
+/**
+ * Resolve UID, GID, and HOME directory for a Unix username.
+ */
+function resolveUserInfo(username: string): { uid: number; gid: number; home: string } | null {
+  try {
+    const { execSync } = require("child_process");
+    const uid = parseInt(execSync(`id -u ${username}`, { encoding: "utf-8" }).trim(), 10);
+    const gid = parseInt(execSync(`id -g ${username}`, { encoding: "utf-8" }).trim(), 10);
+    // Read home from getent passwd
+    const passwdLine = execSync(`getent passwd ${username}`, { encoding: "utf-8" }).trim();
+    const parts = passwdLine.split(":");
+    const home = parts[5] || `/home/${username}`;
+    return { uid, gid, home };
+  } catch {
+    return null;
+  }
+}
+
+async function startOne(name: string, path: string, targetUser?: string | null): Promise<void> {
   // Check if already running via PID file
   const existingPid = readPid(path);
   if (existingPid && isProcessRunning(existingPid)) {
@@ -34,12 +63,31 @@ async function startOne(name: string, path: string): Promise<void> {
   // Find the kern entry point
   const kernBin = join(import.meta.dirname, "index.js");
 
-  // Fork detached process using kern run
-  const child = spawn("node", ["--no-deprecation", kernBin, "run", path], {
+  const spawnOpts: SpawnOptions = {
     detached: true,
     stdio: ["ignore", logFd, logFd],
     cwd: path,
-  });
+  };
+
+  // Privilege dropping if running as root with a declared user
+  if (isRoot() && targetUser) {
+    const userInfo = resolveUserInfo(targetUser);
+    if (!userInfo) {
+      console.log(`  ${red("●")} ${bold(name)} failed to resolve user '${targetUser}'`);
+      return;
+    }
+    spawnOpts.uid = userInfo.uid;
+    spawnOpts.gid = userInfo.gid;
+    spawnOpts.env = {
+      ...process.env,
+      HOME: userInfo.home,
+      USER: targetUser,
+      LOGNAME: targetUser,
+    };
+  }
+
+  // Fork detached process using kern run
+  const child = spawn("node", ["--no-deprecation", kernBin, "run", path], spawnOpts);
 
   child.unref();
 
@@ -51,9 +99,10 @@ async function startOne(name: string, path: string): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
   if (isProcessRunning(pid)) {
-    const info = readAgentInfo(path);
+    const info = readAgentInfo(path, targetUser || null);
     const portStr = info?.port ? `, :${info.port}` : "";
-    console.log(`  ${green("●")} ${bold(name)} started ${dim(`(pid ${pid}${portStr})`)}`);
+    const userStr = targetUser ? ` [${targetUser}]` : "";
+    console.log(`  ${green("●")} ${bold(name)}${userStr} started ${dim(`(pid ${pid}${portStr})`)}`);
     if (!isServiceInstalled(name)) {
       try {
         const { execSync } = await import("child_process");
@@ -88,7 +137,7 @@ export async function startAgent(nameOrPath?: string): Promise<void> {
       if (existsSync(dir) && (existsSync(join(dir, ".kern")) || existsSync(join(dir, "AGENTS.md")))) {
         const name = basename(dir);
         await registerAgent(dir);
-        agent = { name, path: dir, port: 0, token: null, pid: null };
+        agent = { name, path: dir, user: null, port: 0, token: null, pid: null };
       }
     }
 
@@ -99,12 +148,12 @@ export async function startAgent(nameOrPath?: string): Promise<void> {
       return;
     }
     console.log("");
-    await startOne(agent.name, agent.path);
+    await startOne(agent.name, agent.path, agent.user);
     console.log("");
   } else {
     // Start all registered agents
-    const paths = await loadRegistry();
-    if (paths.length === 0) {
+    const entries = await loadRegistryEntries();
+    if (entries.length === 0) {
       console.error("No agents registered. Run 'kern init <name>' first.");
       process.exit(1);
       return;
@@ -112,10 +161,12 @@ export async function startAgent(nameOrPath?: string): Promise<void> {
     console.log("");
     console.log(`  ${bold("starting all agents")}`);
     console.log("");
-    for (const agentPath of paths) {
-      const info = readAgentInfo(agentPath);
+    for (const entry of entries) {
+      const agentPath = getAgentWorkspace(entry);
+      const user = getAgentUser(entry);
+      const info = readAgentInfo(agentPath, user);
       const name = info?.name || basename(agentPath);
-      await startOne(name, agentPath);
+      await startOne(name, agentPath, user);
     }
     console.log("");
   }
@@ -156,11 +207,10 @@ export async function stopAgent(name?: string): Promise<void> {
     await stopOne(agent.name, agent.path);
     console.log("");
   } else {
-    // Stop all
     const paths = await loadRegistry();
     if (paths.length === 0) {
-      console.log("No agents registered.");
-      process.exit(0);
+      console.error("No agents registered.");
+      process.exit(1);
       return;
     }
     console.log("");
@@ -168,8 +218,8 @@ export async function stopAgent(name?: string): Promise<void> {
     console.log("");
     for (const agentPath of paths) {
       const info = readAgentInfo(agentPath);
-      const name = info?.name || basename(agentPath);
-      await stopOne(name, agentPath);
+      const agentName = info?.name || basename(agentPath);
+      await stopOne(agentName, agentPath);
     }
     console.log("");
   }

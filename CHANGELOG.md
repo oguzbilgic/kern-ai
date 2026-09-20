@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Features
+- **Multi-agent Linux architecture: machine-wide config and systemd supervision** ([#402](https://github.com/oguzbilgic/kern-ai/issues/402)) — introduces support for managed multi-agent Linux hosts where `/etc/kern/config.json` serves as the system-wide directory (`agents: [{ user, workspace }]`). Enforces strict root authority on managed hosts to prevent rogue local fleets, enables process spawning with POSIX privilege dropping (`uid`/`gid`/`HOME`), and supervises agents with a single system-level systemd template unit (`/etc/systemd/system/kern@.service`). Laptops, single-user setups, and Docker containers seamlessly fall back to `~/.kern/config.json` with zero systemd complexity.
+
 ### Improvements
 - **npm: automated test and build workflows in GitHub Actions** ([#390](https://github.com/oguzbilgic/kern-ai/issues/390)) — runs `npm test` and server/web builds across all pull requests and pushes to `master`, automatically preventing test regressions and broken builds.
 - **Code organization: relocate session importers and segment tools** ([#400](https://github.com/oguzbilgic/kern-ai/pull/400)) — moves `import-opencode.ts` and `import-openclaw-lcm.ts` from root `src/` to `src/scripts/`, and moves `segment-health.ts` and `segment-prune.ts` into `src/plugins/recall/` alongside other memory health and repair modules.

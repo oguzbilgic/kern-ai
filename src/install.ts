@@ -3,7 +3,16 @@ import { existsSync } from "fs";
 import { mkdir, writeFile, unlink, readFile } from "fs/promises";
 import { join, basename } from "path";
 import { homedir } from "os";
-import { loadRegistry, findAgent, readAgentInfo, isProcessRunning, readPid, removePidFile } from "./registry.js";
+import {
+  loadRegistry,
+  loadRegistryEntries,
+  findAgent,
+  readAgentInfo,
+  isProcessRunning,
+  readPid,
+  removePidFile,
+} from "./registry.js";
+import { isSystemManaged, isRoot, getAgentWorkspace, getAgentUser } from "./global-config.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
@@ -14,21 +23,15 @@ const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 const SERVICE_PREFIX = "kern-agent-";
 const WEB_SERVICE = "kern-web";
 const PROXY_SERVICE = "kern-proxy";
+const SYSTEM_TEMPLATE_PATH = "/etc/systemd/system/kern@.service";
 const SYSTEMD_DIR = join(homedir(), ".config", "systemd", "user");
 
 function hasSystemd(): boolean {
   try {
-    execSync("systemctl --user --no-pager status 2>/dev/null", { stdio: "ignore" });
+    execSync("which systemctl", { stdio: "ignore" });
     return true;
   } catch {
-    // systemctl exits non-zero if no services running, but that's fine
-    // Check if the binary exists
-    try {
-      execSync("which systemctl", { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
 }
 
@@ -50,25 +53,45 @@ function isInstalled(name: string): boolean {
   return existsSync(join(SYSTEMD_DIR, `${name}.service`));
 }
 
-function isActive(name: string): boolean {
+function isActive(name: string, isSystem: boolean = false): boolean {
   try {
-    const result = spawnSync("systemctl", ["--user", "is-active", name], { encoding: "utf-8" });
+    const args = isSystem ? ["is-active", name] : ["--user", "is-active", name];
+    const result = spawnSync("systemctl", args, { encoding: "utf-8" });
     return result.stdout.trim() === "active";
   } catch {
     return false;
   }
 }
 
-export function isServiceInstalled(agentName: string): boolean {
+export function isServiceInstalled(agentName: string, user?: string | null): boolean {
+  if (isSystemManaged()) {
+    const instance = user || agentName;
+    try {
+      const result = spawnSync("systemctl", ["is-enabled", `kern@${instance}`], { encoding: "utf-8" });
+      return result.status === 0 || existsSync(SYSTEM_TEMPLATE_PATH);
+    } catch {
+      return existsSync(SYSTEM_TEMPLATE_PATH);
+    }
+  }
   return isInstalled(serviceName(agentName));
 }
 
-export function serviceControl(action: "start" | "stop" | "restart", agentName: string): boolean {
+export function serviceControl(action: "start" | "stop" | "restart", agentName: string, user?: string | null): boolean {
+  if (isSystemManaged()) {
+    const instance = user || agentName;
+    const result = spawnSync("systemctl", [action, `kern@${instance}`], { stdio: "inherit" });
+    return result.status === 0;
+  }
   const svc = serviceName(agentName);
   return systemctl(action, svc);
 }
 
-export function getServiceStatus(agentName: string): "active" | "installed" | null {
+export function getServiceStatus(agentName: string, user?: string | null): "active" | "installed" | null {
+  if (isSystemManaged()) {
+    if (!existsSync(SYSTEM_TEMPLATE_PATH)) return null;
+    const instance = user || agentName;
+    return isActive(`kern@${instance}`, true) ? "active" : "installed";
+  }
   const svc = serviceName(agentName);
   if (!isInstalled(svc)) return null;
   return isActive(svc) ? "active" : "installed";
@@ -82,6 +105,29 @@ export function getWebServiceStatus(): "active" | "installed" | null {
 export function getProxyServiceStatus(): "active" | "installed" | null {
   if (!isInstalled(PROXY_SERVICE)) return null;
   return isActive(PROXY_SERVICE) ? "active" : "installed";
+}
+
+function systemServiceTemplate(): string {
+  const kernBin = "/usr/bin/kern";
+  return `[Unit]
+Description=kern agent: %i
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/workspace
+ExecStart=${kernBin} run /home/%i/workspace
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+`;
 }
 
 function agentServiceUnit(agentName: string, agentPath: string): string {
@@ -192,13 +238,11 @@ async function installAgent(agentName: string, agentPath: string): Promise<void>
 async function installWeb(): Promise<void> {
   const unitPath = join(SYSTEMD_DIR, `${WEB_SERVICE}.service`);
 
-  // Already installed and running — skip
   if (existsSync(unitPath) && isActive(WEB_SERVICE)) {
     console.log(`  ${green("●")} ${bold("web")} already installed and running`);
     return;
   }
 
-  // Stop existing PID-based web daemon if running
   if (!existsSync(unitPath)) {
     const pidFile = join(homedir(), ".kern", "web.pid");
     if (existsSync(pidFile)) {
@@ -208,8 +252,8 @@ async function installWeb(): Promise<void> {
           process.kill(pid, "SIGTERM");
           console.log(`  ${dim("stopped pid-based web daemon")} ${dim(`(pid ${pid})`)}`);
           await new Promise((r) => setTimeout(r, 1000));
+          await unlink(pidFile).catch(() => {});
         }
-        await unlink(pidFile).catch(() => {});
       } catch {}
     }
   }
@@ -246,8 +290,8 @@ async function installProxy(): Promise<void> {
           process.kill(pid, "SIGTERM");
           console.log(`  ${dim("stopped pid-based proxy daemon")} ${dim(`(pid ${pid})`)}`);
           await new Promise((r) => setTimeout(r, 1000));
+          await unlink(pidFile).catch(() => {});
         }
-        await unlink(pidFile).catch(() => {});
       } catch {}
     }
   }
@@ -275,6 +319,52 @@ export async function install(nameOrFlag?: string): Promise<void> {
     process.exit(1);
   }
 
+  // System-wide template unit on managed hosts
+  if (isSystemManaged()) {
+    if (!isRoot()) {
+      console.error(`\x1b[31mError:\x1b[0m On managed hosts, 'kern install' must be run as root.`);
+      process.exit(1);
+    }
+
+    w("");
+    w(`  ${bold("installing systemd template unit (/etc/systemd/system/kern@.service)")}`);
+    w("");
+
+    await writeFile(SYSTEM_TEMPLATE_PATH, systemServiceTemplate());
+    spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
+
+    const entries = await loadRegistryEntries();
+    const targets = nameOrFlag
+      ? entries.filter((e) => {
+          const user = getAgentUser(e);
+          const ws = getAgentWorkspace(e);
+          const info = readAgentInfo(ws, user);
+          return info?.name === nameOrFlag || user === nameOrFlag || ws === nameOrFlag;
+        })
+      : entries;
+
+    for (const entry of targets) {
+      const user = getAgentUser(entry);
+      const ws = getAgentWorkspace(entry);
+      const info = readAgentInfo(ws, user);
+      const name = info?.name || basename(ws);
+      const instance = user || name;
+
+      spawnSync("systemctl", ["enable", `kern@${instance}`], { stdio: "inherit" });
+      spawnSync("systemctl", ["restart", `kern@${instance}`], { stdio: "inherit" });
+
+      if (isActive(`kern@${instance}`, true)) {
+        console.log(`  ${green("●")} ${bold(name)} [${instance}] enabled and running`);
+      } else {
+        console.log(`  ${red("●")} ${bold(name)} [${instance}] enabled but failed to start`);
+        console.log(`    ${dim(`journalctl -u kern@${instance} -n 10`)}`);
+      }
+    }
+    w("");
+    return;
+  }
+
+  // Single-user laptop/dev fallback
   await mkdir(SYSTEMD_DIR, { recursive: true });
 
   if (!hasLinger()) {
@@ -324,7 +414,6 @@ export async function install(nameOrFlag?: string): Promise<void> {
     await installAgent(name, agentPath);
   }
 
-  // Also install web if installing all
   if (!nameOrFlag) {
     await installWeb();
   }
@@ -355,6 +444,25 @@ export async function uninstall(name?: string): Promise<void> {
     process.exit(1);
   }
 
+  if (isSystemManaged()) {
+    if (!isRoot()) {
+      console.error(`\x1b[31mError:\x1b[0m On managed hosts, 'kern uninstall' must be run as root.`);
+      process.exit(1);
+    }
+    if (name) {
+      spawnSync("systemctl", ["stop", `kern@${name}`], { stdio: "inherit" });
+      spawnSync("systemctl", ["disable", `kern@${name}`], { stdio: "inherit" });
+      console.log(`  ${dim("●")} ${bold(name)} disabled and stopped`);
+    } else {
+      if (existsSync(SYSTEM_TEMPLATE_PATH)) {
+        await unlink(SYSTEM_TEMPLATE_PATH).catch(() => {});
+        spawnSync("systemctl", ["daemon-reload"], { stdio: "inherit" });
+        console.log(`  ${dim("●")} Removed ${SYSTEM_TEMPLATE_PATH}`);
+      }
+    }
+    return;
+  }
+
   w("");
 
   if (name) {
@@ -373,6 +481,5 @@ export async function uninstall(name?: string): Promise<void> {
     await uninstallOne(PROXY_SERVICE, "proxy");
   }
 
-  systemctl("daemon-reload");
   w("");
 }
