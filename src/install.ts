@@ -37,8 +37,9 @@ const SYSTEMD_DIR = join(homedir(), ".config", "systemd", "user");
 
 function hasSystemd(): boolean {
   try {
+    // Check both systemctl binary presence and active PID 1 systemd boot state
     execSync("which systemctl", { stdio: "ignore" });
-    return true;
+    return existsSync("/run/systemd/system");
   } catch {
     return false;
   }
@@ -386,6 +387,13 @@ async function migrateAndCleanLegacyUserConfigs(): Promise<void> {
 export async function install(nameOrFlag?: string): Promise<void> {
   const w = (s: string) => process.stdout.write(s + "\n");
 
+  const nodeMajor = parseInt(process.versions.node.split(".")[0], 10);
+  if (nodeMajor < 22) {
+    console.error(`\x1b[31mError:\x1b[0m kern requires Node.js >= 22 (running v${process.versions.node}).`);
+    console.error(`Please upgrade Node.js before configuring systemd services.`);
+    process.exit(1);
+  }
+
   if (process.platform !== "linux") {
     console.error(`\x1b[31mError:\x1b[0m 'kern install' configures system-level systemd units and is only supported on Linux.`);
     console.error(`On macOS or development machines, run 'kern start' or 'kern run' instead.`);
@@ -393,7 +401,7 @@ export async function install(nameOrFlag?: string): Promise<void> {
   }
 
   if (!hasSystemd()) {
-    console.error(`\x1b[31mError:\x1b[0m systemd is not available on this system.`);
+    console.error(`\x1b[31mError:\x1b[0m systemd is not available or not running as PID 1 on this system.`);
     console.error(`Use 'kern start' (detached daemon) or 'kern run' (foreground process) instead.`);
     process.exit(1);
   }
