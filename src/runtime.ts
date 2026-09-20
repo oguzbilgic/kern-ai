@@ -432,13 +432,23 @@ export class Runtime {
           if (args.limit && args.limit !== 2000) detail += ` limit:${args.limit}`;
           onEvent({ type: "tool-call", toolName: part.toolName, toolDetail: detail, toolInput: args });
           if (this.currentTurnSnapshot) {
-            this.currentTurnSnapshot.toolCalls.push({ tool: part.toolName, detail });
+            this.currentTurnSnapshot.toolCalls.push({
+              tool: part.toolName,
+              detail,
+              input: args,
+            });
             this.currentTurnSnapshot.activeCommand = detail;
           }
         } else if (part.type === "tool-result") {
           const output = (part as any).output;
           const rawResultText = typeof output === "string" ? output : JSON.stringify(output);
           const resultText = (this.config.stripAnsi ?? true) ? stripAnsi(rawResultText) : rawResultText;
+          if (this.currentTurnSnapshot && this.currentTurnSnapshot.toolCalls.length > 0) {
+            const last = this.currentTurnSnapshot.toolCalls[this.currentTurnSnapshot.toolCalls.length - 1];
+            if (last.tool === part.toolName && !last.output) {
+              last.output = resultText;
+            }
+          }
           onEvent({ type: "tool-result", toolName: part.toolName, toolResult: resultText });
 
           // Dispatch to plugins for custom event emission

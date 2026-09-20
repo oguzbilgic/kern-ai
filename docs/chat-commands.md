@@ -38,10 +38,7 @@ Displays the runtime status of the active agent:
 
 Surfaces what the agent is currently working on:
 - If idle, reports waiting for input.
-- If processing a turn, returns a concise summary of the active user request, current step progress, and tool invocations so far.
-- Repeated `!wyd` calls during the same turn describe only what changed since the last one. The step-limit / timeout notice at the end of the turn chains off the last `!wyd` the same way.
-
-Only tool names and short arguments are sent to the summary model — never tool output.
+- If processing a turn, returns a concise summary of the active user request, current step progress, and recent tool invocations.
 
 ```text
 !wyd
