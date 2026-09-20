@@ -423,15 +423,14 @@ async function main() {
     const initIfNeeded = args.includes("--init-if-needed");
     const dirArg = args.filter((a: string) => a !== "--init-if-needed")[1];
     let targetUser: string | null = null;
+    const agentDir = initIfNeeded ? resolve(dirArg || ".") : await resolveAgentDir(dirArg);
 
-    if (isSystemManaged() && dirArg) {
-      const agent = findAgent(dirArg);
+    if (isSystemManaged()) {
+      const agent = findAgent(dirArg || agentDir);
       if (agent && agent.user) {
         targetUser = agent.user;
       }
     }
-
-    const agentDir = initIfNeeded ? resolve(dirArg || ".") : await resolveAgentDir(dirArg);
 
     if (initIfNeeded && !existsSync(join(agentDir, ".kern", "config.json"))) {
       const { scaffoldAgent, API_KEY_ENV } = await import("./init.js");
