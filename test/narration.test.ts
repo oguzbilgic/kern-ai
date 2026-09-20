@@ -36,16 +36,7 @@ test("buildFallbackNarration handles timeout with tool activity", () => {
   assert.match(text, /Reply "continue" to resume/);
 });
 
-test("buildFallbackNarration handles wyd command when active vs idle", () => {
-  const idleSnapshot: TurnSnapshot = {
-    originalGoal: "",
-    stepCount: 0,
-    maxSteps: 30,
-    toolCalls: [],
-  };
-
-  assert.equal(buildFallbackNarration("wyd", idleSnapshot), "> Idle — waiting for input.");
-
+test("buildFallbackNarration handles wyd command during an active turn", () => {
   const activeSnapshot: TurnSnapshot = {
     originalGoal: "[via matrix, matrix:!room123, user: @user:matrix, time: 2026-09-19T17:00:00-07:00]\nFixing network routes in pfSense",
     stepCount: 12,
@@ -60,4 +51,11 @@ test("buildFallbackNarration handles wyd command when active vs idle", () => {
   assert.doesNotMatch(activeText, /via matrix/);
   assert.match(activeText, /step 12\/30/);
   assert.match(activeText, /read knowledge\/pfsense\.md/);
+});
+
+test("step limit notice pluralizes correctly", () => {
+  const text = buildFallbackNarration("step_limit", {
+    originalGoal: "x", stepCount: 1, maxSteps: 1, toolCalls: [], lastEmittedText: "",
+  });
+  assert.match(text, /Reached step limit \(1 step\)/);
 });

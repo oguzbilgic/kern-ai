@@ -1,5 +1,5 @@
 import { streamText, type ModelMessage, stepCountIs } from "ai";
-import { narrateTurnStatus, type TurnSnapshot, type ToolCallRecord } from "./narration.js";
+import { narrateTurnStatus, type TurnSnapshot } from "./narration.js";
 import { log } from "./log.js";
 import { createModel } from "./model.js";
 import { allTools, type ToolName } from "./tools/index.js";
@@ -522,6 +522,7 @@ export class Runtime {
       if (abortSignal?.aborted) {
         const { message: msg, category } = parseProviderError(streamError, error);
         log("runtime", `turn aborted (idle timeout) — stream stopped [${category}: ${msg}]`);
+        this.currentTurnSnapshot = null;
         throw error;
       }
       this.currentTurnSnapshot = null;

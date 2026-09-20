@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { createModel } from "./model.js";
+import { createSummaryModel } from "./model.js";
 import { log } from "./log.js";
 import type { KernConfig } from "./config.js";
 
@@ -25,6 +25,10 @@ export function stripEnvelope(text: string): string {
   return text.replace(/^\[via [^\]]+\]\s*/, "").trim();
 }
 
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
 /** Render narration text as a markdown blockquote so it reads as a status aside, not a chat reply. */
 export function quote(text: string): string {
   return text.trim().split("\n").map((l) => `> ${l}`).join("\n");
@@ -38,13 +42,10 @@ export function buildFallbackNarration(reason: NarrationReason, snapshot: TurnSn
   const toolDesc = lastTool ? ` while running \`${lastTool.tool}${lastTool.detail ? ` ${lastTool.detail}` : ""}\`` : "";
   switch (reason) {
     case "step_limit":
-      return `⏳ Reached step limit (${snapshot.maxSteps} steps).\n${quote(`Work is partially completed${toolDesc}.`)}\n\nReply "continue" to proceed.`;
+      return `⏳ Reached step limit (${plural(snapshot.maxSteps, "step")}).\n${quote(`Work is partially completed${toolDesc}.`)}\n\nReply "continue" to proceed.`;
     case "timeout":
       return `⏱️ Idle timeout reached.\n${quote(`Partial progress was preserved${toolDesc}.`)}\n\nReply "continue" to resume.`;
     case "wyd":
-      if (snapshot.stepCount === 0) {
-        return quote("Idle — waiting for input.");
-      }
       return quote(`Working on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`);
   }
 }
@@ -60,7 +61,7 @@ export async function narrateTurnStatus(
   const fallback = buildFallbackNarration(reason, snapshot);
 
   try {
-    const model = createModel(config);
+    const model = createSummaryModel(config);
     if (!model) return fallback;
 
     const recentTools = snapshot.toolCalls.slice(-5).map((t, idx) => {
@@ -93,7 +94,7 @@ Tone: Terse, direct, factual. No preamble, no filler.`;
     }
 
     if (reason === "step_limit") {
-      return `⏳ Reached step limit (${snapshot.maxSteps} steps).\n${quote(narrative)}\n\nReply "continue" to proceed.`;
+      return `⏳ Reached step limit (${plural(snapshot.maxSteps, "step")}).\n${quote(narrative)}\n\nReply "continue" to proceed.`;
     }
     if (reason === "timeout") {
       return `⏱️ Idle timeout reached.\n${quote(narrative)}\n\nReply "continue" to resume.`;

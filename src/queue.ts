@@ -37,6 +37,12 @@ export class MessageQueue {
   private idleTimeoutMs = 5 * 60 * 1000;
   // Resets the current turn's idle timer. Null when no turn is active.
   private touchFn: (() => void) | null = null;
+  private timeoutNarrator: (() => Promise<string>) | null = null;
+
+  /** Optional hook producing a human-readable status when a turn hits the idle timeout. */
+  setTimeoutNarrator(fn: () => Promise<string>) {
+    this.timeoutNarrator = fn;
+  }
 
   setHandler(fn: (msg: QueuedMessage, pendingMessages: () => QueuedMessage[], signal: AbortSignal) => Promise<string>) {
     this.handler = fn;
@@ -126,9 +132,22 @@ export class MessageQueue {
       // Race handler against an idle timeout. The timer resets on every
       // stream event (via touch()), so only turns with no activity die.
       const idleTimeout = new Promise<string>((_, reject) => {
-        const fire = () => {
+        const fire = async () => {
           controller.abort();
-          reject(new Error(`Message processing timed out (no activity for ${this.idleTimeoutMs / 1000}s)`));
+          const base = `Message processing timed out (no activity for ${this.idleTimeoutMs / 1000}s)`;
+          let text = base;
+          if (this.timeoutNarrator) {
+            // Cap narration so a slow model can't hold the queue hostage
+            try {
+              text = await Promise.race([
+                this.timeoutNarrator(),
+                new Promise<string>((res) => setTimeout(() => res(base), 10_000)),
+              ]);
+            } catch {
+              text = base;
+            }
+          }
+          reject(new Error(text));
         };
         idleTimer = setTimeout(fire, this.idleTimeoutMs);
         this.touchFn = () => {

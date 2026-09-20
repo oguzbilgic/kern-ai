@@ -61,7 +61,7 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
     case "/wyd": {
       const snapshot = _runtime?.getCurrentTurnSnapshot();
       if (!snapshot) {
-        return "Idle — waiting for input.";
+        return "> Idle — waiting for input.";
       }
       if (_config) {
         const { narrateTurnStatus } = await import("./narration.js");
@@ -265,6 +265,14 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
       interface: "subagent",
       channel: `subagent:${id}`,
     }).catch((e) => log.error("subagent", `announce enqueue failed for ${id}: ${e.message}`));
+  });
+
+  // Idle-timeout notices get the same narration treatment as step-limit notices
+  queue.setTimeoutNarrator(async () => {
+    const snapshot = runtime.getCurrentTurnSnapshot();
+    const { narrateTurnStatus, buildFallbackNarration } = await import("./narration.js");
+    if (!snapshot) return `⏱️ Idle timeout reached. Reply "continue" to resume.`;
+    return narrateTurnStatus("timeout", snapshot, config).catch(() => buildFallbackNarration("timeout", snapshot));
   });
 
   queue.setHandler(async (msg, getPendingMessages, signal) => {
