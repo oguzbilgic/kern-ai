@@ -25,8 +25,9 @@
        - `systemctl status kern@alice`
        - `systemctl restart kern@bob`
        - `systemctl restart 'kern@*'` (fleet-wide restart)
-    4. Remove any legacy user units (`systemctl --user disable --now kern-agent-*`) and disable lingering if no longer needed.
-    5. Fleet management commands (`kern start`, `kern stop`, `kern restart`, `kern remove`, `kern init`) must now be executed with `sudo` / `root`. Non-root invocations will cleanly exit with an authority error instead of accidentally creating a split-brain fleet in `~/.kern/config.json`.
+    4. Remove any legacy user units (`systemctl --user disable --now kern-agent-*`) and disable lingering if no longer needed (`loginctl disable-linger <user>`).
+    5. Clean up stale per-user global configs (`~/.kern/config.json`) in each agent user's home directory. In the old setup, running commands under agent users generated fake single-agent global registries like `/home/lyra/.kern/config.json`. With `/etc/kern/config.json` in place, all agents reference the single system-wide directory. Note: do not delete the agent workspace state at `/home/<user>/<workspace>/.kern/`.
+    6. Fleet management commands (`kern start`, `kern stop`, `kern restart`, `kern remove`, `kern init`) must now be executed with `sudo` / `root`. Non-root invocations will cleanly exit with an authority error instead of accidentally creating a split-brain fleet in `~/.kern/config.json`.
 
 ### Improvements
 - **npm: automated test and build workflows in GitHub Actions** ([#390](https://github.com/oguzbilgic/kern-ai/issues/390)) — runs `npm test` and server/web builds across all pull requests and pushes to `master`, automatically preventing test regressions and broken builds.
