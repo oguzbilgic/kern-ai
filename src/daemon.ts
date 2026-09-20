@@ -1,5 +1,5 @@
 import { spawn, SpawnOptions, execFileSync } from "child_process";
-import { basename } from "path";
+import { basename, dirname } from "path";
 import { existsSync } from "fs";
 import { mkdir, chown } from "fs/promises";
 import { join } from "path";
@@ -74,9 +74,51 @@ export function dropPrivileges(targetUser: string): void {
   if (typeof proc.setuid === "function") {
     proc.setuid(userInfo.uid);
   }
-  process.env.HOME = userInfo.home;
-  process.env.USER = targetUser;
-  process.env.LOGNAME = targetUser;
+  applyUserEnvironment(targetUser, userInfo);
+}
+
+/**
+ * Rewrite the inherited environment for the target user after the drop.
+ *
+ * The process was started by root (systemd or `sudo kern start`), so it
+ * carries root's environment: a PATH that may point into /root (nvm), SUDO_*
+ * variables, root's XDG_RUNTIME_DIR. The agent's bash tool inherits all of
+ * that, so leaving it in place means `node`/`npm` silently missing or a PATH
+ * the agent cannot traverse. Build a predictable environment instead.
+ */
+export function applyUserEnvironment(targetUser: string, userInfo: { uid: number; gid: number; home: string }): void {
+  const env = process.env;
+  env.HOME = userInfo.home;
+  env.USER = targetUser;
+  env.LOGNAME = targetUser;
+  env.SHELL = env.SHELL && !env.SHELL.startsWith("/root") ? env.SHELL : "/bin/bash";
+
+  // The directory holding the node binary that runs kern is where a global
+  // `npm install -g` puts `kern`, `npm` and `npx` too — keep the agent's shell
+  // on the same toolchain as the runtime, then the standard system dirs.
+  const nodeDir = dirname(process.execPath);
+  const path = [
+    join(userInfo.home, ".local", "bin"),
+    join(userInfo.home, ".npm-global", "bin"),
+    nodeDir,
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+  ];
+  env.PATH = [...new Set(path)].join(":");
+
+  for (const key of ["SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND", "MAIL", "OLDPWD"]) {
+    delete env[key];
+  }
+  const runtimeDir = `/run/user/${userInfo.uid}`;
+  if (existsSync(runtimeDir)) {
+    env.XDG_RUNTIME_DIR = runtimeDir;
+  } else {
+    delete env.XDG_RUNTIME_DIR;
+  }
 }
 
 async function startOne(name: string, path: string, targetUser?: string | null): Promise<void> {
