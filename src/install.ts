@@ -343,6 +343,7 @@ async function migrateAndCleanLegacyUserConfigs(): Promise<void> {
 
   const globalConfig = await loadGlobalConfig();
   let mutated = false;
+  const migratedPaths: string[] = [];
 
   for (const dir of candidateDirs) {
     const cfgPath = join(dir, "config.json");
@@ -369,17 +370,25 @@ async function migrateAndCleanLegacyUserConfigs(): Promise<void> {
           }
         }
       }
-
-      // Delete the legacy config so no ghost setup remains
-      await unlink(cfgPath);
-      console.log(`  ${green("✓")} Migrated and removed ghost config: ${cfgPath}`);
+      migratedPaths.push(cfgPath);
     } catch (err: any) {
       console.log(`  ⚠ Failed to migrate ${cfgPath}: ${err.message}`);
     }
   }
 
+  // Persist the merged fleet config first; only then remove legacy sources.
+  // If the write fails, legacy configs are left intact so nothing is lost.
   if (mutated) {
     await saveGlobalConfig(globalConfig);
+  }
+
+  for (const cfgPath of migratedPaths) {
+    try {
+      await unlink(cfgPath);
+      console.log(`  ${green("✓")} Migrated and removed ghost config: ${cfgPath}`);
+    } catch (err: any) {
+      console.log(`  ⚠ Failed to remove ${cfgPath}: ${err.message}`);
+    }
   }
 }
 
@@ -469,7 +478,15 @@ export async function install(nameOrFlag?: string): Promise<void> {
     const ws = getAgentWorkspace(entry);
     const info = readAgentInfo(ws, user);
     const name = info?.name || basename(ws);
-    const instance = user || name;
+
+    // The template runs User=%i; a bare path entry has no declared Unix user, so
+    // enabling it would make systemd try to run as a user named after the agent.
+    if (!user) {
+      console.log(`  ${yellow("●")} ${bold(name)} skipped — no user declared for ${ws}`);
+      console.log(`    ${dim(`add { "user": "<unix-user>", "workspace": "${ws}" } to /etc/kern/config.json`)}`);
+      continue;
+    }
+    const instance = user;
 
     spawnSync("systemctl", ["enable", `kern@${instance}`], { stdio: "inherit" });
     spawnSync("systemctl", ["restart", `kern@${instance}`], { stdio: "inherit" });

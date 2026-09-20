@@ -142,6 +142,13 @@ export async function startAgent(nameOrPath?: string): Promise<void> {
       const { resolve } = await import("path");
       const dir = resolve(nameOrPath);
       if (existsSync(dir) && (existsSync(join(dir, ".kern")) || existsSync(join(dir, "AGENTS.md")))) {
+        if (isSystemManaged()) {
+          // Managed hosts: never spawn unregistered workspaces (would run as root without a privilege drop)
+          console.error(`Agent workspace is not registered in /etc/kern/config.json: ${dir}`);
+          console.error("Register it first with: sudo kern init <name>");
+          process.exit(1);
+          return;
+        }
         const name = basename(dir);
         await registerAgent(dir);
         agent = { name, path: dir, user: null, port: 0, token: null, pid: null };
