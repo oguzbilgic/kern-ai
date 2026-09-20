@@ -8,6 +8,7 @@ import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
 import { loadConfig, saveConfigField, type KernConfig } from "./config.js";
+import { isRoot, isSystemManaged } from "./global-config.js";
 import { readFile, appendFile } from "fs/promises";
 import { join, basename } from "path";
 import { randomBytes } from "crypto";
@@ -39,8 +40,18 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
         setTimeout(() => process.exit(0), 100);
         return "Restart initiated.";
       }
+      // Managed host, but started with `kern start`: the agent runs as its own
+      // user and `kern restart` requires root there. Nothing would relaunch us
+      // after exit either, so say so instead of failing with an authority error.
+      if (isSystemManaged() && !isRoot()) {
+        return `Restart from chat is unavailable for agents started with \`kern start\` on a managed host.\n` +
+          `Run \`sudo kern restart ${agentName}\`, or \`sudo kern install ${agentName}\` so systemd supervises it.`;
+      }
+      // Re-exec the same runtime that is running us. Spawning a bare `kern`
+      // depends on PATH, which is not guaranteed for the agent's environment.
       const { spawn } = await import("child_process");
-      const child = spawn("kern", ["restart", agentName], { stdio: "pipe" });
+      const kernEntry = join(import.meta.dirname, "index.js");
+      const child = spawn(process.execPath, ["--no-deprecation", kernEntry, "restart", agentName], { stdio: "pipe" });
 
       const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
         let stderr = "";
