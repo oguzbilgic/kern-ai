@@ -16,7 +16,7 @@ kern
 
 Create a new agent or reconfigure an existing one.
 
-- **New agent**: interactive wizard asks for provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, registers in `~/.kern/config.json`, and starts the agent.
+- **New agent**: interactive wizard asks for provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, registers in config (`/etc/kern/config.json` if managed host, `~/.kern/config.json` otherwise), and starts the agent. On system-managed hosts (`/etc/kern/config.json`), `kern init` must be run as root and prompts for the dedicated Linux user and workspace path.
 - **Existing agent**: detects by name or path. Shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
 - **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI.
@@ -44,7 +44,7 @@ Start agents as background daemons.
 - Waits 2 seconds after fork, verifies process is alive
 - Shows error log if startup fails
 - Writes PID to agent's `.kern/agent.pid`
-- If a systemd service is installed for the agent, delegates to `systemctl --user start`
+- If a systemd service is installed for the agent, delegates to systemd (`systemctl start kern@<instance>` on managed hosts, `systemctl --user start` on single-user hosts)
 
 ```bash
 kern start          # start all agents
@@ -58,7 +58,7 @@ Stop agents.
 - No argument: stops all running agents
 - With name: stops that agent
 - Sends SIGTERM, removes agent's `.kern/agent.pid`
-- If a systemd service is installed, delegates to `systemctl --user stop`
+- If a systemd service is installed, delegates to systemd (`systemctl stop kern@<instance>` on managed hosts, `systemctl --user stop` on single-user hosts)
 
 ```bash
 kern stop           # stop all agents

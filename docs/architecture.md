@@ -139,17 +139,26 @@ Every message reaching the model — from humans on any interface, from heartbea
 
 ## Service management
 
-`kern install` creates systemd user services for agents, the web server, and the proxy. This gives you:
+`kern install` configures systemd persistence for agents and optional web/proxy servers:
 
-- Auto-restart on crash
-- Start on boot (with lingering enabled)
-- Standard `systemctl --user` management
+- **On System-Managed Hosts (`/etc/kern/config.json`)**:
+  - Run via `sudo kern install`.
+  - Installs a system-level template unit at `/etc/systemd/system/kern@.service`.
+  - Enables and starts each agent as `kern@<user>` with POSIX privilege isolation and independent systemd management (`systemctl restart kern@alice` or fleet-wide `systemctl restart 'kern@*'`).
+- **On Single-User Hosts (`~/.kern/config.json`)**:
+  - Installs systemd user services in `~/.config/systemd/user/`: `kern-agent-<name>.service` and `kern-web.service`.
+  - Auto-restarts on crash and persists across logins (with lingering enabled).
 
 ```bash
-kern install vega       # install agent as systemd service
+# On managed fleet hosts (root):
+sudo kern install           # install system template & enable all fleet agents
+sudo kern install atlas     # enable single agent service
+sudo kern uninstall atlas   # disable single agent service
+
+# On single-user hosts:
+kern install vega       # install agent as systemd user service
 kern install --web      # install web server as systemd service
-kern install --proxy    # install proxy server as systemd service
-kern uninstall vega     # remove service
+kern uninstall vega     # remove user service
 ```
 
 Without `kern install`, agents run as plain daemons managed by PID files.

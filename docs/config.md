@@ -152,7 +152,7 @@ Global settings and agent registry. Optional — defaults apply if the file does
 |-------|---------|-------------|
 | `web_port` | `8080` | Port for the `kern web` static file server. |
 | `proxy_port` | `9000` | Port for the `kern proxy` authenticated reverse proxy. |
-| `agents` | `[]` | List of registered agent directory paths. Managed automatically by `kern init` and `kern start`. |
+| `agents` | `[]` | List of registered agents. In single-user mode (`~/.kern/config.json`), array of workspace directory paths `["/path/to/agent"]`. On system-managed hosts (`/etc/kern/config.json`), array of agent objects `[{ "user": "alice", "workspace": "/home/alice/workspace" }]`. Managed automatically by `kern init`. |
 
 ## .kern/ local files
 
