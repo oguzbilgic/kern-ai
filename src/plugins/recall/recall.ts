@@ -170,7 +170,6 @@ export class RecallIndex {
 
     let indexed = 0;
     const tx = this.db.transaction(() => {
-      let maxMsgEnd = lastIndexed;
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const info = insertChunk.run(
@@ -196,11 +195,8 @@ export class RecallIndex {
 
         insertVec.run(chunkId, new Float32Array(embeddings[i]));
         indexed++;
-        if (chunk.msg_end > maxMsgEnd) {
-          maxMsgEnd = chunk.msg_end;
-        }
       }
-      upsertState.run(sessionId, Math.max(maxMsgEnd, totalMessages));
+      upsertState.run(sessionId, totalMessages);
     });
     tx();
 

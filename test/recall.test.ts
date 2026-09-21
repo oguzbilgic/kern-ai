@@ -169,35 +169,21 @@ test("indexSession re-vectorizes existing chunks on dimension rebuild (#333)", a
 });
 
 test("indexSession serializes concurrent calls for the same session (#404)", async () => {
-  const db = setupMemoryDb();
-  let embedCalls = 0;
-  const fakeEmbeddingModel = {
-    specificationVersion: "v2" as const,
-    provider: "test",
-    modelId: "fake-embed",
-    maxEmbeddingsPerCall: 100,
-    supportsParallelCalls: false,
-    async doEmbed({ values }: { values: string[] }) {
-      embedCalls++;
-      // Artificial delay to ensure overlap if not serialized
-      await new Promise((r) => setTimeout(r, 50));
-      return { embeddings: values.map(() => [0.1, 0.2, 0.3, 0.4]), usage: { tokens: 1 }, warnings: [] };
-    },
-  };
-
   const instance = Object.create(RecallIndex.prototype);
   Object.assign(instance, {
-    db,
-    embeddingModel: fakeEmbeddingModel,
-    agentDir: "/tmp",
     activeSessions: new Map(),
   });
 
-  // Spy / mock runIndexSession directly on instance
-  let runIndexSessionCalls = 0;
+  let running = 0;
+  let maxConcurrency = 0;
+  let totalCalls = 0;
+
   instance.runIndexSession = async (sessionId: string) => {
-    runIndexSessionCalls++;
-    await new Promise((r) => setTimeout(r, 40));
+    totalCalls++;
+    running++;
+    maxConcurrency = Math.max(maxConcurrency, running);
+    await new Promise((r) => setTimeout(r, 20));
+    running--;
     return 1;
   };
 
@@ -209,9 +195,8 @@ test("indexSession serializes concurrent calls for the same session (#404)", asy
 
   assert.equal(res1, 1);
   assert.equal(res2, 1);
-  // Both calls should resolve cleanly, queued sequentially
-  assert.equal(runIndexSessionCalls, 2);
-  // Map should be empty after completion
-  assert.equal(instance.activeSessions.size, 0);
+  assert.equal(totalCalls, 2);
+  assert.equal(maxConcurrency, 1, "concurrent calls must execute strictly serialized");
+  assert.equal(instance.activeSessions.size, 0, "activeSessions map cleaned up");
 });
 
