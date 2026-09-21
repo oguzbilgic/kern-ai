@@ -34,6 +34,7 @@ export class RecallIndex {
   private db: MemoryDB["db"];
   private embeddingModel: Parameters<typeof embed>[0]["model"];
   private agentDir: string;
+  private activeSessions = new Map<string, Promise<number>>();
 
   constructor(memoryDB: MemoryDB, agentDir: string, config: KernConfig) {
     this.agentDir = agentDir;
@@ -48,9 +49,28 @@ export class RecallIndex {
 
   /**
    * Index new messages from a session's JSONL file.
-   * Only reads and parses new lines since last indexed position.
+   * Serializes concurrent calls per session so background backfills and
+   * turn-finish index triggers do not run concurrently or duplicate work.
    */
   async indexSession(sessionId: string): Promise<number> {
+    const existing = this.activeSessions.get(sessionId);
+    if (existing) {
+      log.debug("recall", `session ${sessionId.slice(0, 8)} already indexing, queuing behind in-flight job`);
+      // Wait for existing to finish, then run indexing to catch any new messages appended in between
+      return existing.then(() => this.indexSession(sessionId));
+    }
+
+    const task = this.runIndexSession(sessionId).finally(() => {
+      if (this.activeSessions.get(sessionId) === task) {
+        this.activeSessions.delete(sessionId);
+      }
+    });
+
+    this.activeSessions.set(sessionId, task);
+    return task;
+  }
+
+  private async runIndexSession(sessionId: string): Promise<number> {
     const jsonlPath = join(this.agentDir, ".kern", "sessions", `${sessionId}.jsonl`);
     if (!existsSync(jsonlPath)) return 0;
 
@@ -150,6 +170,7 @@ export class RecallIndex {
 
     let indexed = 0;
     const tx = this.db.transaction(() => {
+      let maxMsgEnd = lastIndexed;
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const info = insertChunk.run(
@@ -175,8 +196,11 @@ export class RecallIndex {
 
         insertVec.run(chunkId, new Float32Array(embeddings[i]));
         indexed++;
+        if (chunk.msg_end > maxMsgEnd) {
+          maxMsgEnd = chunk.msg_end;
+        }
       }
-      upsertState.run(sessionId, totalMessages);
+      upsertState.run(sessionId, Math.max(maxMsgEnd, totalMessages));
     });
     tx();
 

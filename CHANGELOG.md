@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixes
+- **Recall session indexing concurrency serialization** ([#404](https://github.com/oguzbilgic/kern-ai/issues/404)) — serializes concurrent `RecallIndex.indexSession()` calls per session so startup background backfill and `onTurnFinish` triggers do not run overlapping embedding jobs, preventing duplicate chunk embeddings and out-of-memory crashes on active sessions.
+
 ### Improvements
 - **npm: automated test and build workflows in GitHub Actions** ([#390](https://github.com/oguzbilgic/kern-ai/issues/390)) — runs `npm test` and server/web builds across all pull requests and pushes to `master`, automatically preventing test regressions and broken builds.
 - **Code organization: relocate session importers and segment tools** ([#400](https://github.com/oguzbilgic/kern-ai/pull/400)) — moves `import-opencode.ts` and `import-openclaw-lcm.ts` from root `src/` to `src/scripts/`, and moves `segment-health.ts` and `segment-prune.ts` into `src/plugins/recall/` alongside other memory health and repair modules.

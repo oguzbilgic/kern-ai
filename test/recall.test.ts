@@ -167,3 +167,51 @@ test("indexSession re-vectorizes existing chunks on dimension rebuild (#333)", a
   const vecRow = db.prepare("SELECT rowid FROM vec_chunks WHERE rowid = ?").get(42) as any;
   assert.equal(vecRow.rowid, 42);
 });
+
+test("indexSession serializes concurrent calls for the same session (#404)", async () => {
+  const db = setupMemoryDb();
+  let embedCalls = 0;
+  const fakeEmbeddingModel = {
+    specificationVersion: "v2" as const,
+    provider: "test",
+    modelId: "fake-embed",
+    maxEmbeddingsPerCall: 100,
+    supportsParallelCalls: false,
+    async doEmbed({ values }: { values: string[] }) {
+      embedCalls++;
+      // Artificial delay to ensure overlap if not serialized
+      await new Promise((r) => setTimeout(r, 50));
+      return { embeddings: values.map(() => [0.1, 0.2, 0.3, 0.4]), usage: { tokens: 1 }, warnings: [] };
+    },
+  };
+
+  const instance = Object.create(RecallIndex.prototype);
+  Object.assign(instance, {
+    db,
+    embeddingModel: fakeEmbeddingModel,
+    agentDir: "/tmp",
+    activeSessions: new Map(),
+  });
+
+  // Spy / mock runIndexSession directly on instance
+  let runIndexSessionCalls = 0;
+  instance.runIndexSession = async (sessionId: string) => {
+    runIndexSessionCalls++;
+    await new Promise((r) => setTimeout(r, 40));
+    return 1;
+  };
+
+  // Launch two indexSession calls in parallel
+  const [res1, res2] = await Promise.all([
+    instance.indexSession("sess-concurrent"),
+    instance.indexSession("sess-concurrent"),
+  ]);
+
+  assert.equal(res1, 1);
+  assert.equal(res2, 1);
+  // Both calls should resolve cleanly, queued sequentially
+  assert.equal(runIndexSessionCalls, 2);
+  // Map should be empty after completion
+  assert.equal(instance.activeSessions.size, 0);
+});
+
