@@ -307,8 +307,10 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // Messages from /message POST (web, tui) are already broadcast by the server
     // with sender exclusion. Only broadcast here for adapter interfaces
     // (Telegram, Slack) which don't go through the HTTP endpoint.
+    // Announce turns never went through the HTTP endpoint, so broadcast
+    // them regardless of interface or web/TUI users see a reply to nothing.
     const httpInterfaces = ["web", "tui"];
-    if (!msg.isHeartbeat && !httpInterfaces.includes(msg.interface)) {
+    if (!msg.isHeartbeat && (msg.isAnnounce || !httpInterfaces.includes(msg.interface))) {
       server.broadcast({
         type: "incoming" as any,
         text: msg.text,
@@ -662,15 +664,23 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     return !t || t === "(no text response)" || t.endsWith("NO_REPLY");
   };
   announceImpl = async (text: string, origin: TurnOrigin) => {
-    const reply = await queue.enqueue({
-      text,
-      userId: origin.userId,
-      interface: origin.interface,
-      channel: origin.channel,
-      chatId: origin.chatId,
-    });
-    if (isSilentReply(reply)) return reply;
     const target = origin.chatId || origin.userId;
+    let reply: string;
+    try {
+      reply = await queue.enqueue({
+        text,
+        userId: origin.userId,
+        interface: origin.interface,
+        channel: origin.channel,
+        chatId: origin.chatId,
+        isAnnounce: true,
+      });
+    } catch (err: any) {
+      // Same as adapters do for a failed user turn: the chat hears about it.
+      await sendToChat(origin.interface, target, `⚠️ ${String(err?.message || err).slice(0, 300)}`).catch(() => false);
+      throw err;
+    }
+    if (isSilentReply(reply)) return reply;
     const sent = await sendToChat(origin.interface, target, reply);
     if (sent) {
       server.broadcast({

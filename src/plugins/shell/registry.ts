@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { createWriteStream, existsSync, mkdirSync, type WriteStream } from "fs";
 import { readFile, readdir, writeFile } from "fs/promises";
 import { join, relative, isAbsolute } from "path";
+import { uptime } from "os";
 import { log } from "../../log.js";
 import type { TurnOrigin } from "../types.js";
 
@@ -37,6 +38,8 @@ export interface JobRecord {
   origin: TurnOrigin | null;
   /** Set when the job was killed by shutdown or orphan reaping rather than by request. */
   shutdown?: boolean;
+  /** Set when kill() was requested. Status still reflects how the process actually ended. */
+  killRequested?: boolean;
 }
 
 export interface JobHandle {
@@ -66,8 +69,14 @@ export type AnnounceFn = (record: JobRecord, body: string) => void;
 
 /** Tail kept in memory per job and included in the completion message. */
 export const MAX_TAIL_CHARS = 25_000;
-/** How long killAll waits after SIGTERM before escalating to SIGKILL. */
+/** How long kill()/killAll wait after SIGTERM before escalating to SIGKILL. */
 export const SHUTDOWN_GRACE_MS = 2000;
+/**
+ * After the process exits, how long to wait for its stdio pipes to drain
+ * before finalizing. A detached grandchild holding the pipe would otherwise
+ * keep the job "running" forever (Node's `close` never fires).
+ */
+export const DRAIN_MS = 500;
 
 const ID_RE = /^job_[0-9a-f]{8}$/;
 
@@ -146,13 +155,25 @@ export class JobRegistry {
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
 
-    let killedByUs = false;
+    let escalateTimer: NodeJS.Timeout | null = null;
     const kill = (signal: NodeJS.Signals = "SIGTERM"): boolean => {
       if (record.status !== "running" || !child.pid) return false;
       const ok = signalGroup(child.pid, signal);
-      if (ok) killedByUs = true;
-      else log.warn("jobs", `kill ${id} (${signal}) failed — process likely already exited`);
-      return ok;
+      if (!ok) {
+        log.warn("jobs", `kill ${id} (${signal}) failed — process likely already exited`);
+        return false;
+      }
+      record.killRequested = true;
+      // A job that ignores SIGTERM gets SIGKILL after the grace period.
+      if (signal === "SIGTERM" && !escalateTimer) {
+        escalateTimer = setTimeout(() => {
+          if (record.status === "running" && child.pid) {
+            log.warn("jobs", `${id} ignored SIGTERM — sending SIGKILL`);
+            signalGroup(child.pid, "SIGKILL");
+          }
+        }, SHUTDOWN_GRACE_MS);
+      }
+      return true;
     };
 
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -180,13 +201,15 @@ export class JobRegistry {
         settled = true;
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (graceTimer) clearTimeout(graceTimer);
+        if (escalateTimer) clearTimeout(escalateTimer);
         const withinGrace = !graceExpired;
         resolveQuick(withinGrace);
 
         record.finishedAt = new Date().toISOString();
         record.exitCode = code;
         record.signal = signal;
-        record.status = killedByUs ? "killed" : "exited";
+        // Outcome, not intent: killed only if the process died by signal.
+        record.status = signal ? "killed" : "exited";
         if (this.shuttingDown) record.shutdown = true;
         if (error) entry.tail = (entry.tail + `\nError: spawn failed: ${error}`).slice(-MAX_TAIL_CHARS);
 
@@ -204,7 +227,13 @@ export class JobRegistry {
         Promise.all([flushed, this.persist(record)]).then(() => resolve(record));
       };
       child.on("error", (err) => finish(null, null, err.message));
-      child.on("close", (code, signal) => finish(code, signal));
+      // Key on `exit` (the process is gone), not `close` (all stdio ended):
+      // a detached grandchild holding stdout would otherwise keep the job
+      // open forever. Give the pipes a bounded moment to drain first.
+      child.on("exit", (code, signal) => {
+        const drain = setTimeout(() => finish(code, signal), DRAIN_MS);
+        child.once("close", () => { clearTimeout(drain); finish(code, signal); });
+      });
     });
 
     const handle: JobHandle = { id, record, quick, done, kill };
@@ -262,12 +291,10 @@ export class JobRegistry {
     ]);
     if (timedOut) {
       for (const j of running) {
-        if (j.handle.record.status === "running") {
-          log.warn("jobs", `${j.handle.id} ignored SIGTERM — sending SIGKILL`);
-          j.handle.kill("SIGKILL");
-        }
+        if (j.handle.record.status === "running") j.handle.kill("SIGKILL");
       }
-      await allDone;
+      // Bounded: never let a job we can't reach hold up shutdown.
+      await Promise.race([allDone, new Promise((r) => setTimeout(r, graceMs))]);
     }
     return running.length;
   }
@@ -285,7 +312,11 @@ export class JobRegistry {
       if (!isValidJobId(id)) continue;
       const record = await this.loadFromDisk(id);
       if (!record || record.status !== "running") continue;
-      if (record.pid && isAlive(record.pid)) {
+      // PIDs are reused across reboots. If the machine booted after the job
+      // started, the process is certainly gone — don't signal a stranger.
+      const bootedAt = Date.now() - uptime() * 1000;
+      const sameBoot = +new Date(record.startedAt) > bootedAt;
+      if (sameBoot && record.pid && isAlive(record.pid)) {
         signalGroup(record.pid, "SIGKILL");
         log("jobs", `reaped orphan ${id} (pid ${record.pid})`);
       }

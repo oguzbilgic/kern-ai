@@ -124,7 +124,7 @@ export const jobsTool = tool({
     if (action === "kill") {
       const ok = _registry.kill(id);
       if (!ok) return `Cannot kill ${id} — not found or not running.`;
-      return `Sent SIGTERM to ${id}. Its completion will arrive as a new message.`;
+      return `Sent SIGTERM to ${id} (SIGKILL follows in 2s if ignored). Its completion will arrive as a new message.`;
     }
 
     if (action === "tail") {

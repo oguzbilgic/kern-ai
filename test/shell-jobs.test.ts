@@ -130,6 +130,55 @@ test("jobs: ids are validated before touching disk", async () => {
   assert.equal(await registry.loadFromDisk("../../etc"), null);
 });
 
+test("jobs: job completes when the process exits even if a grandchild holds stdout", async () => {
+  const { registry, announced } = setup();
+  const t0 = Date.now();
+  // The subshell exits immediately; the backgrounded sleep inherits stdout.
+  const h = registry.start("(sleep 30 &) ; echo started", { origin, graceMs: 0 });
+  const record = await h.done;
+  assert.equal(record.status, "exited");
+  assert.equal(record.exitCode, 0);
+  assert.ok(Date.now() - t0 < 5000, "did not wait for the grandchild");
+  assert.match(announced[0].body, /started/);
+  await registry.killAll(100); // tidy the sleep's group
+});
+
+test("jobs: single kill escalates to SIGKILL and status reflects the outcome", async () => {
+  const { registry } = setup();
+  const h = registry.start("trap '' TERM; sleep 30", { origin });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(h.kill(), true);
+  const record = await h.done; // needs SHUTDOWN_GRACE_MS (2s) to escalate
+  assert.equal(record.status, "killed");
+  assert.equal(record.signal, "SIGKILL");
+  assert.equal(record.killRequested, true);
+});
+
+test("jobs: a job that traps TERM and exits normally is recorded as exited", async () => {
+  const { registry } = setup();
+  const h = registry.start("trap 'exit 0' TERM; sleep 30 & wait", { origin });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(h.kill(), true);
+  const record = await h.done;
+  assert.equal(record.status, "exited");
+  assert.equal(record.exitCode, 0);
+  assert.equal(record.killRequested, true);
+});
+
+test("jobs: reapOrphans does not signal a pid from before the current boot", async () => {
+  const { agentDir, registry } = setup();
+  const id = "job_0ddba11f";
+  mkdirSync(join(agentDir, ".kern", "jobs", id), { recursive: true });
+  writeFileSync(join(agentDir, ".kern", "jobs", id, "record.json"), JSON.stringify({
+    id, command: "sleep 30", cwd: agentDir, pid: process.pid, status: "running",
+    startedAt: new Date(0).toISOString(), // long before boot
+    logPath: join(agentDir, ".kern", "jobs", id, "output.log"), origin,
+  }));
+  assert.equal(await registry.reapOrphans(), 1);
+  // We are still alive — the reaper must not have signalled our pid.
+  assert.equal((await registry.loadFromDisk(id))?.status, "killed");
+});
+
 test("jobs: timeout kills the job", async () => {
   const { registry } = setup();
   const h = registry.start("sleep 30", { origin, timeout: 100 });
