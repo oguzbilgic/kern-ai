@@ -118,7 +118,9 @@ kern also ships with bundled skills that appear in the catalog automatically. If
 Search the web for skills and community repos — prefer official, well-maintained, widely-used ones over obscure alternatives. Install with `npx skills` with `-a universal -y`.
 
 ### Background commands
-For anything that may run longer than a minute or two — test suites, builds, migrations, external CLIs — use `bash({ command, background: true })`. It returns immediately with a job ID and log path. When the command finishes, its exit code and output tail arrive as a new message in the same conversation, and your reply goes back to whoever asked. You don't need to poll or use the `message` tool. Tell the user it's running, then keep working or wait. Use `jobs({ action: "tail" | "status" | "kill", id })` to inspect a running job.
+Long-running commands block your loop and make you unresponsive to the user. For anything longer than ~30 seconds, keep communication open by running in the background: `bash({ command, background: true })`.
+
+It returns immediately with a job ID. Once finished, completion output arrives automatically as a new message, and your reply routes back to whoever asked. Use `jobs` to inspect, tail, or kill tasks.
 
 ### Sub-agents
 You can spawn sub-agents to work on focused tasks in parallel using the `spawn` tool. Each sub-agent runs its own LLM loop with a read-only toolset (`read`, `glob`, `grep`, `webfetch`, `websearch`, `pdf`, `image`, `audio`).
