@@ -38,7 +38,7 @@ The agent sees who's talking, from which channel, and when — and adapts behavi
 | `interface` | Typical `channel` | Source | Origin |
 |-------------|-------------------|--------|--------|
 | `telegram` | `telegram:<chatId>` | `src/interfaces/telegram.ts` | Telegram user |
-| `slack` | `#channel-name` or `slack:<Dxxx>` | `src/interfaces/slack.ts` | Slack user |
+| `slack` | `#channel-name` or `slack-dm:<userId>` | `src/interfaces/slack.ts` | Slack user |
 | `matrix` | `matrix:<roomId>` | `src/interfaces/matrix.ts` | Matrix user |
 | `nostr` | `nostr:<npub>` | `src/interfaces/nostr.ts` | Nostr DM sender |
 | `irc` | `irc:<host>/<target>` | `src/interfaces/irc.ts` | IRC user (DM or channel) |
@@ -119,7 +119,7 @@ How each interface populates the internal message fields and SSE events:
 | Interface | `userId` | `chatId` | `channel` | `fromInterface` (SSE) |
 |-----------|----------|----------|-----------|----------------------|
 | telegram | `msg.from.id` (stringified) | `msg.chat.id` (stringified) | `telegram:<chatId>` | `telegram` |
-| slack | `message.user` | `message.channel` | `#<name>` (channel) or `slack-dm` (DM) | `slack` |
+| slack | `message.user` | `message.channel` | `#<name>` (channel) or `slack-dm:<userId>` (DM) | `slack` |
 | matrix | `event.sender` (mxid) | `roomId` | `matrix:<roomId>` | `matrix` |
 | nostr | sender `npub` | sender `npub` | `nostr:<npub>` | `nostr` |
 | irc | `irc:<host>/<account>` or `irc:<host>/~<nick>` | `<host>/<nick-or-channel>` | `irc:<host>/<nick-or-channel>` | `irc` |
@@ -128,7 +128,7 @@ How each interface populates the internal message fields and SSE events:
 | web | `"tui"` | — | `"web"` | `web` |
 
 Notes:
-- Slack channel names are resolved via `conversations.info` — DMs use `slack-dm`, channels use `#<channel-name>`.
+- Slack channel names are resolved via `conversations.info` — DMs use `slack-dm:<userId>` (unique per user, so one user's DM is never injected mid-turn into another's), channels use `#<channel-name>`.
 - Matrix room IDs are opaque (`!abc:example.com`); the channel label prefixes them with `matrix:`.
 - Nostr DMs have no room concept — a conversation *is* the counterparty, so `userId` and `chatId` are both the sender's `npub`.
 - IRC nicks are not identities — anyone can claim one. The `userId` is keyed on the server-verified account from the IRCv3 `account-tag`; an unauthenticated sender gets `~<nick>` instead and is never auto-paired. Both are namespaced by server host so multiple IRC networks can't collide.
@@ -227,7 +227,7 @@ Long polling bot. Works behind NAT, no public URL needed.
 
 Socket Mode connection. No public URL needed.
 
-- Interface: `slack`, channel: `#channel-name` or `slack-dm`, user: `<slackUserId>`
+- Interface: `slack`, channel: `#channel-name` or `slack-dm:<userId>`, user: `<slackUserId>`
 
 ### Setup
 

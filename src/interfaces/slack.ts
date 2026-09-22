@@ -129,13 +129,15 @@ export class SlackInterface implements Interface {
 
       log("slack", `message from ${userId} in ${channelId}: ${(text || "[media]").slice(0, 50)}${attachments.length ? ` +${attachments.length} file(s)` : ""}`);
 
-      // Determine if DM or channel
-      let channelName = channelId;
-      let isDM = false;
+      // Determine if DM or channel. channel_type comes on every message event,
+      // so a failed conversations.info lookup can't misclassify a DM as a
+      // channel (which would skip the pairing check below).
+      let isDM = message.channel_type === "im";
+      let channelName = isDM ? `slack-dm:${userId}` : channelId;
       try {
         const info = await client.conversations.info({ channel: channelId });
         if (info.channel) {
-          isDM = info.channel.is_im || false;
+          isDM = isDM || info.channel.is_im || false;
           channelName = isDM ? `slack-dm:${userId}` : `#${info.channel.name || channelId}`;
         }
       } catch {}
@@ -161,8 +163,10 @@ export class SlackInterface implements Interface {
       // If mentioned with no text, use "hello" as default
       if (!cleanText && isMentioned && attachments.length === 0) cleanText = "(mentioned with no message)";
 
-      // Build channel label
-      const channelLabel = isDM ? `slack-dm` : channelName;
+      // Channel label must be unique per conversation — the queue uses it to
+      // decide mid-turn injection, so a shared DM label would splice one
+      // user's DM into another user's turn (#413).
+      const channelLabel = channelName;
 
       try {
         const response = await onMessage(
