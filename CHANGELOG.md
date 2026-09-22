@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Slack DMs no longer leak into each other's turns** ([#413](https://github.com/oguzbilgic/kern-ai/issues/413)) — every Slack DM shared the channel label `slack-dm`, so a DM from one user arriving mid-turn was treated as a same-conversation follow-up and spliced into another user's in-flight turn, with the reply sent to the wrong DM and the sender getting no response. DMs are now labeled `slack-dm:<userId>`, isolating each user's conversation while keeping mid-turn injection for follow-ups within the same DM. DM detection also uses the event's `channel_type`, so a failed `conversations.info` lookup can no longer misclassify a DM as a channel and skip the pairing check.
+
 ## 0.40.1 (2026-09-20)
 
 ### Fixes
