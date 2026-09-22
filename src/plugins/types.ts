@@ -5,6 +5,23 @@ import type { StreamEvent } from "../runtime.js";
 import type { Attachment } from "../interfaces/types.js";
 
 /**
+ * Where a turn came from: the interface, the envelope channel label, the
+ * platform conversation ID, and the user. Captured at the start of every
+ * turn so async work spawned during it (background jobs, sub-agents) can
+ * route its completion back to the same conversation.
+ */
+export interface TurnOrigin {
+  /** Interface name (`telegram`, `slack`, `matrix`, `web`, ...). */
+  interface: string;
+  /** Human-readable channel label as it appears in the envelope. */
+  channel: string;
+  /** Platform conversation ID used to send replies. Absent for HTTP clients. */
+  chatId?: string;
+  /** Sender identifier. */
+  userId: string;
+}
+
+/**
  * Plugin context — passed to all lifecycle hooks.
  * Provides access to shared infrastructure without coupling to runtime internals.
  */
@@ -13,6 +30,20 @@ export interface PluginContext {
   config: KernConfig;
   db: MemoryDB;
   sessionId: () => string | null;
+  /**
+   * Origin of the turn currently being processed, or null when idle.
+   * Turns are serialized, so this is safe to read from a tool's execute().
+   */
+  origin: () => TurnOrigin | null;
+  /**
+   * Deliver an async completion back to a conversation. Enqueues `text` as a
+   * new turn stamped with the origin's envelope — the queue splices it into
+   * the active turn if that conversation is still active, isolates it from
+   * foreign turns otherwise, and wakes the agent when idle — then sends the
+   * agent's reply to the origin chat. Resolves with the reply (`NO_REPLY`
+   * when it was folded into an active turn).
+   */
+  announce: (text: string, origin: TurnOrigin) => Promise<string>;
 }
 
 /**

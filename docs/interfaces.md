@@ -48,6 +48,8 @@ The agent sees who's talking, from which channel, and when — and adapts behavi
 | `system` | `heartbeat` | `src/app.ts` runtime timer | Heartbeat injection |
 | `subagent` | `subagent:<id>` | Sub-agent completion | Sub-agent announce |
 
+Asynchronous completions that belong to a conversation — background job results from `bash({ background: true })` — reuse the **origin's** envelope rather than a synthetic one, so the queue treats them as messages from that conversation and the reply goes back to the same chat. The body carries the source, e.g. `[job:job_a1b2c3d4 exited 0, 42s] npm test`. See [tools](tools.md#background-jobs).
+
 The set is extensible — plugins and future interfaces can introduce new values. The envelope format is the stable contract; specific `interface`/`channel` values depend on what's loaded at runtime.
 
 ## Metadata contract

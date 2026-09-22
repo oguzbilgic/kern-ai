@@ -44,7 +44,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 ### Tool scopes
 
-- **full** — bash, read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, audio
+- **full** — bash, jobs, read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, audio
 - **write** — read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, audio
 - **read** — read, glob, grep, webfetch, websearch, kern, recall, pdf, image, audio
 

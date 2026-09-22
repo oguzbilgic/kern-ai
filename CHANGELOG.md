@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- **Background shell jobs with initiator-aware completion routing** ([#415](https://github.com/oguzbilgic/kern-ai/issues/415)) — `bash({ command, background: true })` starts a command detached and returns at once with a job ID and log path (`.kern/jobs/<id>/output.log`). When it finishes, its exit code and output tail arrive as a new turn stamped with the envelope of the conversation that started it, so the queue splices it into that turn if it is still active, keeps it out of other users' turns, or wakes the agent when idle — and the runtime delivers the agent's reply to the originating chat (Slack channel, Telegram chat, Matrix room, DM) without the `message` tool. New `jobs` tool (list, status, tail, kill) and `/jobs` chat command. Jobs finishing within two seconds return their output directly; running jobs are killed on shutdown.
+
+### Improvements
+- **`bash` moved into a shell plugin** (`src/plugins/shell/`) so it can own background execution and, later, auto-backgrounding. Same tool name and schema; registered only when `toolScope` is `full` and the platform is not Windows (core `pwsh` is unchanged).
+- **Plugin context gains `origin()` and `announce()`** — `origin()` returns the active turn's interface, channel, platform chat ID, and user; `announce(text, origin)` enqueues a completion with that envelope and routes the reply back. Any plugin doing async work can use this; sub-agents are a candidate for a follow-up.
+- **Queue messages carry the platform `chatId`** alongside the channel label, so replies can be addressed to the exact conversation.
+
 ## 0.40.2 (2026-09-22)
 
 ### Fixes

@@ -6,6 +6,7 @@ import { mediaPlugin } from "./media/plugin.js";
 import { skillsPlugin } from "./skills/plugin.js";
 import { mcpPlugin } from "./mcp/plugin.js";
 import { subagentsPlugin } from "./subagents/plugin.js";
+import { shellPlugin } from "./shell/plugin.js";
 import { slackPlugin } from "./slack/plugin.js";
 import { ircPlugin } from "./irc/plugin.js";
 import { discordPlugin } from "./discord/plugin.js";
@@ -28,6 +29,7 @@ const availablePlugins: KernPlugin[] = [
   skillsPlugin,
   mcpPlugin,
   subagentsPlugin,
+  shellPlugin,
   slackPlugin,
   ircPlugin,
   discordPlugin,

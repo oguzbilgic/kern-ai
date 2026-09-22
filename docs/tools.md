@@ -4,16 +4,54 @@ kern provides built-in tools. Availability depends on `toolScope` in config.
 
 ## bash
 
-Run shell commands on Unix/Linux. Full access to the system.
+Run shell commands on Unix/Linux. Full access to the system. Provided by the shell plugin (`src/plugins/shell/`).
 
 ```
 bash({ command: "ls -la", timeout: 120000 })
+bash({ command: "npm test", background: true })
 ```
 
 - `command` — shell command to execute
-- `timeout` — optional, milliseconds (default 120000)
+- `timeout` — optional, milliseconds (default 120000 in the foreground; no limit in the background)
+- `background` — optional; run detached and return immediately (see below)
 
 Scope: `full` only. Unix/Linux only — on Windows, `pwsh` is provided instead.
+
+### Background jobs
+
+Long-running commands (test suites, builds, migrations, external coding CLIs) would otherwise block the turn and hit the tool timeout or the queue's idle timeout. With `background: true`, the command is started in its own process group, its combined output is appended to `.kern/jobs/<id>/output.log`, and the call returns at once with a job ID, PID, log path, and whatever output appeared in the first two seconds. A command that finishes within that window returns its output directly, like a foreground call.
+
+When the job ends, its exit code and output tail (up to 25k chars) arrive as a new message stamped with the envelope of the conversation that started it:
+
+```
+[via slack, #builds, user: U04ABC, time: 2026-09-22T15:04:05-07:00]
+[job:job_a1b2c3d4 exited 0, 42s] npm test
+...
+(full log: .kern/jobs/job_a1b2c3d4/output.log)
+```
+
+Because the completion carries the origin's channel, the queue routes it like any message from that conversation:
+
+- **Still in the turn that started it** — spliced in at the next step, so the agent sees the result mid-flight and answers once.
+- **Idle** — wakes the agent into a new turn; the runtime sends the reply to the originating chat (the same Slack channel, Telegram chat, Matrix room, or DM). The agent does not need the `message` tool for this.
+- **Busy with another conversation** — waits in the queue; it is never injected into a foreign turn.
+
+Running jobs are killed on shutdown and their completion is not announced. Jobs are tracked per process — after a restart, `jobs({ action: "status" })` can still read a finished job's `record.json`, but running ones are gone.
+
+## jobs
+
+Inspect and manage background jobs.
+
+```
+jobs({ action: "list" })                        // all jobs with status
+jobs({ action: "status", id: "job_a1b2c3d4" })  // command, pid, exit code, origin, log path
+jobs({ action: "tail", id: "job_a1b2c3d4" })    // last output (chars: optional, default 4000)
+jobs({ action: "kill", id: "job_a1b2c3d4" })    // SIGTERM the process group
+```
+
+The operator can list jobs from chat with `/jobs` (or `!jobs`).
+
+Scope: `full` only, alongside `bash`.
 
 ## pwsh
 
