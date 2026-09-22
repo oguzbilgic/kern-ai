@@ -15,6 +15,9 @@ export function setRegistry(registry: JobRegistry | null, ctx: PluginContext | n
 /** Jobs that finish within this window are reported synchronously, no completion turn. */
 export const BACKGROUND_GRACE_MS = 2000;
 
+/** Origins with no chat to deliver a wake-up reply to (web/tui get it over SSE). */
+const UNDELIVERABLE = ["cli", "system"];
+
 export const bashTool = tool({
   description: [
     "Run a shell command. Use this for system commands, git operations, SSH, installing packages, etc.",
@@ -48,21 +51,19 @@ export const bashTool = tool({
 
     if (!_registry) return "Error: background jobs not available.";
 
+    const origin = _ctx?.origin() ?? null;
     const handle = _registry.start(command, {
-      origin: _ctx?.origin() ?? null,
+      origin,
       timeout,
       graceMs: BACKGROUND_GRACE_MS,
     });
 
-    const finished = await Promise.race([
-      handle.done.then(() => true),
-      new Promise<boolean>((r) => setTimeout(() => r(false), BACKGROUND_GRACE_MS)),
-    ]);
-
+    // The registry owns the grace clock: exactly one of {this call, announce}
+    // reports the result.
+    const finished = await handle.quick;
     const tail = _registry.tail(handle.id) ?? "";
 
     if (finished) {
-      // Quick command — behave like a foreground call. Not announced.
       const r = handle.record;
       const parts = [tail.trim() || "(no output)"];
       if (r.status === "killed") parts.push(`Error: killed${r.signal ? ` (${r.signal})` : ""}`);
@@ -71,14 +72,19 @@ export const bashTool = tool({
       return parts.join("\n");
     }
 
+    const deliverable = origin && !UNDELIVERABLE.includes(origin.interface);
     return [
       `Started background job ${handle.id} (pid ${handle.record.pid ?? "?"}).`,
       `Log: ${handle.record.logPath}`,
       tail.trim() ? `Output so far:\n${tail.trim().slice(-2000)}` : "No output yet.",
       ``,
-      `Its exit code and output tail will arrive as a new message when it finishes,`,
-      `in the conversation that asked for it. Keep working or tell the user it's`,
-      `running; use jobs({ action: "tail" | "status" | "kill", id }) to inspect.`,
+      deliverable
+        ? `Its exit code and output tail will arrive as a new message when it finishes,\n` +
+          `in the conversation that asked for it, and your reply will be delivered there.`
+        : `Its exit code and output tail will arrive as a new message when it finishes.\n` +
+          `Note: this turn came from ${origin?.interface ?? "no interface"}, so your reply to that\n` +
+          `message is not sent to a chat — use the message tool if a person needs the result.`,
+      `Keep working or tell the user it's running; use jobs({ action: "tail" | "status" | "kill", id }) to inspect.`,
     ].join("\n");
   },
 });

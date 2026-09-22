@@ -41,6 +41,8 @@ export const shellPlugin: KernPlugin = {
       return;
     }
     registry = new JobRegistry(ctx.agentDir);
+    const reaped = await registry.reapOrphans();
+    if (reaped > 0) log("shell", `reaped ${reaped} orphaned job(s) from a previous run`);
     registry.setAnnouncer((record, body) => {
       if (!record.origin) {
         log.warn("shell", `${record.id} finished with no origin — completion not delivered`);
@@ -56,7 +58,7 @@ export const shellPlugin: KernPlugin = {
 
   onShutdown: async () => {
     if (registry) {
-      const killed = registry.killAll();
+      const killed = await registry.killAll();
       if (killed > 0) log("shell", `killed ${killed} running job(s) on shutdown`);
     }
     registry = null;

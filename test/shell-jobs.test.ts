@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync } from "fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { JobRegistry, formatCompletion, type JobRecord } from "../src/plugins/shell/registry.js";
+import { JobRegistry, formatCompletion, isValidJobId, type JobRecord } from "../src/plugins/shell/registry.js";
+import { spawn } from "child_process";
 import { MessageQueue } from "../src/queue.js";
 
 const origin = { interface: "slack", channel: "#builds", chatId: "C123", userId: "U1" };
@@ -35,10 +36,27 @@ test("jobs: slow job is announced with exit code, tail, and origin", async () =>
 test("jobs: job finishing inside the grace window is not announced", async () => {
   const { registry, announced } = setup();
   const h = registry.start("echo quick", { origin, graceMs: 5000 });
+  assert.equal(await h.quick, true);
   const record = await h.done;
   assert.equal(record.exitCode, 0);
   assert.equal(registry.tail(h.id), "quick\n");
   assert.equal(announced.length, 0);
+});
+
+test("jobs: exactly one of {quick, announce} reports, across the grace boundary", async () => {
+  const { registry, announced } = setup();
+  // Many jobs closing around the grace window: whichever side of the clock
+  // each lands on, quick=true must mean not announced and vice versa.
+  const handles = Array.from({ length: 12 }, (_, i) =>
+    registry.start(`sleep 0.0${i + 4}`, { origin, graceMs: 100 }),
+  );
+  const quicks = await Promise.all(handles.map((h) => h.quick));
+  await Promise.all(handles.map((h) => h.done));
+  const announcedIds = new Set(announced.map((a) => a.record.id));
+  for (let i = 0; i < handles.length; i++) {
+    assert.equal(announcedIds.has(handles[i].id), !quicks[i], `job ${i}: quick=${quicks[i]}`);
+  }
+  assert.equal(announced.length, quicks.filter((q) => !q).length);
 });
 
 test("jobs: kill terminates the process group and announces as killed", async () => {
@@ -54,6 +72,64 @@ test("jobs: kill terminates the process group and announces as killed", async ()
   assert.equal(registry.kill(h.id), false, "already finished");
 });
 
+test("jobs: kill on an already-exited process is not recorded as killed", async () => {
+  const { registry } = setup();
+  const h = registry.start("exit 0", { origin });
+  const record = await h.done;
+  assert.equal(h.kill(), false);
+  assert.equal(record.status, "exited");
+});
+
+test("jobs: killAll escalates to SIGKILL for a job that traps SIGTERM", async () => {
+  const { registry, announced } = setup();
+  const h = registry.start("trap '' TERM; sleep 30", { origin });
+  await new Promise((r) => setTimeout(r, 150));
+  const n = await registry.killAll(200);
+  assert.equal(n, 1);
+  const record = await h.done;
+  assert.equal(record.status, "killed");
+  assert.equal(record.signal, "SIGKILL");
+  assert.equal(record.shutdown, true);
+  assert.equal(announced.length, 0);
+});
+
+test("jobs: done resolves only after log flush and record write", async () => {
+  const { registry } = setup();
+  const h = registry.start("seq 1 2000", { origin, graceMs: 5000 });
+  const record = await h.done;
+  const recordPath = join(record.logPath, "..", "record.json");
+  assert.equal(JSON.parse(readFileSync(recordPath, "utf-8")).status, "exited");
+  assert.equal(readFileSync(record.logPath, "utf-8").split("\n").length, 2001);
+});
+
+test("jobs: reapOrphans kills leftover running records from a dead process", async () => {
+  const { agentDir, registry } = setup();
+  // Fake a job from a previous process: a live detached sleep plus a running record.
+  const orphan = spawn("sleep 30", { shell: true, detached: true, stdio: "ignore" });
+  orphan.unref();
+  const id = "job_0badcafe";
+  mkdirSync(join(agentDir, ".kern", "jobs", id), { recursive: true });
+  writeFileSync(join(agentDir, ".kern", "jobs", id, "record.json"), JSON.stringify({
+    id, command: "sleep 30", cwd: agentDir, pid: orphan.pid, status: "running",
+    startedAt: new Date().toISOString(), logPath: join(agentDir, ".kern", "jobs", id, "output.log"), origin,
+  }));
+  const exited = new Promise<void>((r) => orphan.on("exit", () => r()));
+  assert.equal(await registry.reapOrphans(), 1);
+  await exited;
+  const record = await registry.loadFromDisk(id);
+  assert.equal(record?.status, "killed");
+  assert.equal(record?.shutdown, true);
+  assert.equal(await registry.reapOrphans(), 0, "already reaped");
+});
+
+test("jobs: ids are validated before touching disk", async () => {
+  const { registry } = setup();
+  assert.equal(isValidJobId("job_0badcafe"), true);
+  assert.equal(isValidJobId("../../x"), false);
+  assert.equal(isValidJobId("job_ZZZZZZZZ"), false);
+  assert.equal(await registry.loadFromDisk("../../etc"), null);
+});
+
 test("jobs: timeout kills the job", async () => {
   const { registry } = setup();
   const h = registry.start("sleep 30", { origin, timeout: 100 });
@@ -66,7 +142,7 @@ test("jobs: killAll on shutdown suppresses announces", async () => {
   const a = registry.start("sleep 30", { origin });
   const b = registry.start("sleep 30", { origin });
   await new Promise((r) => setTimeout(r, 100));
-  assert.equal(registry.killAll(), 2);
+  assert.equal(await registry.killAll(), 2);
   const [ra, rb] = await Promise.all([a.done, b.done]);
   assert.equal(ra.shutdown, true);
   assert.equal(rb.status, "killed");

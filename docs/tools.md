@@ -36,7 +36,7 @@ Because the completion carries the origin's channel, the queue routes it like an
 - **Idle** — wakes the agent into a new turn; the runtime sends the reply to the originating chat (the same Slack channel, Telegram chat, Matrix room, or DM). The agent does not need the `message` tool for this.
 - **Busy with another conversation** — waits in the queue; it is never injected into a foreign turn.
 
-Running jobs are killed on shutdown and their completion is not announced. Jobs are tracked per process — after a restart, `jobs({ action: "status" })` can still read a finished job's `record.json`, but running ones are gone.
+Running jobs are killed on shutdown (SIGTERM, then SIGKILL after two seconds) and their completion is not announced. If the agent died without shutting down, leftover jobs are killed on the next start. Completions from turns that came from the CLI or a heartbeat still arrive as messages, but the agent's reply has no chat to go to — the tool says so, and the agent should use `message` if a person needs the result. Jobs are tracked per process — after a restart, `jobs({ action: "status" })` can still read a finished job's `record.json`, but running ones are gone.
 
 ## jobs
 

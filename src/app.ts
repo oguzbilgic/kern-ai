@@ -11,6 +11,7 @@ import { loadConfig, saveConfigField, type KernConfig } from "./config.js";
 import { readFile, appendFile } from "fs/promises";
 import { join, basename } from "path";
 import { randomBytes } from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 import type { Interface, MessageHandler } from "./interfaces/types.js";
 import type { TurnOrigin } from "./plugins/types.js";
 import { registerAgent, writePidFile, removePidFile, assignPort } from "./registry.js";
@@ -211,10 +212,12 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   const server = new AgentServer();
   server.setAgentDir(agentDir);
 
-  // Origin of the turn currently being processed. Set by the queue handler
-  // below; read by plugins (via ctx.origin()) when they spawn async work so
-  // its completion can be routed back to the same conversation.
-  let currentOrigin: TurnOrigin | null = null;
+  // Origin of the turn currently being processed, scoped to the turn's async
+  // context. Read by plugins (via ctx.origin()) when they spawn async work so
+  // its completion can be routed back to the same conversation. Async-local
+  // rather than a module variable so a turn abandoned by the idle timeout
+  // (which keeps running) can neither read nor clobber the next turn's origin.
+  const turnOrigin = new AsyncLocalStorage<TurnOrigin>();
   // Real implementation installed once the queue and interfaces exist.
   let announceImpl: (text: string, origin: TurnOrigin) => Promise<string> = async () => {
     throw new Error("announce not available before startup completes");
@@ -226,7 +229,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     config,
     db: memoryDB,
     sessionId: () => runtime.getSessionId(),
-    origin: () => currentOrigin,
+    origin: () => turnOrigin.getStore() ?? null,
     announce: (text, origin) => announceImpl(text, origin),
   };
   _pluginCtx = pluginCtx;
@@ -291,12 +294,8 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   });
 
   queue.setHandler(async (msg, getPendingMessages, signal) => {
-    currentOrigin = { interface: msg.interface, channel: msg.channel, chatId: msg.chatId, userId: msg.userId };
-    try {
-      return await handleTurn(msg, getPendingMessages, signal);
-    } finally {
-      currentOrigin = null;
-    }
+    const origin: TurnOrigin = { interface: msg.interface, channel: msg.channel, chatId: msg.chatId, userId: msg.userId };
+    return turnOrigin.run(origin, () => handleTurn(msg, getPendingMessages, signal));
   });
 
   const handleTurn = async (msg: QueuedMessage, getPendingMessages: () => QueuedMessage[], signal: AbortSignal): Promise<string> => {
