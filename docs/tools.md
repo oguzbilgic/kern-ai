@@ -9,11 +9,13 @@ Run shell commands on Unix/Linux. Full access to the system. Provided by the she
 ```
 bash({ command: "ls -la", timeout: 120000 })
 bash({ command: "npm test", background: true })
+bash({ command: "npm run e2e", background: true, remindEvery: 600 })
 ```
 
 - `command` — shell command to execute
 - `timeout` — optional, milliseconds (default 120000 in the foreground; no limit in the background)
 - `background` — optional; run detached and return immediately (see below)
+- `remindEvery` — optional, seconds; with `background`, announce a "still running" reminder at that interval (default: never)
 
 Scope: `full` only. Unix/Linux only — on Windows, `pwsh` is provided instead.
 
@@ -35,6 +37,16 @@ Because the completion carries the origin's channel, the queue routes it like an
 - **Still in the turn that started it** — spliced in at the next step, so the agent sees the result mid-flight and answers once.
 - **Idle** — wakes the agent into a new turn; the runtime sends the reply to the originating chat (the same Slack channel, Telegram chat, Matrix room, or DM). The agent does not need the `message` tool for this.
 - **Busy with another conversation** — waits in the queue; it is never injected into a foreign turn.
+
+#### Reminders
+
+Nothing is announced while a job runs unless it was started with `remindEvery`. With it, a one-line message arrives at that interval, routed exactly like a completion:
+
+```
+[job:job_a1b2c3d4 still running, 20m] npm run e2e
+```
+
+That gives the agent a chance to tail the job, decide it has stalled or is no longer needed, and kill it, instead of leaving it to run unnoticed. There is no default interval: every reminder to an idle agent is a turn, so opting in per job keeps the cost deliberate. Reminders stop when the job ends; the first one fires one interval after the two-second grace window closes.
 
 Running jobs are killed on shutdown (SIGTERM, then SIGKILL after two seconds) and their completion is not announced. If the agent died without shutting down, leftover jobs are killed on the next start. Completions from turns that came from the CLI or a heartbeat still arrive as messages, but the agent's reply has no chat to go to — the tool says so, and the agent should use `message` if a person needs the result. Jobs are tracked per process — after a restart, `jobs({ action: "status" })` can still read a finished job's `record.json`, but running ones are gone.
 

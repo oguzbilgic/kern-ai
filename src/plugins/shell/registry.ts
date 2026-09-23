@@ -40,6 +40,8 @@ export interface JobRecord {
   shutdown?: boolean;
   /** Set when kill() was requested. Status still reflects how the process actually ended. */
   killRequested?: boolean;
+  /** Reminder interval in seconds, when the job was started with one. */
+  remindEverySec?: number;
 }
 
 export interface JobHandle {
@@ -63,6 +65,12 @@ export interface StartOptions {
   timeout?: number;
   /** Jobs that close within this window are NOT announced — see `JobHandle.quick`. */
   graceMs?: number;
+  /**
+   * Announce a short "still running" reminder to the origin every this many
+   * seconds while the job runs. 0 / undefined = never. The first reminder
+   * fires one interval after the grace window closes.
+   */
+  remindEverySec?: number;
 }
 
 export type AnnounceFn = (record: JobRecord, body: string) => void;
@@ -124,6 +132,7 @@ export class JobRegistry {
     const stream = createWriteStream(logPath, { flags: "a" });
     const cwd = opts.cwd || process.cwd();
     const graceMs = opts.graceMs ?? 0;
+    const remindMs = opts.remindEverySec && opts.remindEverySec > 0 ? opts.remindEverySec * 1000 : 0;
 
     const record: JobRecord = {
       id,
@@ -133,6 +142,7 @@ export class JobRegistry {
       startedAt: new Date().toISOString(),
       logPath,
       origin: opts.origin,
+      remindEverySec: remindMs ? opts.remindEverySec : undefined,
     };
 
     const child = spawn(command, {
@@ -189,10 +199,25 @@ export class JobRegistry {
     let resolveQuick!: (v: boolean) => void;
     const quick = new Promise<boolean>((r) => { resolveQuick = r; });
     let graceExpired = false;
+    // Periodic "still running" reminder, announced like a completion. Armed
+    // only once the grace window has closed — a job that finishes inside it
+    // reports synchronously and must stay silent.
+    let remindTimer: NodeJS.Timeout | null = null;
+    const armReminder = () => {
+      if (!remindMs || record.status !== "running") return;
+      remindTimer = setInterval(() => {
+        if (record.status !== "running" || this.shuttingDown || !this.announceFn) return;
+        try {
+          this.announceFn(record, formatReminder(record));
+        } catch (e: any) {
+          log.warn("jobs", `reminder announce failed for ${id}: ${e.message}`);
+        }
+      }, remindMs);
+    };
     const graceTimer = graceMs > 0
-      ? setTimeout(() => { graceExpired = true; resolveQuick(false); }, graceMs)
+      ? setTimeout(() => { graceExpired = true; resolveQuick(false); armReminder(); }, graceMs)
       : null;
-    if (!graceTimer) { graceExpired = true; resolveQuick(false); }
+    if (!graceTimer) { graceExpired = true; resolveQuick(false); armReminder(); }
 
     const done = new Promise<JobRecord>((resolve) => {
       let settled = false;
@@ -202,6 +227,7 @@ export class JobRegistry {
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (graceTimer) clearTimeout(graceTimer);
         if (escalateTimer) clearTimeout(escalateTimer);
+        if (remindTimer) clearInterval(remindTimer);
         const withinGrace = !graceExpired;
         resolveQuick(withinGrace);
 
@@ -359,6 +385,11 @@ export function formatHeader(record: JobRecord): string {
     ? `killed${record.signal ? ` (${record.signal})` : ""}`
     : `exited ${record.exitCode ?? "?"}`;
   return `[job:${record.id} ${outcome}, ${formatDuration(record)}]`;
+}
+
+/** Body of the periodic reminder announced while a job is still running. */
+export function formatReminder(record: JobRecord): string {
+  return `[job:${record.id} still running, ${formatDuration(record)}] ${record.command}`;
 }
 
 /** Body of the completion turn announced back to the job's origin. */

@@ -28,6 +28,10 @@ export const bashTool = tool({
     "a job ID. When it finishes, completion output arrives automatically as a new",
     "message and your reply routes back to whoever asked. Use the jobs tool to",
     "inspect, tail, or kill tasks.",
+    "",
+    "Pass remindEvery (seconds) with background: true to receive a short",
+    "\"still running\" message at that interval while the job runs, so you can",
+    "check on it and kill it if it has stalled or is no longer needed.",
   ].join("\n"),
   inputSchema: z.object({
     command: z.string().describe("The shell command to execute"),
@@ -39,8 +43,12 @@ export const bashTool = tool({
       .boolean()
       .optional()
       .describe("Run detached and return immediately; completion arrives as a new message"),
+    remindEvery: z
+      .number()
+      .optional()
+      .describe("Background only: announce a 'still running' reminder every N seconds while the job runs (default: never)"),
   }),
-  execute: async ({ command, timeout, background }) => {
+  execute: async ({ command, timeout, background, remindEvery }) => {
     if (!background) {
       const t = timeout ?? 120000;
       const result = await shellExec(command, { timeout: t });
@@ -54,6 +62,7 @@ export const bashTool = tool({
       origin,
       timeout,
       graceMs: BACKGROUND_GRACE_MS,
+      remindEverySec: remindEvery,
     });
 
     // The registry owns the grace clock: exactly one of {this call, announce}
@@ -75,6 +84,7 @@ export const bashTool = tool({
       `Started background job ${handle.id} (pid ${handle.record.pid ?? "?"}).`,
       `Log: ${handle.record.logPath}`,
       tail.trim() ? `Output so far:\n${tail.trim().slice(-2000)}` : "No output yet.",
+      ...(handle.record.remindEverySec ? [`A "still running" reminder will arrive every ${handle.record.remindEverySec}s until it finishes.`] : []),
       ``,
       deliverable
         ? `Its exit code and output tail will arrive as a new message when it finishes,\n` +
@@ -143,6 +153,7 @@ export const jobsTool = tool({
       `pid:      ${record.pid ?? "?"}`,
       `started:  ${record.startedAt}`,
     ];
+    if (record.remindEverySec) lines.push(`remind:   every ${record.remindEverySec}s`);
     if (record.finishedAt) lines.push(`finished: ${record.finishedAt}`);
     if (record.status !== "running") lines.push(`exit:     ${record.exitCode ?? "?"}${record.signal ? ` (${record.signal})` : ""}`);
     lines.push(`log:      ${record.logPath}`);

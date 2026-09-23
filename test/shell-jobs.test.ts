@@ -59,6 +59,42 @@ test("jobs: exactly one of {quick, announce} reports, across the grace boundary"
   assert.equal(announced.length, quicks.filter((q) => !q).length);
 });
 
+test("jobs: remindEvery announces 'still running' until the job ends, then the completion", async () => {
+  const { registry, announced } = setup();
+  const h = registry.start("sleep 0.5", { origin, graceMs: 50, remindEverySec: 0.1 });
+  const record = await h.done;
+  assert.equal(record.status, "exited");
+  assert.equal(record.remindEverySec, 0.1);
+  const reminders = announced.filter((a) => / still running, /.test(a.body));
+  assert.ok(reminders.length >= 2 && reminders.length <= 5, `got ${reminders.length} reminders`);
+  assert.match(reminders[0].body, /^\[job:job_[0-9a-f]{8} still running, \ds\] sleep 0\.5$/);
+  assert.deepEqual(reminders[0].record.origin, origin);
+  // The completion is the last thing announced; nothing follows it.
+  assert.match(announced[announced.length - 1].body, /exited 0/);
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(announced.filter((a) => / still running, /.test(a.body)).length, reminders.length, "no reminders after exit");
+});
+
+test("jobs: remindEvery stays silent for a job that finishes inside the grace window", async () => {
+  const { registry, announced } = setup();
+  const h = registry.start("echo quick", { origin, graceMs: 5000, remindEverySec: 0.05 });
+  assert.equal(await h.quick, true);
+  await h.done;
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(announced.length, 0);
+});
+
+test("jobs: reminders stop on killAll", async () => {
+  const { registry, announced } = setup();
+  registry.start("sleep 30", { origin, graceMs: 0, remindEverySec: 0.05 });
+  await new Promise((r) => setTimeout(r, 130));
+  const before = announced.length;
+  assert.ok(before >= 1, "reminded while running");
+  await registry.killAll(500);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(announced.length, before, "nothing announced after shutdown");
+});
+
 test("jobs: kill terminates the process group and announces as killed", async () => {
   const { registry, announced } = setup();
   const h = registry.start("sleep 30", { origin, graceMs: 0 });

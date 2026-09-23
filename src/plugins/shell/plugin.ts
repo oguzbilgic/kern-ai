@@ -28,7 +28,7 @@ export const shellPlugin: KernPlugin = {
   tools: {},
 
   toolDescriptions: {
-    bash: "Run a shell command. Pass background: true for long-running commands; the result arrives as a new message when it finishes.",
+    bash: "Run a shell command. Pass background: true for long-running commands; the result arrives as a new message when it finishes. Add remindEvery (seconds) to be reminded while it runs.",
     jobs: "List, inspect, tail, or kill background jobs.",
   },
 
@@ -96,6 +96,7 @@ export const shellPlugin: KernPlugin = {
           lines.push(`    status: ${r.status}`);
           if (r.status !== "running") lines.push(`    exit: ${r.exitCode ?? "?"}${r.signal ? ` (${r.signal})` : ""}`);
           lines.push(`    runtime: ${formatDuration(r)}`);
+          if (r.status === "running" && r.remindEverySec) lines.push(`    remind: every ${r.remindEverySec}s`);
           lines.push(`    command: "${(cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd).replace(/"/g, '\\"')}"`);
           if (r.origin) lines.push(`    origin: ${r.origin.interface}, ${r.origin.channel}`);
         }
