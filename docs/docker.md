@@ -6,13 +6,13 @@ Run a kern agent as a Docker container. All state persists in a mounted volume.
 
 ```bash
 docker run -d \
-  -v kern-data:/home/kern/agent \
+  -v kern-data:/home/agent \
   -p 4100:4100 \
   -e OPENROUTER_API_KEY=sk-or-... \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-This starts an agent with default settings. The agent scaffolds itself on first run if no config exists.
+This starts an agent with default settings. The agent scaffolds its workspace on first run if no config exists.
 
 ## Environment variables
 
@@ -43,16 +43,17 @@ For other providers, pass the matching API key:
 
 ## Volumes
 
-The agent stores all state in its working directory. Mount a volume to persist data across container restarts.
+Mount a volume to `/home/agent` to persist everything across container restarts:
+- **Workspace** (`/home/agent/workspace`) — agent config, sessions, knowledge, notes, dashboards
+- **Environment** — globally installed packages (`npm install -g`, `pip install`), SSH keys, shell history, dotfiles
 
-**Agent only** — persists agent config, sessions, and knowledge:
 ```bash
--v kern-data:/home/kern/agent
+-v kern-data:/home/agent
 ```
 
-**Full home** — also persists globally installed packages (`npm install -g`, `pip install`), SSH keys, and user-level config:
+If you only want to mount a local directory for the workspace without persisting user-level packages:
 ```bash
--v kern-data:/home/kern
+-v $(pwd):/home/agent/workspace
 ```
 
 ## Pre-installed tools
@@ -63,7 +64,7 @@ Agents can install additional tools at runtime:
 - `npm install -g <package>` — installs to user space (`~/.npm-global`)
 - `pip install <package>` — installs to user space (`~/.local`)
 
-These persist across restarts when the volume is mounted at `/home/kern`.
+These persist across container recreation when `/home/agent` is mounted.
 
 ## Web UI
 
@@ -89,5 +90,5 @@ Connect to agents from the web UI sidebar:
 
 ```bash
 docker build -t kern-ai .
-docker run -d -v kern-data:/home/kern/agent -p 4100:4100 -e OPENROUTER_API_KEY=sk-or-... kern-ai
+docker run -d -v kern-data:/home/agent -p 4100:4100 -e OPENROUTER_API_KEY=sk-or-... kern-ai
 ```

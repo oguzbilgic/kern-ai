@@ -87,7 +87,7 @@ kern run ./my-agent
 Auto-scaffolds the agent directory on first start if `.kern/config.json` is missing. Reads `KERN_*` environment variables for configuration — no interactive prompts. Designed for Docker containers starting on empty volumes.
 
 ```bash
-kern run --init-if-needed /home/kern/agent
+kern run --init-if-needed /home/agent/workspace
 ```
 
 Environment variables used during scaffold:

@@ -23,7 +23,7 @@ kern pairs with [agent-kernel](https://github.com/oguzbilgic/agent-kernel) — t
 # Run an agent
 docker run -d --restart=unless-stopped \
   -p 4100:4100 \
-  -v my-agent:/home/kern/agent \
+  -v my-agent:/home/agent \
   -e OPENROUTER_API_KEY=sk-or-... \
   -e KERN_AUTH_TOKEN=my-secret-token \
   ghcr.io/oguzbilgic/kern-ai
@@ -38,7 +38,7 @@ Or skip the web UI and talk to your agent on Telegram:
 
 ```bash
 docker run -d --restart=unless-stopped \
-  -v my-agent:/home/kern/agent \
+  -v my-agent:/home/agent \
   -e OPENROUTER_API_KEY=sk-or-... \
   -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
   ghcr.io/oguzbilgic/kern-ai
@@ -46,7 +46,7 @@ docker run -d --restart=unless-stopped \
 
 No ports, no web UI — just message your bot. First message auto-pairs you as operator.
 
-Agent data lives in the `my-agent` volume — sessions, memory, dashboards persist across restarts. Mount `-v my-agent:/home/kern` instead to persist the entire home directory (installed packages, SSH keys, etc). Configure with env vars: `KERN_NAME`, `KERN_MODEL`, `KERN_PORT`. See [configuration docs](docs/config.md) for other providers and options.
+Agent state lives in the `my-agent` volume mounted to `/home/agent` — sessions, memory, dashboards persist in `/home/agent/workspace`, while packages installed by the agent (`npm install -g`, `pip install`), SSH keys, and dotfiles persist in the home directory. Configure with env vars: `KERN_NAME`, `KERN_MODEL`, `KERN_PORT`. See [configuration docs](docs/config.md) for other providers and options.
 
 ### npm
 

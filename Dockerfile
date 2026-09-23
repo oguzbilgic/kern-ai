@@ -21,21 +21,21 @@ RUN npm ci && cd web && npm ci && cd .. \
     && rm -rf /app
 
 # Create non-root user with user-space package paths
-RUN useradd -m kern \
-    && mkdir -p /home/kern/agent /home/kern/.npm-global /home/kern/.local \
-    && chown -R kern:kern /home/kern
+RUN useradd -m agent \
+    && mkdir -p /home/agent/workspace /home/agent/.npm-global /home/agent/.local \
+    && chown -R agent:agent /home/agent
 
-USER kern
+USER agent
 
 # npm global installs to user space
-ENV NPM_CONFIG_PREFIX=/home/kern/.npm-global
+ENV NPM_CONFIG_PREFIX=/home/agent/.npm-global
 # pip installs to user space
 ENV PIP_USER=1
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 # All user-space binaries on PATH
-ENV PATH=/home/kern/.npm-global/bin:/home/kern/.local/bin:$PATH
+ENV PATH=/home/agent/.npm-global/bin:/home/agent/.local/bin:$PATH
 
-WORKDIR /home/kern/agent
+WORKDIR /home/agent/workspace
 
 EXPOSE 4100
 ENV KERN_PORT=4100
