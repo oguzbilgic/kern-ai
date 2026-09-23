@@ -1,7 +1,7 @@
 import { spawn, SpawnOptions, execFileSync } from "child_process";
-import { basename } from "path";
+import { basename, dirname } from "path";
 import { existsSync } from "fs";
-import { mkdir } from "fs/promises";
+import { mkdir, chown } from "fs/promises";
 import { join } from "path";
 import { openSync } from "fs";
 import {
@@ -74,9 +74,51 @@ export function dropPrivileges(targetUser: string): void {
   if (typeof proc.setuid === "function") {
     proc.setuid(userInfo.uid);
   }
-  process.env.HOME = userInfo.home;
-  process.env.USER = targetUser;
-  process.env.LOGNAME = targetUser;
+  applyUserEnvironment(targetUser, userInfo);
+}
+
+/**
+ * Rewrite the inherited environment for the target user after the drop.
+ *
+ * The process was started by root (systemd or `sudo kern start`), so it
+ * carries root's environment: a PATH that may point into /root (nvm), SUDO_*
+ * variables, root's XDG_RUNTIME_DIR. The agent's bash tool inherits all of
+ * that, so leaving it in place means `node`/`npm` silently missing or a PATH
+ * the agent cannot traverse. Build a predictable environment instead.
+ */
+export function applyUserEnvironment(targetUser: string, userInfo: { uid: number; gid: number; home: string }): void {
+  const env = process.env;
+  env.HOME = userInfo.home;
+  env.USER = targetUser;
+  env.LOGNAME = targetUser;
+  env.SHELL = env.SHELL && !env.SHELL.startsWith("/root") ? env.SHELL : "/bin/bash";
+
+  // The directory holding the node binary that runs kern is where a global
+  // `npm install -g` puts `kern`, `npm` and `npx` too — keep the agent's shell
+  // on the same toolchain as the runtime, then the standard system dirs.
+  const nodeDir = dirname(process.execPath);
+  const path = [
+    join(userInfo.home, ".local", "bin"),
+    join(userInfo.home, ".npm-global", "bin"),
+    nodeDir,
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+  ];
+  env.PATH = [...new Set(path)].join(":");
+
+  for (const key of ["SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND", "MAIL", "OLDPWD"]) {
+    delete env[key];
+  }
+  const runtimeDir = `/run/user/${userInfo.uid}`;
+  if (existsSync(runtimeDir)) {
+    env.XDG_RUNTIME_DIR = runtimeDir;
+  } else {
+    delete env.XDG_RUNTIME_DIR;
+  }
 }
 
 async function startOne(name: string, path: string, targetUser?: string | null): Promise<void> {
@@ -108,45 +150,46 @@ async function startOne(name: string, path: string, targetUser?: string | null):
     cwd: path,
   };
 
-  let bin = nodeBin;
-  let argv = ["--no-deprecation", kernBin, "run", path];
+  const argv = ["--no-deprecation", kernBin, "run", path];
 
-  // Privilege dropping if running as root with a declared user.
-  // Node's spawn({ uid, gid }) only calls setuid/setgid and leaves root's
-  // supplementary groups attached to the child, so we exec through setpriv
-  // (util-linux) which runs initgroups(3) before switching IDs and then
-  // exec()s directly (no intermediate fork, so the pid we record is the agent).
+  // On managed hosts the child is spawned as root, exactly like the systemd
+  // unit does: `kern run` resolves the fleet entry, chdirs into the workspace,
+  // and drops to the declared user in-process (initgroups/setgid/setuid) before
+  // loading the agent. Doing the drop here instead (setpriv, spawn({uid,gid}))
+  // would hand `kern run` a non-root process, which its managed-host guard
+  // rejects — and it would leave two privilege-drop paths to keep in sync.
+  let userInfo: ReturnType<typeof resolveUserInfo> = null;
   if (isRoot() && targetUser) {
-    const userInfo = resolveUserInfo(targetUser);
+    userInfo = resolveUserInfo(targetUser);
     if (!userInfo) {
       console.log(`  ${red("●")} ${bold(name)} failed to resolve user '${targetUser}'`);
       return;
     }
-    bin = "setpriv";
-    argv = [
-      `--reuid=${userInfo.uid}`,
-      `--regid=${userInfo.gid}`,
-      "--init-groups",
-      "--",
-      nodeBin,
-      ...argv,
-    ];
-    spawnOpts.env = {
-      ...process.env,
-      HOME: userInfo.home,
-      USER: targetUser,
-      LOGNAME: targetUser,
-    };
   }
 
   // Fork detached process using kern run
-  const child = spawn(bin, argv, spawnOpts);
+  const child = spawn(nodeBin, argv, spawnOpts);
 
   child.unref();
 
   const pid = child.pid!;
   await registerAgent(path);
   await writePidFile(path, pid);
+
+  // Everything this (root) parent created under the workspace must belong to
+  // the agent user: the child rewrites agent.pid and appends to kern.log after
+  // it has dropped privileges, and a root-owned 0644 file would fail that with
+  // EACCES and kill the agent on startup.
+  if (userInfo) {
+    const { uid, gid } = userInfo;
+    for (const p of [logDir, logFile, join(path, ".kern", "agent.pid")]) {
+      try {
+        await chown(p, uid, gid);
+      } catch (e: any) {
+        console.log(`  ${red("●")} ${bold(name)} chown ${p} failed: ${e.message}`);
+      }
+    }
+  }
 
   // Wait and verify the process stays alive
   await new Promise((resolve) => setTimeout(resolve, 2000));

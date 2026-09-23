@@ -107,6 +107,44 @@ export function getAgentUser(entry: AgentEntry): string | null {
   return typeof entry === "string" ? null : entry.user;
 }
 
+/**
+ * Thrown when the fleet directory exists but this process may not read it.
+ * On a managed host /etc/kern/config.json is 0600 root, so every non-root
+ * invocation hits this. Callers that can live without the registry (the
+ * agent itself after dropping privileges) catch it; CLI commands let it
+ * propagate so the operator sees "run with sudo" instead of an empty fleet.
+ */
+export class FleetConfigAccessError extends Error {
+  constructor(public readonly path: string) {
+    super(
+      `Cannot read ${path}: permission denied.\n` +
+      `This host is managed via ${SYSTEM_CONFIG_FILE}; fleet commands must be run as root (sudo kern ...).`,
+    );
+    this.name = "FleetConfigAccessError";
+  }
+}
+
+function parseGlobalConfig(configFile: string, raw: string): GlobalConfig {
+  try {
+    return { ...defaults, ...JSON.parse(raw) };
+  } catch (err: any) {
+    // A corrupt fleet directory must not masquerade as an empty fleet — that
+    // would make `kern install` / `kern stop` treat the host as having no
+    // agents. Surface it, but keep working with defaults.
+    log.warn("config", `${configFile} is not valid JSON (${err.message}) — using defaults`);
+    return { ...defaults };
+  }
+}
+
+function handleReadError(err: any, configFile: string): GlobalConfig {
+  if (err?.code === "EACCES" || err?.code === "EPERM") {
+    throw new FleetConfigAccessError(configFile);
+  }
+  if (err?.code === "ENOENT") return { ...defaults };
+  log.warn("config", `failed to read ${configFile}: ${err?.message ?? err} — using defaults`);
+  return { ...defaults };
+}
+
 export async function loadGlobalConfig(): Promise<GlobalConfig> {
   const configFile = getGlobalConfigPath();
 
@@ -116,25 +154,25 @@ export async function loadGlobalConfig(): Promise<GlobalConfig> {
   }
 
   if (!existsSync(configFile)) return { ...defaults };
+  let raw: string;
   try {
-    const raw = await readFile(configFile, "utf-8");
-    const userConfig = JSON.parse(raw);
-    return { ...defaults, ...userConfig };
-  } catch {
-    return { ...defaults };
+    raw = await readFile(configFile, "utf-8");
+  } catch (err) {
+    return handleReadError(err, configFile);
   }
+  return parseGlobalConfig(configFile, raw);
 }
 
 export function loadGlobalConfigSync(): GlobalConfig {
   const configFile = getGlobalConfigPath();
   if (!existsSync(configFile)) return { ...defaults };
+  let raw: string;
   try {
-    const raw = readFileSync(configFile, "utf-8");
-    const userConfig = JSON.parse(raw);
-    return { ...defaults, ...userConfig };
-  } catch {
-    return { ...defaults };
+    raw = readFileSync(configFile, "utf-8");
+  } catch (err) {
+    return handleReadError(err, configFile);
   }
+  return parseGlobalConfig(configFile, raw);
 }
 
 export async function saveGlobalConfig(config: GlobalConfig): Promise<void> {

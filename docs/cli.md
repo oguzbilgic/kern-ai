@@ -51,7 +51,7 @@ Start agents as background daemons.
 - Waits 2 seconds after fork, verifies process is alive
 - Shows error log if startup fails
 - Writes PID to agent's `.kern/agent.pid`
-- On managed hosts with the `kern@.service` template installed, delegates to systemd (`systemctl start kern@<user>`). Otherwise spawns a detached process; when run as root for a `{ user, workspace }` entry, execs through `setpriv --init-groups` so the agent runs as that user with its own supplementary groups (root's are not inherited).
+- On managed hosts with the `kern@.service` template installed, delegates to systemd (`systemctl start kern@<user>`). Otherwise spawns a detached `kern run` as root; `kern run` resolves the fleet entry, reads the root-only registry, and drops to the declared user in-process (`initgroups`/`setgid`/`setuid`, then `HOME`/`PATH`/`USER` rewritten) before loading the agent — the same sequence the `kern@.service` unit goes through.
 
 ```bash
 kern start          # start all agents
@@ -156,7 +156,7 @@ Follow agent logs. Structured, leveled, colored output.
 - No argument: auto-selects agent
 - Default: follow mode (like `tail -f`). `-n 50` shows last 50 lines and exits.
 - `--level warn` filters to warnings and errors only. Levels: `debug`, `info`, `warn`, `error`.
-- Logs stored in `.kern/logs/kern.log`
+- Logs stored in `.kern/logs/kern.log` for agents started with `kern start` / `kern run`. For a systemd-supervised agent (`kern@<user>`) the log lives in the journal and `kern logs` reads it via `journalctl -u kern@<user>` — same flags, same output.
 - Components: `[kern]` `[queue]` `[runtime]` `[context]` `[telegram]` `[slack]` `[matrix]` `[discord]` `[irc]` `[nostr]` `[server]` `[recall]` `[segments]` `[notes]` `[config]` `[memory]`
 - Level labels: `ERR` (red), `WRN` (yellow), `DBG` (dim). Info has no label.
 
