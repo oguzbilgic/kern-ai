@@ -1,6 +1,6 @@
-import { loadRegistry, readAgentInfo, isProcessRunning } from "./registry.js";
+import { loadRegistryEntries, readAgentInfo, isProcessRunning } from "./registry.js";
 import { getServiceStatus, getWebServiceStatus } from "./install.js";
-import { loadGlobalConfig } from "./global-config.js";
+import { loadGlobalConfig, getAgentWorkspace, getAgentUser, isSystemManaged } from "./global-config.js";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 import { join, basename } from "path";
@@ -12,23 +12,25 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 
 export async function showStatus(): Promise<void> {
-  const paths = await loadRegistry();
+  const entries = await loadRegistryEntries();
   const w = (s: string) => process.stdout.write(s + "\n");
 
   w("");
-  w(`  ${bold("kern agents")}`);
+  w(`  ${bold("kern agents")}${isSystemManaged() ? dim(" (/etc/kern/config.json)") : ""}`);
   w("");
 
-  if (paths.length === 0) {
+  if (entries.length === 0) {
     w(`  ${dim("No agents registered. Run")} kern init <name> ${dim("to create one.")}`);
     w("");
     return;
   }
 
   let hasUninstalled = false;
-  for (const agentPath of paths) {
+  for (const entry of entries) {
+    const agentPath = getAgentWorkspace(entry);
+    const user = getAgentUser(entry);
     const exists = existsSync(agentPath);
-    const info = exists ? readAgentInfo(agentPath) : null;
+    const info = exists ? readAgentInfo(agentPath, user) : null;
     const name = info?.name || basename(agentPath);
     const running = info?.pid ? isProcessRunning(info.pid) : false;
 
@@ -48,10 +50,11 @@ export async function showStatus(): Promise<void> {
       } catch {}
     }
 
-    const installStatus = getServiceStatus(name);
+    const installStatus = getServiceStatus(name, user);
     const active = installStatus === "active" || running;
     const dot = !exists ? red("●") : active ? green("●") : dim("●");
-    const nameStr = bold(name);
+    const userBadge = user ? dim(` [${user}]`) : "";
+    const nameStr = bold(name) + userBadge;
     const modelStr = provider && model ? dim(`${provider}/${model}`) : dim("no config");
     const port = info?.port || configPort;
     const portStr = port ? `:${port}` : "";
@@ -116,13 +119,4 @@ export async function showStatus(): Promise<void> {
   w(`  ${proxyDot} ${bold("proxy")}  ${proxyStatusStr}`);
   w(`    ${dim("mode:")} ${proxyMode}`);
   w("");
-
-  if (hasUninstalled) {
-    try {
-      const { execSync } = await import("child_process");
-      execSync("which systemctl", { stdio: "ignore" });
-      w(`  ${dim("tip: 'kern install' enables auto-restart and boot persistence")}`);
-      w("");
-    } catch {}
-  }
 }

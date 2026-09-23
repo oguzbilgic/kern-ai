@@ -16,7 +16,7 @@ kern
 
 Create a new agent or reconfigure an existing one.
 
-- **New agent**: interactive wizard asks for provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, registers in `~/.kern/config.json`, and starts the agent.
+- **New agent**: interactive wizard asks for provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, registers in config (`/etc/kern/config.json` if managed host, `~/.kern/config.json` otherwise), and starts the agent. On system-managed hosts (`/etc/kern/config.json`), `kern init` must be run as root and prompts for the dedicated Linux user and workspace path.
 - **Existing agent**: detects by name or path. Shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
 - **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI.
@@ -29,6 +29,13 @@ kern init my-agent --provider ollama --api-key http://localhost:11434 --model ge
 ```
 
 Defaults to `openrouter` + `claude-opus-4.6` when flags are used. For Ollama, `--api-key` is the server URL.
+
+On managed hosts (`/etc/kern/config.json`, root only), non-interactive init also accepts `--user <linux-user>` (default: agent name) and `--workspace <path>` (default: `/home/<user>/workspace`). The Linux user must already exist; pass `--create-user` to have kern run `useradd -m -s /bin/bash <user>`.
+
+```bash
+sudo kern init alice --api-key sk-or-... --create-user
+sudo kern init alice --api-key sk-or-... --user svc-alice --workspace /srv/alice
+```
 
 ---
 
@@ -44,7 +51,7 @@ Start agents as background daemons.
 - Waits 2 seconds after fork, verifies process is alive
 - Shows error log if startup fails
 - Writes PID to agent's `.kern/agent.pid`
-- If a systemd service is installed for the agent, delegates to `systemctl --user start`
+- On managed hosts with the `kern@.service` template installed, delegates to systemd (`systemctl start kern@<user>`). Otherwise spawns a detached process; when run as root for a `{ user, workspace }` entry, execs through `setpriv --init-groups` so the agent runs as that user with its own supplementary groups (root's are not inherited).
 
 ```bash
 kern start          # start all agents
@@ -58,7 +65,7 @@ Stop agents.
 - No argument: stops all running agents
 - With name: stops that agent
 - Sends SIGTERM, removes agent's `.kern/agent.pid`
-- If a systemd service is installed, delegates to `systemctl --user stop`
+- On managed hosts with the `kern@.service` template installed, delegates to systemd (`systemctl stop kern@<user>`)
 
 ```bash
 kern stop           # stop all agents
@@ -170,41 +177,49 @@ kern pair atlas KERN-7X4M
 
 ## Daemons & Services
 
-### kern install [name|--web]
+### System-Wide vs Single-User Architecture
 
-Install systemd user services for agents and the web daemon. Provides auto-restart on crash and boot persistence.
+kern adapts to its deployment environment:
 
-- No argument: installs all registered agents + web
-- With name: installs a single agent
-- `--web`: installs only the web daemon
-- Migrates from PID-based daemon: stops existing process before installing
-- Warns if `loginctl enable-linger` is not enabled (required for services to survive logout)
-- Idempotent — safe to run again after adding new agents
+- **System-wide (Dedicated Linux Servers)**: When `/etc/kern/config.json` exists, kern operates as a multi-agent system host. The registry declares agents with their dedicated Linux user accounts and workspace paths:
+  ```json
+  {
+    "agents": [
+      { "user": "alice", "workspace": "/home/alice/workspace" },
+      { "user": "bob", "workspace": "/home/bob/workspace" }
+    ]
+  }
+  ```
+  Fleet management commands (`start`, `stop`, `restart`, `remove`, `init`, `install`, `uninstall`) must be run by `root` (or with `sudo`). Running `kern start` automatically drops POSIX privileges (`uid`, `gid`, `HOME`) to the declared agent user.
+- **Single-User (Laptops, macOS, Docker)**: When `/etc/kern/config.json` is absent, kern uses `~/.kern/config.json` where `agents` is an array of directory paths running under the current user.
 
-Services are written to `~/.config/systemd/user/`:
-- `kern-agent-<name>.service` for each agent
-- `kern-web.service` for the web daemon
+### kern install [name|--web|--proxy]
 
-```bash
-kern install          # all agents + web
-kern install atlas    # single agent
-kern install --web    # web only
-```
+Install system-level systemd units for agents, the web UI, or the proxy. Provides auto-restart on crash and boot persistence. **Requires root** (all variants, including `--web` / `--proxy`), Linux, systemd as PID 1, Node.js >= 22, and a global `kern` in `PATH`.
 
-Requires Linux with systemd. On systems without systemd, use `kern start` instead.
+- Promotes the host to `/etc/kern/config.json` if it is not yet managed (migrating and unlinking legacy `~/.kern/config.json` registries).
+- Installs a system-level template unit at `/etc/systemd/system/kern@.service`.
+- Enables and starts each agent as `kern@<user>` (e.g. `kern@alice`). Entries without a declared `user` are skipped.
+- Native systemd control: `systemctl restart kern@alice` or fleet wildcards `systemctl restart 'kern@*'`.
+- `--web` / `--proxy` install `/etc/systemd/system/kern-web.service` / `kern-proxy.service` as system units (running as root, so the proxy can read agent tokens across workspaces). Promotion/migration runs first, so the service reads the fleet registry in `/etc/kern/config.json`.
+- `kern install <name>` fails with `Agent not found` if the name/user/path does not match a registry entry (nothing is written).
 
-### kern uninstall [name]
-
-Remove systemd services installed by `kern install`.
-
-- No argument: uninstalls all agent services + web
-- With name: uninstalls a single agent service
-- Stops and disables the service, deletes the unit file
+There is no user-level (`~/.config/systemd/user/`) integration. On single-user hosts and macOS, use `kern start` / `kern run`.
 
 ```bash
-kern uninstall        # all
-kern uninstall atlas  # single agent
+sudo kern install          # template unit + all fleet agents
+sudo kern install atlas    # single agent
+sudo kern install --web    # web UI system unit
+sudo kern install --proxy  # proxy system unit
 ```
+
+### kern uninstall [name|--web|--proxy]
+
+Remove systemd units installed by `kern install`. Requires root.
+
+- With name: stops and disables `kern@<user>` for that agent.
+- `--web` / `--proxy`: stops, disables, and removes `kern-web.service` / `kern-proxy.service`.
+- No argument: stops and disables every agent, removes `/etc/systemd/system/kern@.service`, and removes the web and proxy units.
 
 ### kern web <run|start|stop|status>
 

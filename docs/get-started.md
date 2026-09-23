@@ -10,7 +10,7 @@ Create your first kern agent in under a minute.
 npm install -g kern-ai
 ```
 
-Requires Node.js 20+.
+Requires Node.js 22+.
 
 ## Create an agent
 

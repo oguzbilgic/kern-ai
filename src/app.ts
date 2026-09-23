@@ -36,6 +36,11 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
   switch (cmd) {
     case "/restart": {
       log("kern", `restart requested by ${userId} via ${iface}`);
+      // If running inside systemd, exit cleanly with 0 and let systemd Restart=always bring it back up
+      if (process.env.INVOCATION_ID || process.env.JOURNAL_STREAM) {
+        setTimeout(() => process.exit(0), 100);
+        return "Restart initiated.";
+      }
       const { spawn } = await import("child_process");
       const child = spawn("kern", ["restart", agentName], { stdio: "pipe" });
 

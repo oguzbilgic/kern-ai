@@ -7,6 +7,8 @@ import { runInit } from "./init.js";
 import { showStatus } from "./status.js";
 import { startAgent, stopAgent } from "./daemon.js";
 import { findAgent, loadRegistry, readAgentInfo } from "./registry.js";
+import { assertFleetAuthority, isRoot, isSystemManaged } from "./global-config.js";
+import { dropPrivileges } from "./daemon.js";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -98,6 +100,7 @@ async function main() {
   }
 
   if (cmd === "init") {
+    assertFleetAuthority("init");
     // Parse flags for non-interactive mode
     const flags: Record<string, string> = {};
     let initTarget = args[1];
@@ -105,7 +108,10 @@ async function main() {
       if (args[i].startsWith("--") && i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[args[i].slice(2)] = args[i + 1];
         i++;
-      } else if (!args[i].startsWith("--")) {
+      } else if (args[i].startsWith("--")) {
+        // boolean flag (e.g. --create-user)
+        flags[args[i].slice(2)] = "true";
+      } else {
         initTarget = args[i];
       }
     }
@@ -119,10 +125,12 @@ async function main() {
   }
 
   if (cmd === "start") {
+    assertFleetAuthority("start");
     if (args[1]) {
       const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("start", args[1]);
+      const agent = findAgent(args[1]);
+      if (isServiceInstalled(args[1], agent?.user)) {
+        const ok = serviceControl("start", args[1], agent?.user);
         if (!ok) {
           console.error(`Failed to start service-managed agent: ${args[1]}`);
           process.exit(1);
@@ -135,10 +143,12 @@ async function main() {
   }
 
   if (cmd === "stop") {
+    assertFleetAuthority("stop");
     if (args[1]) {
       const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("stop", args[1]);
+      const agent = findAgent(args[1]);
+      if (isServiceInstalled(args[1], agent?.user)) {
+        const ok = serviceControl("stop", args[1], agent?.user);
         if (!ok) {
           console.error(`Failed to stop service-managed agent: ${args[1]}`);
           process.exit(1);
@@ -151,10 +161,12 @@ async function main() {
   }
 
   if (cmd === "restart") {
+    assertFleetAuthority("restart");
     if (args[1]) {
       const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("restart", args[1]);
+      const agent = findAgent(args[1]);
+      if (isServiceInstalled(args[1], agent?.user)) {
+        const ok = serviceControl("restart", args[1], agent?.user);
         if (!ok) {
           console.error(`Failed to restart service-managed agent: ${args[1]}`);
           process.exit(1);
@@ -169,18 +181,21 @@ async function main() {
   }
 
   if (cmd === "install") {
+    assertFleetAuthority("install");
     const { install } = await import("./install.js");
     await install(args[1]);
     process.exit(0);
   }
 
   if (cmd === "uninstall") {
+    assertFleetAuthority("uninstall");
     const { uninstall } = await import("./install.js");
     await uninstall(args[1]);
     process.exit(0);
   }
 
   if (cmd === "remove" || cmd === "rm") {
+    assertFleetAuthority("remove");
     const name = args[1];
     if (!name) {
       console.error("Usage: kern remove <name>");
@@ -195,8 +210,8 @@ async function main() {
     }
     // Uninstall systemd service if installed
     const { isServiceInstalled, uninstall } = await import("./install.js");
-    if (isServiceInstalled(name)) {
-      await uninstall(name);
+    if (isServiceInstalled(name, agent.user)) {
+      await uninstall(agent.user || name);
     }
     if (agent.pid && isProcessRunning(agent.pid)) {
       await stopAgent(name);
@@ -397,9 +412,25 @@ async function main() {
   }
 
   if (cmd === "run") {
+    // On system-managed hosts, running agents must be executed as root (via systemd or sudo)
+    // so it can read /etc/kern/config.json (0600) and safely drop privileges to the target agent user.
+    if (isSystemManaged() && !isRoot()) {
+      console.error(`\x1b[31mError:\x1b[0m This host is managed via /etc/kern/config.json.`);
+      console.error(`Running agents must be started as root (or via systemd).`);
+      process.exit(1);
+    }
+
     const initIfNeeded = args.includes("--init-if-needed");
     const dirArg = args.filter((a: string) => a !== "--init-if-needed")[1];
+    let targetUser: string | null = null;
     const agentDir = initIfNeeded ? resolve(dirArg || ".") : await resolveAgentDir(dirArg);
+
+    if (isSystemManaged()) {
+      const agent = findAgent(dirArg || agentDir);
+      if (agent && agent.user) {
+        targetUser = agent.user;
+      }
+    }
 
     if (initIfNeeded && !existsSync(join(agentDir, ".kern", "config.json"))) {
       const { scaffoldAgent, API_KEY_ENV } = await import("./init.js");
@@ -416,6 +447,14 @@ async function main() {
       });
     }
 
+    // Switch working directory to workspace
+    process.chdir(agentDir);
+
+    // Drop privileges to the assigned agent user if running as root
+    if (isRoot() && targetUser) {
+      dropPrivileges(targetUser);
+    }
+
     await startApp(agentDir);
     return;
   }
@@ -427,7 +466,7 @@ async function main() {
       const { getWebServiceStatus } = await import("./install.js");
       if (getWebServiceStatus() !== null) {
         const { spawnSync } = await import("child_process");
-        spawnSync("systemctl", ["--user", subcmd, "kern-web"], { stdio: "pipe" });
+        spawnSync("systemctl", [subcmd, "kern-web"], { stdio: "inherit" });
         return;
       }
       if (subcmd === "start") await webStart();
@@ -452,7 +491,7 @@ async function main() {
       const { getProxyServiceStatus } = await import("./install.js");
       if (getProxyServiceStatus() !== null) {
         const { spawnSync } = await import("child_process");
-        spawnSync("systemctl", ["--user", subcmd, "kern-proxy"], { stdio: "pipe" });
+        spawnSync("systemctl", [subcmd, "kern-proxy"], { stdio: "inherit" });
         return;
       }
       if (subcmd === "start") await proxyStart();

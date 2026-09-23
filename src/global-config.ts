@@ -1,15 +1,17 @@
-import { readFile, writeFile, mkdir, unlink, appendFile } from "fs/promises";
+import { readFile, writeFile, mkdir, unlink, appendFile, chmod } from "fs/promises";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { randomBytes } from "crypto";
 import { log } from "./log.js";
 
+export type AgentEntry = string | { user: string; workspace: string };
+
 export interface GlobalConfig {
   web_port: number;
   web_host: string;
   proxy_port: number;
-  agents: string[];
+  agents: AgentEntry[];
 }
 
 const defaults: GlobalConfig = {
@@ -19,17 +21,103 @@ const defaults: GlobalConfig = {
   agents: [],
 };
 
+const SYSTEM_CONFIG_FILE = "/etc/kern/config.json";
 const KERN_DIR = join(homedir(), ".kern");
-const CONFIG_FILE = join(KERN_DIR, "config.json");
+const USER_CONFIG_FILE = join(KERN_DIR, "config.json");
 const LEGACY_AGENTS_FILE = join(KERN_DIR, "agents.json");
 
-export async function loadGlobalConfig(): Promise<GlobalConfig> {
-  // Migrate legacy agents.json → config.json on first load
-  await migrateLegacyAgents();
+/**
+ * Check if the machine is configured as a system-wide managed agent host (/etc/kern/config.json).
+ */
+export function isSystemManaged(): boolean {
+  return existsSync(SYSTEM_CONFIG_FILE);
+}
 
-  if (!existsSync(CONFIG_FILE)) return { ...defaults };
+/**
+ * Returns true if running as root (POSIX UID 0).
+ */
+export function isRoot(): boolean {
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
+/**
+ * Guard for mutating fleet commands. If /etc/kern/config.json exists, mutating fleet
+ * operations must be run by root to prevent rogue local configs or permission corruption.
+ */
+export function assertFleetAuthority(action: string): void {
+  if (isSystemManaged() && !isRoot()) {
+    console.error(`\x1b[31mError:\x1b[0m This host is managed via ${SYSTEM_CONFIG_FILE}.`);
+    console.error(`Fleet command '${action}' must be run as root (or via sudo).`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Initialize /etc/kern/config.json if running as root.
+ */
+export async function promoteToSystemManaged(): Promise<string> {
+  if (!isRoot()) {
+    throw new Error("Cannot promote host to system-managed without root privileges.");
+  }
+  await mkdir("/etc/kern", { recursive: true });
+  if (!existsSync(SYSTEM_CONFIG_FILE)) {
+    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify({ ...defaults }, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  }
   try {
-    const raw = await readFile(CONFIG_FILE, "utf-8");
+    await chmod(SYSTEM_CONFIG_FILE, 0o600);
+  } catch {}
+  return SYSTEM_CONFIG_FILE;
+}
+
+/**
+ * Resolve the active global config path:
+ * - /etc/kern/config.json if it exists (system-managed fleet host)
+ * - ~/.kern/config.json otherwise
+ * 
+ * If running as root without /etc/kern/config.json, warns that root user-level
+ * config is discouraged and recommends running 'sudo kern install' to promote to /etc/kern.
+ */
+let rootWarned = false;
+export function getGlobalConfigPath(): string {
+  if (isSystemManaged()) {
+    return SYSTEM_CONFIG_FILE;
+  }
+  if (isRoot() && !rootWarned) {
+    // Only warn once per process, and not in test environment or non-interactive pipe
+    if (process.env.NODE_ENV !== "test" && process.stderr.isTTY) {
+      console.warn("\x1b[33mWarning:\x1b[0m Running as root with local ~/.kern/config.json.");
+      console.warn("To configure this machine as a standard multi-agent fleet host, run: sudo kern install\n");
+    }
+    rootWarned = true;
+  }
+  return USER_CONFIG_FILE;
+}
+
+/**
+ * Helper to extract workspace path from string or object AgentEntry.
+ */
+export function getAgentWorkspace(entry: AgentEntry): string {
+  return typeof entry === "string" ? entry : entry.workspace;
+}
+
+/**
+ * Helper to extract optional declared user from AgentEntry.
+ */
+export function getAgentUser(entry: AgentEntry): string | null {
+  return typeof entry === "string" ? null : entry.user;
+}
+
+export async function loadGlobalConfig(): Promise<GlobalConfig> {
+  const configFile = getGlobalConfigPath();
+
+  // Migrate legacy agents.json → config.json on first load if using user config
+  if (!isSystemManaged()) {
+    await migrateLegacyAgents();
+  }
+
+  if (!existsSync(configFile)) return { ...defaults };
+  try {
+    const raw = await readFile(configFile, "utf-8");
     const userConfig = JSON.parse(raw);
     return { ...defaults, ...userConfig };
   } catch {
@@ -38,9 +126,10 @@ export async function loadGlobalConfig(): Promise<GlobalConfig> {
 }
 
 export function loadGlobalConfigSync(): GlobalConfig {
-  if (!existsSync(CONFIG_FILE)) return { ...defaults };
+  const configFile = getGlobalConfigPath();
+  if (!existsSync(configFile)) return { ...defaults };
   try {
-    const raw = readFileSync(CONFIG_FILE, "utf-8");
+    const raw = readFileSync(configFile, "utf-8");
     const userConfig = JSON.parse(raw);
     return { ...defaults, ...userConfig };
   } catch {
@@ -49,8 +138,20 @@ export function loadGlobalConfigSync(): GlobalConfig {
 }
 
 export async function saveGlobalConfig(config: GlobalConfig): Promise<void> {
+  if (isSystemManaged()) {
+    if (!isRoot()) {
+      throw new Error(`Permission denied: cannot write to ${SYSTEM_CONFIG_FILE} without root privileges.`);
+    }
+    await mkdir("/etc/kern", { recursive: true });
+    await writeFile(SYSTEM_CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+    try {
+      await chmod(SYSTEM_CONFIG_FILE, 0o600);
+    } catch {}
+    return;
+  }
+
   await mkdir(KERN_DIR, { recursive: true });
-  await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  await writeFile(USER_CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 /**
@@ -69,9 +170,9 @@ async function migrateLegacyAgents(): Promise<void> {
 
     // Load existing config and merge agents
     let config = { ...defaults };
-    if (existsSync(CONFIG_FILE)) {
+    if (existsSync(USER_CONFIG_FILE)) {
       try {
-        const configRaw = await readFile(CONFIG_FILE, "utf-8");
+        const configRaw = await readFile(USER_CONFIG_FILE, "utf-8");
         config = { ...defaults, ...JSON.parse(configRaw) };
       } catch {}
     }

@@ -1,8 +1,10 @@
 import { mkdir, writeFile, readFile } from "fs/promises";
 import { join, resolve, basename } from "path";
 import { existsSync } from "fs";
-import { input, select, password } from "@inquirer/prompts";
+import { input, select, password, confirm } from "@inquirer/prompts";
+import { execFileSync } from "child_process";
 import { registerAgent, findAgent, isProcessRunning, readPid, removePidFile, assignPort } from "./registry.js";
+import { isSystemManaged, isRoot, loadGlobalConfig, saveGlobalConfig } from "./global-config.js";
 import { startAgent } from "./daemon.js";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
@@ -298,7 +300,51 @@ async function runConfig(name: string, dir: string): Promise<void> {
   await startAgent(name);
 }
 
+const UNIX_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+function linuxUserExists(user: string): boolean {
+  try {
+    execFileSync("id", ["-u", user], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate the dedicated Linux user for a fleet agent. Creates it only when
+ * `create` is set; otherwise a missing user is a hard error so we never register
+ * a `{ user, workspace }` entry that systemd (User=%i) cannot run.
+ */
+function ensureLinuxUser(user: string, create: boolean): void {
+  if (!UNIX_USER_RE.test(user)) {
+    console.error(`\x1b[31mError:\x1b[0m '${user}' is not a valid Linux username.`);
+    process.exit(1);
+  }
+  if (linuxUserExists(user)) return;
+  if (!create) {
+    console.error(`\x1b[31mError:\x1b[0m Linux user '${user}' does not exist.`);
+    console.error(`Create it first (useradd -m -s /bin/bash ${user}) or pass --create-user.`);
+    process.exit(1);
+  }
+  try {
+    execFileSync("useradd", ["-m", "-s", "/bin/bash", user], { stdio: "pipe" });
+    print(`  ✓ Created Linux user '${user}'`);
+  } catch (err: any) {
+    console.error(`\x1b[31mError:\x1b[0m Could not create user '${user}': ${err.message}`);
+    process.exit(1);
+  }
+}
+
 export async function runInit(targetArg?: string, flags?: Record<string, string>): Promise<void> {
+  // If host is managed via /etc/kern, non-root users are blocked immediately
+  if (isSystemManaged() && !isRoot()) {
+    console.error(`\x1b[31mError:\x1b[0m This machine is configured as a multi-agent fleet host (/etc/kern/config.json).`);
+    console.error(`You cannot create local user agents here. To add an agent to the fleet, run:`);
+    console.error(`  sudo kern init ${targetArg || "<name>"}`);
+    process.exit(1);
+  }
+
   // Check if target is an existing agent — go straight to config
   if (targetArg && !flags) {
     const registered = findAgent(targetArg);
@@ -328,10 +374,14 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
-    const dir = resolve(name);
+    const targetUser = flags["user"] || (isSystemManaged() ? name : undefined);
+    if (isSystemManaged() && targetUser) {
+      ensureLinuxUser(targetUser, flags["create-user"] === "true");
+    }
+    const dir = flags["workspace"] || (isSystemManaged() && targetUser ? `/home/${targetUser}/workspace` : resolve(name));
 
     await scaffoldAgent({
-      name, dir, provider, model, apiKey, envVar,
+      name, dir, user: targetUser, provider, model, apiKey, envVar,
       telegramToken, slackBotToken, slackAppToken,
     });
     return;
@@ -340,6 +390,10 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   // Interactive mode
   print("");
   print("  kern init");
+
+  if (!isRoot() && !isSystemManaged()) {
+    print(`  \x1b[2mRunning in user mode (~/.kern). To set up a multi-agent fleet host: sudo kern install\x1b[0m`);
+  }
   print("");
 
   // Agent name
@@ -349,7 +403,34 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     required: true,
   });
 
-  const dir = resolve(targetArg || name);
+  let targetUser: string | undefined = undefined;
+  let dir = resolve(targetArg || name);
+
+  if (isSystemManaged()) {
+    targetUser = await input({
+      message: "Dedicated Linux user",
+      default: name,
+      required: true,
+    });
+
+    if (!UNIX_USER_RE.test(targetUser)) {
+      console.error(`\x1b[31mError:\x1b[0m '${targetUser}' is not a valid Linux username.`);
+      process.exit(1);
+    }
+    if (!linuxUserExists(targetUser)) {
+      const create = await confirm({
+        message: `Linux user '${targetUser}' does not exist. Create it now (useradd -m)?`,
+        default: true,
+      });
+      ensureLinuxUser(targetUser, create);
+    }
+
+    dir = await input({
+      message: "Workspace directory",
+      default: `/home/${targetUser}/workspace`,
+      required: true,
+    });
+  }
 
   // Provider
   const provider = await select({
@@ -395,7 +476,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   }
 
   await scaffoldAgent({
-    name, dir, provider, model, apiKey, envVar,
+    name, dir, user: targetUser, provider, model, apiKey, envVar,
     telegramToken, slackBotToken, slackAppToken,
   });
 }
@@ -403,6 +484,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
 export interface ScaffoldOpts {
   name: string;
   dir: string;
+  user?: string;
   provider: string;
   model: string;
   apiKey: string;
@@ -533,7 +615,32 @@ node_modules/
   }
 
   // Register and start
-  await registerAgent(dir);
+  if (isSystemManaged()) {
+    // When managed via /etc/kern/config.json, register user/workspace entry
+    const globalConfig = await loadGlobalConfig();
+    const targetUser = opts.user || name;
+
+    // Chown workspace recursively to targetUser if running as root
+    if (isRoot() && targetUser) {
+      try {
+        execFileSync("chown", ["-R", `${targetUser}:`, dir]);
+        print(`  ✓ Set ownership to ${targetUser}`);
+      } catch (err: any) {
+        print(`  ⚠ Failed to set ownership to ${targetUser}: ${err.message}`);
+      }
+    }
+
+    const existsInFleet = globalConfig.agents.some((entry) => {
+      const ws = typeof entry === "string" ? entry : entry.workspace;
+      return ws === dir;
+    });
+    if (!existsInFleet) {
+      globalConfig.agents.push({ user: targetUser, workspace: dir });
+      await saveGlobalConfig(globalConfig);
+    }
+  } else {
+    await registerAgent(dir);
+  }
 
   if (!skipStart) {
     print("");

@@ -3,17 +3,26 @@ import { join, basename } from "path";
 import { existsSync, readFileSync } from "fs";
 import { createServer } from "net";
 import { parse as parseDotenv } from "dotenv";
-import { loadGlobalConfig, loadGlobalConfigSync, saveGlobalConfig } from "./global-config.js";
+import {
+  loadGlobalConfig,
+  loadGlobalConfigSync,
+  saveGlobalConfig,
+  getAgentWorkspace,
+  getAgentUser,
+  isSystemManaged,
+  AgentEntry,
+} from "./global-config.js";
 import { log } from "./log.js";
 
 /**
- * Agent registry backed by ~/.kern/config.json `agents` field.
+ * Agent registry backed by ~/.kern/config.json or /etc/kern/config.json `agents` field.
  * All agent runtime state (port, token, PID) lives in the agent's own .kern/ directory.
  */
 
 export interface AgentInfo {
   name: string;
   path: string;
+  user: string | null;
   port: number;
   token: string | null;
   pid: number | null;
@@ -23,31 +32,56 @@ export interface AgentInfo {
 
 export async function loadRegistry(): Promise<string[]> {
   const config = await loadGlobalConfig();
+  return config.agents.map(getAgentWorkspace);
+}
+
+export async function loadRegistryEntries(): Promise<AgentEntry[]> {
+  const config = await loadGlobalConfig();
   return config.agents;
 }
 
-export async function registerAgent(path: string): Promise<void> {
+export async function registerAgent(path: string, user?: string): Promise<void> {
+  // On managed hosts (/etc/kern/config.json), agents are registered explicitly by root during setup.
+  // Runtime foreground processes (kern run) should not self-mutate /etc/kern/config.json.
+  if (isSystemManaged()) {
+    const config = await loadGlobalConfig();
+    const alreadyRegistered = config.agents.some((entry) => getAgentWorkspace(entry) === path);
+    if (!alreadyRegistered) {
+      log.debug("registry", `system-managed host: skipping self-registration for ${path}`);
+    }
+    return;
+  }
+
   const config = await loadGlobalConfig();
-  if (!config.agents.includes(path)) {
-    config.agents.push(path);
+  const exists = config.agents.some((entry) => getAgentWorkspace(entry) === path);
+  if (!exists) {
+    if (user) {
+      config.agents.push({ user, workspace: path });
+    } else {
+      config.agents.push(path);
+    }
     await saveGlobalConfig(config);
   }
 }
 
 export async function removeAgent(nameOrPath: string): Promise<boolean> {
   const config = await loadGlobalConfig();
-  // Try direct path match
-  let idx = config.agents.indexOf(nameOrPath);
-  // Try name match
-  if (idx < 0) {
-    for (let i = 0; i < config.agents.length; i++) {
-      const info = readAgentInfo(config.agents[i]);
-      if (info && info.name === nameOrPath) {
-        idx = i;
-        break;
-      }
+  let idx = -1;
+
+  for (let i = 0; i < config.agents.length; i++) {
+    const entry = config.agents[i];
+    const ws = getAgentWorkspace(entry);
+    if (ws === nameOrPath) {
+      idx = i;
+      break;
+    }
+    const info = readAgentInfo(ws);
+    if (info && info.name === nameOrPath) {
+      idx = i;
+      break;
     }
   }
+
   if (idx < 0) return false;
   config.agents.splice(idx, 1);
   await saveGlobalConfig(config);
@@ -56,7 +90,7 @@ export async function removeAgent(nameOrPath: string): Promise<boolean> {
 
 // --- Agent info: read from agent's own .kern/ directory ---
 
-export function readAgentInfo(agentPath: string): AgentInfo | null {
+export function readAgentInfo(agentPath: string, user: string | null = null): AgentInfo | null {
   if (!existsSync(agentPath)) return null;
 
   const configPath = join(agentPath, ".kern", "config.json");
@@ -89,16 +123,18 @@ export function readAgentInfo(agentPath: string): AgentInfo | null {
     if (isNaN(pid)) pid = null;
   } catch {}
 
-  return { name, port, token, pid, path: agentPath };
+  return { name, path: agentPath, user, port, token, pid };
 }
 
 export function findAgent(nameOrPath: string): AgentInfo | null {
   const config = loadGlobalConfigSync();
 
-  for (const p of config.agents) {
-    const info = readAgentInfo(p);
+  for (const entry of config.agents) {
+    const ws = getAgentWorkspace(entry);
+    const user = getAgentUser(entry);
+    const info = readAgentInfo(ws, user);
     if (!info) continue;
-    if (info.name === nameOrPath || info.path === nameOrPath || p === nameOrPath) {
+    if (info.name === nameOrPath || info.path === nameOrPath || ws === nameOrPath || user === nameOrPath) {
       return info;
     }
   }
@@ -125,8 +161,9 @@ function checkPort(port: number): Promise<boolean> {
 export async function assignPort(): Promise<number> {
   const config = loadGlobalConfigSync();
   const knownPorts = new Set<number>();
-  for (const p of config.agents) {
-    const info = readAgentInfo(p);
+  for (const entry of config.agents) {
+    const ws = getAgentWorkspace(entry);
+    const info = readAgentInfo(ws);
     if (info && info.port > 0) knownPorts.add(info.port);
   }
 
@@ -143,6 +180,18 @@ export async function assignPort(): Promise<number> {
 
   log.warn("kern", "port range 4100-4999 exhausted, falling back to OS-assigned port");
   return 0;
+}
+
+export function readPid(agentDir: string): number | null {
+  const pidPath = join(agentDir, ".kern", "agent.pid");
+  if (!existsSync(pidPath)) return null;
+  try {
+    const raw = readFileSync(pidPath, "utf-8").trim();
+    const pid = parseInt(raw, 10);
+    return isNaN(pid) ? null : pid;
+  } catch {
+    return null;
+  }
 }
 
 export function isProcessRunning(pid: number): boolean {
@@ -167,15 +216,4 @@ export async function removePidFile(agentDir: string): Promise<void> {
   try {
     await unlink(pidPath);
   } catch {}
-}
-
-export function readPid(agentDir: string): number | null {
-  const pidPath = join(agentDir, ".kern", "agent.pid");
-  try {
-    const raw = readFileSync(pidPath, "utf-8").trim();
-    const pid = parseInt(raw, 10);
-    return isNaN(pid) ? null : pid;
-  } catch {
-    return null;
-  }
 }
