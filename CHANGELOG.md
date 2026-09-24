@@ -4,6 +4,8 @@
 
 ### Docker
 - **Mount agent home directory at `/home/agent` with workspace at `/home/agent/workspace`** — switches container user to `agent` with home `/home/agent` and default workspace at `/home/agent/workspace`. Mounting `-v <volume>:/home/agent` persists the agent's full user environment (user-space `npm install -g` in `~/.npm-global`, `pip install` in `~/.local`, SSH keys, git configuration, and shell history) alongside its workspace, bringing Docker parity with Linux multi-tenant agent host setups.
+  - **New agent (init)**: Pass `KERN_NAME` and your API/bot key(s) on first run (e.g. `docker run -d -v bob-home:/home/agent -e KERN_NAME=bob -e OPENROUTER_API_KEY=... -e TELEGRAM_BOT_TOKEN=... ghcr.io/oguzbilgic/kern-ai`). The container auto-scaffolds `workspace/.kern/config.json` with the agent name and writes credentials into `.kern/.env`.
+  - **Existing agent**: Once initialized, all config, secrets, memory, and user-installed tools live inside the volume. Recreating or upgrading the container requires zero environment variables: `docker run -d -v bob-home:/home/agent ghcr.io/oguzbilgic/kern-ai`.
 
 ## 0.41.0 (2026-09-22)
 
