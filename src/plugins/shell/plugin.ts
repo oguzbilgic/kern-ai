@@ -48,7 +48,9 @@ export const shellPlugin: KernPlugin = {
         log.warn("shell", `${record.id} finished with no origin — completion not delivered`);
         return;
       }
-      ctx.announce(body, record.origin).catch((e) =>
+      // Returned so the registry can hold the next reminder until this one
+      // has been consumed. Errors are logged here and never propagate.
+      return ctx.announce(body, record.origin).catch((e) =>
         log.error("shell", `announce failed for ${record.id}: ${e.message}`),
       );
     });

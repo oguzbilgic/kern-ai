@@ -84,6 +84,34 @@ test("jobs: remindEvery stays silent for a job that finishes inside the grace wi
   assert.equal(announced.length, 0);
 });
 
+test("jobs: at most one reminder is in flight while the announcer is slow", async () => {
+  const { agentDir } = setup();
+  const registry = new JobRegistry(agentDir);
+  const bodies: string[] = [];
+  const release: (() => void)[] = [];
+  // Simulates a busy agent: each announce resolves only when released.
+  registry.setAnnouncer((_r, body) => {
+    bodies.push(body);
+    return new Promise<void>((r) => release.push(r));
+  });
+  const h = registry.start("sleep 0.6", { origin, graceMs: 0, remindEverySec: 0.05 });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(bodies.filter((b) => / still running, /.test(b)).length, 1, "ticks skipped while pending");
+  release.shift()!();
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(bodies.filter((b) => / still running, /.test(b)).length, 2, "next reminder after consumption");
+  release.forEach((r) => r());
+  await h.done;
+});
+
+test("jobs: remindEvery without an origin is never armed", async () => {
+  const { registry, announced } = setup();
+  const h = registry.start("sleep 0.3", { origin: null, graceMs: 0, remindEverySec: 0.05 });
+  assert.equal(h.record.remindEverySec, undefined);
+  await h.done;
+  assert.equal(announced.filter((a) => / still running, /.test(a.body)).length, 0);
+});
+
 test("jobs: reminders stop on killAll", async () => {
   const { registry, announced } = setup();
   registry.start("sleep 30", { origin, graceMs: 0, remindEverySec: 0.05 });

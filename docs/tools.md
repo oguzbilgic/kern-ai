@@ -46,7 +46,7 @@ Nothing is announced while a job runs unless it was started with `remindEvery`. 
 [job:job_a1b2c3d4 still running, 20m] npm run e2e
 ```
 
-That gives the agent a chance to tail the job, decide it has stalled or is no longer needed, and kill it, instead of leaving it to run unnoticed. There is no default interval: every reminder to an idle agent is a turn, so opting in per job keeps the cost deliberate. Reminders stop when the job ends; the first one fires one interval after the two-second grace window closes.
+That gives the agent a chance to tail the job, decide it has stalled or is no longer needed, and kill it, instead of leaving it to run unnoticed. There is no default interval: every reminder to an idle agent is a turn, so opting in per job keeps the cost deliberate. Reminders stop when the job ends; the first one fires one interval after the two-second grace window closes. At most one reminder is in flight per job — while the agent is busy with another conversation the queued reminder waits and further ticks are skipped, so they never pile up. Jobs started outside a conversation (no origin) get no reminders, and the tool result does not promise any.
 
 Running jobs are killed on shutdown (SIGTERM, then SIGKILL after two seconds) and their completion is not announced. If the agent died without shutting down, leftover jobs are killed on the next start. Completions from turns that came from the CLI or a heartbeat still arrive as messages, but the agent's reply has no chat to go to — the tool says so, and the agent should use `message` if a person needs the result. Jobs are tracked per process — after a restart, `jobs({ action: "status" })` can still read a finished job's `record.json`, but running ones are gone.
 

@@ -73,7 +73,12 @@ export interface StartOptions {
   remindEverySec?: number;
 }
 
-export type AnnounceFn = (record: JobRecord, body: string) => void;
+/**
+ * Delivers a completion or reminder body to the job's origin. May return a
+ * promise that settles once the message has been consumed (the agent
+ * replied); reminders use it to keep at most one in flight per job.
+ */
+export type AnnounceFn = (record: JobRecord, body: string) => void | Promise<unknown>;
 
 /** Tail kept in memory per job and included in the completion message. */
 export const MAX_TAIL_CHARS = 25_000;
@@ -132,7 +137,9 @@ export class JobRegistry {
     const stream = createWriteStream(logPath, { flags: "a" });
     const cwd = opts.cwd || process.cwd();
     const graceMs = opts.graceMs ?? 0;
-    const remindMs = opts.remindEverySec && opts.remindEverySec > 0 ? opts.remindEverySec * 1000 : 0;
+    // Reminders need somewhere to go: without an origin they are never armed
+    // and the record does not claim them, so the tool result stays honest.
+    const remindMs = opts.origin && opts.remindEverySec && opts.remindEverySec > 0 ? opts.remindEverySec * 1000 : 0;
 
     const record: JobRecord = {
       id,
@@ -202,13 +209,20 @@ export class JobRegistry {
     // Periodic "still running" reminder, announced like a completion. Armed
     // only once the grace window has closed — a job that finishes inside it
     // reports synchronously and must stay silent.
+    // At most one reminder is in flight per job: while the agent is busy
+    // elsewhere the queued reminder waits, and ticks in the meantime are
+    // skipped rather than piling up behind it.
     let remindTimer: NodeJS.Timeout | null = null;
+    let remindPending: Promise<unknown> | null = null;
     const armReminder = () => {
       if (!remindMs || record.status !== "running") return;
       remindTimer = setInterval(() => {
-        if (record.status !== "running" || this.shuttingDown || !this.announceFn) return;
+        if (record.status !== "running" || this.shuttingDown || !this.announceFn || remindPending) return;
         try {
-          this.announceFn(record, formatReminder(record));
+          const result = this.announceFn(record, formatReminder(record));
+          if (result && typeof (result as Promise<unknown>).then === "function") {
+            remindPending = (result as Promise<unknown>).catch(() => {}).finally(() => { remindPending = null; });
+          }
         } catch (e: any) {
           log.warn("jobs", `reminder announce failed for ${id}: ${e.message}`);
         }
