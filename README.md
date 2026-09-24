@@ -46,7 +46,15 @@ docker run -d --restart=unless-stopped \
 
 No ports, no web UI — just message your bot. First message auto-pairs you as operator.
 
-Agent state lives in the `my-agent` volume mounted to `/home/agent` — sessions, memory, dashboards persist in `/home/agent/workspace`, while packages installed by the agent (`npm install -g`, `pip install`), SSH keys, and dotfiles persist in the home directory. Configure with env vars: `KERN_NAME`, `KERN_MODEL`, `KERN_PORT`. See [configuration docs](docs/config.md) for other providers and options.
+Once initialized, all credentials and state are saved in the volume. Subsequent runs need zero environment variables:
+
+```bash
+docker run -d --restart=unless-stopped \
+  -v my-agent:/home/agent \
+  ghcr.io/oguzbilgic/kern-ai
+```
+
+Agent state lives in the `my-agent` volume mounted to `/home/agent` — sessions, memory, dashboards persist in `/home/agent/workspace`, while packages installed by the agent (`npm install -g`, `pip install`), SSH keys, and dotfiles persist in the home directory. See [Docker docs](docs/docker.md) for full interface configuration and options.
 
 ### npm
 
