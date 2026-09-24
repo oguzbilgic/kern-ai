@@ -50,6 +50,10 @@ function createOpenAIClient(provider: string) {
  * Create an embedding model for recall and segments.
  * Returns null if no suitable provider/key is available.
  *
+ * `config.embeddingModel` overrides the default. It is used as-is on the same
+ * client, so the ID must be valid there: bare on openai/ollama, namespaced on
+ * the OpenRouter-routed providers.
+ *
  * Defaults by provider:
  * - openai: text-embedding-3-small
  * - anthropic: openai/text-embedding-3-small (Anthropic has no embeddings API; routed via OpenRouter)
@@ -59,6 +63,8 @@ function createOpenAIClient(provider: string) {
 export function createEmbeddingModel(config: KernConfig): Parameters<typeof embed>[0]["model"] | null {
   const client = createOpenAIClient(config.provider);
   if (!client) return null;
+
+  if (config.embeddingModel) return client.embeddingModel(config.embeddingModel);
 
   switch (config.provider) {
     case "openai":
