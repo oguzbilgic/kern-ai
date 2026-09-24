@@ -5,6 +5,13 @@
 ### Features
 - **`remindEvery` for background jobs** — `bash({ command, background: true, remindEvery: 600 })` announces a one-line `[job:<id> still running, 20m] <cmd>` message to the originating conversation at that interval, routed like a completion, so the agent can tail and kill jobs that have stalled or are no longer needed. Opt-in per job with no default; reminders stop when the job ends and are never sent for jobs that finish inside the grace window. Shown in `jobs({ action: "status" })` and `/jobs`.
 
+### Improvements
+- **Updated default, fallback, and secondary models** — refreshed default models and fallback lists for current frontier generations:
+  - **Primary chat**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-opus-5-5`, OpenAI to `gpt-6-sol`. `kern init` fallback choices refreshed across all providers.
+  - **Background summary**: OpenRouter defaults to `google/gemini-3.5-flash-lite`, Anthropic to `claude-haiku-5` (via OpenRouter), OpenAI to `gpt-6-luna`.
+  - **Media vision digest**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-sonnet-5`, OpenAI to `gpt-6-luna`.
+  - **Audio transcription**: OpenRouter fallback defaults to `google/gemini-3.8-flash`.
+
 ### Docker
 - **Mount agent home directory at `/home/agent` with workspace at `/home/agent/workspace`** — switches container user to `agent` with home `/home/agent` and default workspace at `/home/agent/workspace`. Mounting `-v <volume>:/home/agent` persists the agent's full user environment (user-space `npm install -g` in `~/.npm-global`, `pip install` in `~/.local`, SSH keys, git configuration, and shell history) alongside its workspace, bringing Docker parity with Linux multi-tenant agent host setups.
 

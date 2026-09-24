@@ -82,7 +82,7 @@ const TOOL_SCOPES: Record<ToolScope, string[]> = {
 
 export const configDefaults: KernConfig = {
   name: "",
-  model: "anthropic/claude-opus-4.8",
+  model: "google/gemini-3.8-flash",
   provider: "openrouter",
   toolScope: "full",
   maxSteps: 30,

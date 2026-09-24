@@ -25,7 +25,7 @@ export const AUDIO_EXT_TO_MIME: Record<string, string> = {
  * rely on the cross-provider OpenRouter fallback below.
  */
 export const AUDIO_FALLBACKS: Record<string, string> = {
-  openrouter: "google/gemini-3.7-flash",
+  openrouter: "google/gemini-3.8-flash",
   openai: "gpt-audio-mini",
 };
 

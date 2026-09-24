@@ -402,13 +402,13 @@ async function main() {
     const agentDir = initIfNeeded ? resolve(dirArg || ".") : await resolveAgentDir(dirArg);
 
     if (initIfNeeded && !existsSync(join(agentDir, ".kern", "config.json"))) {
-      const { scaffoldAgent, API_KEY_ENV } = await import("./init.js");
+      const { scaffoldAgent, API_KEY_ENV, DEFAULT_PROVIDER_MODELS } = await import("./init.js");
       const name = process.env.KERN_NAME || basename(agentDir);
       const provider = process.env.KERN_PROVIDER || "openrouter";
       const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
       await scaffoldAgent({
         name, dir: agentDir, provider, envVar, skipStart: true,
-        model: process.env.KERN_MODEL || "anthropic/claude-opus-4.8",
+        model: process.env.KERN_MODEL || DEFAULT_PROVIDER_MODELS[provider] || "google/gemini-3.8-flash",
         apiKey: process.env[envVar] || "",
         telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",
         slackBotToken: process.env.SLACK_BOT_TOKEN || "",

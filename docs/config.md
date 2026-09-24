@@ -6,7 +6,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 ```json
 {
-  "model": "anthropic/claude-opus-4.8",
+  "model": "google/gemini-3.8-flash",
   "provider": "openrouter",
   "toolScope": "full"
 }
@@ -17,7 +17,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | Field | Default | Description |
 |-------|---------|-------------|
 | `name` | directory name | Agent name. Auto-set to directory basename on first startup if missing. Exposed in `/status` response. |
-| `model` | `anthropic/claude-opus-4.8` | Model ID. Format depends on provider. |
+| `model` | `google/gemini-3.8-flash` | Model ID. Format depends on provider. |
 | `provider` | `openrouter` | API provider: `openrouter`, `anthropic`, `openai`, `ollama` |
 | `toolScope` | `full` | Tool access level: `full`, `write`, `read` |
 | `maxSteps` | `30` | Max tool-use steps per message |
@@ -33,12 +33,12 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `timezone` | `""` | IANA timezone (e.g. `"America/Los_Angeles"`) used for the `time:` field in the envelope the model reads. Empty = autoresolve to host. Storage (logs, recall, session metadata) stays UTC regardless. |
 | `recall` | `true` | Enable recall and segments (embedding-based features). Set to `false` to disable. Requires an embedding API key. Session storage and notes summaries work regardless. |
 | `summaryBudget` | `0.75` | Fraction of `maxContextTokens` for compressed conversation summaries from segments. Cached via prompt caching, so effectively free for supported models. Set to `0` to disable. See [Context](context.md#conversation-summary). |
-| `summaryModel` | `""` | Model for segment summarization. Empty = provider default (OpenAI: `gpt-4.1-mini`, Anthropic: `anthropic/claude-haiku-4.5` via OpenRouter, OpenRouter: `google/gemini-2.5-flash-lite`, Ollama: reuses `model`). Summary calls always use an OpenAI-compatible client: `openai` and `ollama` route directly, **all other providers (including `anthropic`) route via OpenRouter** — so on an Anthropic agent `summaryModel` needs an OpenRouter-style ID like `"anthropic/claude-haiku-4.5"`, not a bare Anthropic model ID. Exception: on `ollama` and `openai` agents, a namespaced `summaryModel` (contains `/`, e.g. `"openai/gpt-4.1-mini"`) routes via OpenRouter when `OPENROUTER_API_KEY` is set — lets local-model agents offload summaries to a cheap cloud model. Ollama `hf.co/...` IDs stay local. Useful when the main `model` is a thinking model — thinking burns the summary token budget on reasoning and returns empty text. Set this to a non-thinking model (e.g. `"google/gemini-2.5-flash-lite"` on OpenRouter/Anthropic, `"qwen3:4b-instruct"` on Ollama). |
-| `subAgentModel` | `""` | Model for spawned sub-agents, on the parent's provider. The model ID must be valid for that provider — same format as `model` (e.g. `claude-haiku-4-5` on `anthropic`, `anthropic/claude-haiku-4.5` on `openrouter`). Empty = inherit the parent's `model`. Sub-agents are read-only and bounded, so a cheaper model usually suffices — in heavy research fan-out they can account for most of the token volume. Individual `spawn` calls can override per-child. |
+| `summaryModel` | `""` | Model for segment summarization. Empty = provider default (OpenAI: `gpt-6-luna`, Anthropic: `anthropic/claude-haiku-5` via OpenRouter, OpenRouter: `google/gemini-3.5-flash-lite`, Ollama: reuses `model`). Summary calls always use an OpenAI-compatible client: `openai` and `ollama` route directly, **all other providers (including `anthropic`) route via OpenRouter** — so on an Anthropic agent `summaryModel` needs an OpenRouter-style ID like `"anthropic/claude-haiku-5"`, not a bare Anthropic model ID. Exception: on `ollama` and `openai` agents, a namespaced `summaryModel` (contains `/`, e.g. `"openai/gpt-6-luna"`) routes via OpenRouter when `OPENROUTER_API_KEY` is set — lets local-model agents offload summaries to a cheap cloud model. Ollama `hf.co/...` IDs stay local. Useful when the main `model` is a thinking model — thinking burns the summary token budget on reasoning and returns empty text. Set this to a non-thinking model (e.g. `"google/gemini-3.5-flash-lite"` on OpenRouter/Anthropic, `"qwen3:4b-instruct"` on Ollama). |
+| `subAgentModel` | `""` | Model for spawned sub-agents, on the parent's provider. The model ID must be valid for that provider — same format as `model` (e.g. `claude-sonnet-5` on `anthropic`, `anthropic/claude-sonnet-5` on `openrouter`). Empty = inherit the parent's `model`. Sub-agents are read-only and bounded, so a cheaper model usually suffices — in heavy research fan-out they can account for most of the token volume. Individual `spawn` calls can override per-child. |
 | `autoRecall` | `false` | Automatically inject relevant old context before each turn. Requires recall enabled. |
 | `mediaDigest` | `true` | Enable media pre-digest: describes images (vision model) and transcribes audio (audio model) on arrival, caches results, and replaces raw media with text in context. Set to `false` to disable the entire digest pipeline. |
-| `mediaModel` | `""` | Vision model for media descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default. Example: `"openai/gpt-4.1-mini"`. |
-| `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.7-flash` via OpenRouter for anthropic/ollama/openai agents with `OPENROUTER_API_KEY` set. Setting this field skips the (usually failing) attempt on the text-only chat model. |
+| `mediaModel` | `""` | Vision model for media descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default. Example: `"google/gemini-3.8-flash"`. |
+| `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.8-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.8-flash` via OpenRouter for anthropic/ollama/openai agents with `OPENROUTER_API_KEY` set. Setting this field skips the (usually failing) attempt on the text-only chat model. |
 | `mediaContext` | `0` | How many recent turns resolve raw media Buffers to the model. `0` = never send raw binary (text descriptions or placeholders only). Applies to all media types — useful for non-image files like PDFs on models with native support. |
 | `mcpServers` | `{}` | Model Context Protocol servers. Tools namespaced as `<server>__<tool>`. See [MCP](mcp.md). |
 
@@ -50,9 +50,9 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 ### Providers
 
-- **openrouter** — routes to cheapest provider. Model IDs like `anthropic/claude-opus-4.8`. Uses OpenAI-compatible chat completions API.
-- **anthropic** — direct Anthropic API. Model IDs like `claude-opus-4-8`.
-- **openai** — OpenAI or any OpenAI-compatible endpoint. Model IDs like `gpt-5.5`. Set `OPENAI_BASE_URL` in `.env` to route to Azure OpenAI, LiteLLM, or other compatible gateways (default: `https://api.openai.com/v1`). With a custom base URL, requests use the Chat Completions API.
+- **openrouter** — routes to cheapest provider. Model IDs like `google/gemini-3.8-flash`, `anthropic/claude-opus-5.5`. Uses OpenAI-compatible chat completions API.
+- **anthropic** — direct Anthropic API. Model IDs like `claude-opus-5-5`.
+- **openai** — OpenAI or any OpenAI-compatible endpoint. Model IDs like `gpt-6-sol`. Set `OPENAI_BASE_URL` in `.env` to route to Azure OpenAI, LiteLLM, or other compatible gateways (default: `https://api.openai.com/v1`). With a custom base URL, requests use the Chat Completions API.
 - **ollama** — local Ollama server. Model IDs match Ollama model names like `gemma4:31b`. Set `OLLAMA_BASE_URL` in `.env` for remote servers (default: `http://localhost:11434`).
 
 ### Summary model
@@ -61,9 +61,9 @@ Segment summarization uses a cheap chat model chosen automatically per provider:
 
 | Provider | Summary model |
 |----------|--------------|
-| `openai` | `gpt-4.1-mini` |
-| `anthropic` | `anthropic/claude-haiku-4.5` (via OpenRouter — needs `OPENROUTER_API_KEY`) |
-| `openrouter` | `google/gemini-2.5-flash-lite` |
+| `openai` | `gpt-6-luna` |
+| `anthropic` | `anthropic/claude-haiku-5` (via OpenRouter — needs `OPENROUTER_API_KEY`) |
+| `openrouter` | `google/gemini-3.5-flash-lite` |
 | `ollama` | reuses the agent's chat model (no extra model to pull) |
 
 ### Embedding model

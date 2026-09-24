@@ -24,7 +24,7 @@ When `mediaDigest` is enabled (default), kern digests images and audio once at i
 - When a user sends an image, it's saved to disk and immediately described by a vision model (~300 tokens)
 - The description is cached permanently in the media sidecar — never regenerated
 - Before model call, image references are replaced with cached text: `[Image: photo.jpg (a1b2c3d4.jpg) — A terminal showing npm install output...]`
-- Voice messages and audio files are transcribed the same way: an audio-capable model (fallback chain: `audioModel` → agent model → provider default — `google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI — then `google/gemini-3.7-flash` via OpenRouter for other providers when `OPENROUTER_API_KEY` is set) produces a transcript, cached in the same `description` field. Telegram voice notes (`.oga`, ogg/opus) are sent as-is — Gemini accepts them natively, no transcoding. Audio over 20 MB is skipped (logged).
+- Voice messages and audio files are transcribed the same way: an audio-capable model (fallback chain: `audioModel` → agent model → provider default — `google/gemini-3.8-flash` on OpenRouter, `gpt-audio-mini` on OpenAI — then `google/gemini-3.8-flash` via OpenRouter for other providers when `OPENROUTER_API_KEY` is set) produces a transcript, cached in the same `description` field. Telegram voice notes (`.oga`, ogg/opus) are sent as-is — Gemini accepts them natively, no transcoding. Audio over 20 MB is skipped (logged).
 - On cache miss (e.g. old images from before digest was enabled), digest is triggered on the fly
 
 This means:
@@ -54,7 +54,7 @@ Examples:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `mediaDigest` | `true` | Enable image pre-digest pipeline: vision model describes images on arrival, caches descriptions, replaces raw images with text in context |
-| `mediaModel` | `""` | Vision model for descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default (e.g. `gpt-4.1-mini` for OpenAI, `claude-sonnet-4-6` for Anthropic) |
+| `mediaModel` | `""` | Vision model for descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default (e.g. `gpt-6-luna` for OpenAI, `claude-sonnet-5` for Anthropic, `google/gemini-3.8-flash` for OpenRouter) |
 | `mediaContext` | `0` | How many recent turns resolve raw media Buffers to the model. 0 = never send raw binary (descriptions or placeholders only) |
 
 ## Message format
