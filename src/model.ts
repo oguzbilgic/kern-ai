@@ -150,15 +150,15 @@ export function createSummaryModel(config: KernConfig): any {
 
   switch (config.provider) {
     case "openai":
-      return client.chat("gpt-4.1-mini");
+      return client.chat("gpt-6-luna-pro");
     case "anthropic":
-      return client.chat("anthropic/claude-haiku-4.5");
+      return client.chat("anthropic/claude-haiku-5");
     case "openrouter":
-      return client.chat("google/gemini-2.5-flash-lite");
+      return client.chat("google/gemini-3.5-flash-lite");
     case "ollama":
       return client.chat(config.model);
     default:
-      return client.chat("google/gemini-2.5-flash-lite");
+      return client.chat("google/gemini-3.5-flash-lite");
   }
 }
 

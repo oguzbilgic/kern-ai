@@ -221,9 +221,9 @@ export function saveMedia(
 
 /** Known vision-capable models per provider, used as last-resort fallback. */
 const VISION_FALLBACKS: Record<string, string> = {
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-4.1-mini",
-  openrouter: "openai/gpt-4.1-mini",
+  anthropic: "claude-sonnet-5",
+  openai: "gpt-6-luna-pro",
+  openrouter: "google/gemini-3.8-flash",
 };
 
 /**

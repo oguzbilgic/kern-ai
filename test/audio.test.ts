@@ -18,10 +18,10 @@ afterEach(() => {
 
 test("openrouter provider: audioModel → model → fallback, all via openrouter", () => {
   const chain = getAudioModelChain(
-    cfg({ provider: "openrouter", model: "anthropic/claude-opus-5", audioModel: "google/gemini-3.7-flash" }),
+    cfg({ provider: "openrouter", model: "anthropic/claude-opus-5", audioModel: "google/gemini-3.8-flash" }),
   );
   assert.deepEqual(chain, [
-    { modelId: "google/gemini-3.7-flash", viaOpenRouter: true },
+    { modelId: "google/gemini-3.8-flash", viaOpenRouter: true },
     { modelId: "anthropic/claude-opus-5", viaOpenRouter: true },
   ]);
 });
@@ -70,9 +70,9 @@ test("ollama provider with key: model via ollama, then openrouter fallback", () 
 
 test("dedupes audioModel identical to chat model", () => {
   const chain = getAudioModelChain(
-    cfg({ provider: "openrouter", model: "google/gemini-3.7-flash", audioModel: "google/gemini-3.7-flash" }),
+    cfg({ provider: "openrouter", model: "google/gemini-3.8-flash", audioModel: "google/gemini-3.8-flash" }),
   );
-  assert.deepEqual(chain, [{ modelId: "google/gemini-3.7-flash", viaOpenRouter: true }]);
+  assert.deepEqual(chain, [{ modelId: "google/gemini-3.8-flash", viaOpenRouter: true }]);
 });
 
 test("mime map covers telegram voice and common formats, not video", () => {
