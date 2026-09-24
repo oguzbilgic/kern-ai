@@ -6,7 +6,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 ```json
 {
-  "model": "anthropic/claude-opus-4.8",
+  "model": "google/gemini-3.8-flash",
   "provider": "openrouter",
   "toolScope": "full"
 }
@@ -17,7 +17,7 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | Field | Default | Description |
 |-------|---------|-------------|
 | `name` | directory name | Agent name. Auto-set to directory basename on first startup if missing. Exposed in `/status` response. |
-| `model` | `anthropic/claude-opus-4.8` | Model ID. Format depends on provider. |
+| `model` | `google/gemini-3.8-flash` | Model ID. Format depends on provider. |
 | `provider` | `openrouter` | API provider: `openrouter`, `anthropic`, `openai`, `ollama` |
 | `toolScope` | `full` | Tool access level: `full`, `write`, `read` |
 | `maxSteps` | `30` | Max tool-use steps per message |
@@ -50,9 +50,9 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 ### Providers
 
-- **openrouter** — routes to cheapest provider. Model IDs like `anthropic/claude-opus-4.8`. Uses OpenAI-compatible chat completions API.
-- **anthropic** — direct Anthropic API. Model IDs like `claude-opus-4-8`.
-- **openai** — OpenAI or any OpenAI-compatible endpoint. Model IDs like `gpt-5.5`. Set `OPENAI_BASE_URL` in `.env` to route to Azure OpenAI, LiteLLM, or other compatible gateways (default: `https://api.openai.com/v1`). With a custom base URL, requests use the Chat Completions API.
+- **openrouter** — routes to cheapest provider. Model IDs like `google/gemini-3.8-flash`, `anthropic/claude-opus-5.5`. Uses OpenAI-compatible chat completions API.
+- **anthropic** — direct Anthropic API. Model IDs like `claude-opus-5-5`.
+- **openai** — OpenAI or any OpenAI-compatible endpoint. Model IDs like `gpt-6-sol`. Set `OPENAI_BASE_URL` in `.env` to route to Azure OpenAI, LiteLLM, or other compatible gateways (default: `https://api.openai.com/v1`). With a custom base URL, requests use the Chat Completions API.
 - **ollama** — local Ollama server. Model IDs match Ollama model names like `gemma4:31b`. Set `OLLAMA_BASE_URL` in `.env` for remote servers (default: `http://localhost:11434`).
 
 ### Summary model

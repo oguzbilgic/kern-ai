@@ -7,24 +7,34 @@ import { startAgent } from "./daemon.js";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
 
+// Default models per provider
+export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+  openrouter: "google/gemini-3.8-flash",
+  anthropic: "claude-opus-5-5",
+  openai: "gpt-6-sol",
+  ollama: "gemma4:31b",
+};
+
 // Fallback models used when live fetch fails (e.g. no network, bad key)
 const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
   openrouter: [
-    { name: "Claude Opus 4.8", value: "anthropic/claude-opus-4.8" },
-    { name: "Claude Fable 5", value: "anthropic/claude-fable-5" },
-    { name: "Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4.6" },
-    { name: "GPT-5.5", value: "openai/gpt-5.5" },
-    { name: "Gemini 3.5 Flash", value: "google/gemini-3.5-flash" },
+    { name: "Gemini 3.8 Flash", value: "google/gemini-3.8-flash" },
+    { name: "Claude Opus 5.5", value: "anthropic/claude-opus-5.5" },
+    { name: "Claude Fable 5.1", value: "anthropic/claude-fable-5.1" },
+    { name: "Claude Sonnet 5", value: "anthropic/claude-sonnet-5" },
+    { name: "GPT-6 Sol", value: "openai/gpt-6-sol" },
+    { name: "Qwen 3.8 27B", value: "qwen/qwen3.8-27b" },
   ],
   anthropic: [
-    { name: "Claude Opus 4.8", value: "claude-opus-4-8" },
-    { name: "Claude Fable 5", value: "claude-fable-5" },
-    { name: "Claude Sonnet 4.6", value: "claude-sonnet-4-6" },
+    { name: "Claude Opus 5.5", value: "claude-opus-5-5" },
+    { name: "Claude Fable 5.1", value: "claude-fable-5-1" },
+    { name: "Claude Sonnet 5", value: "claude-sonnet-5" },
   ],
   openai: [
-    { name: "GPT-5.5", value: "gpt-5.5" },
-    { name: "GPT-5.5 Pro", value: "gpt-5.5-pro" },
-    { name: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
+    { name: "GPT-6 Sol", value: "gpt-6-sol" },
+    { name: "GPT-6 Sol Pro", value: "gpt-6-sol-pro" },
+    { name: "GPT-6 Luna Pro", value: "gpt-6-luna-pro" },
+    { name: "GPT-6 Astra", value: "gpt-6-astra" },
   ],
   ollama: [
     { name: "Gemma 4 31B", value: "gemma4:31b" },
@@ -322,7 +332,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     let model = flags.model;
     if (!model) {
       const choices = await getModelChoices(provider, apiKey);
-      model = choices[0]?.value || "anthropic/claude-opus-4.8";
+      model = choices[0]?.value || DEFAULT_PROVIDER_MODELS[provider] || "google/gemini-3.8-flash";
     }
     const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
     const telegramToken = flags["telegram-token"] || "";

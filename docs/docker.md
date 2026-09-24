@@ -40,7 +40,7 @@ docker run -d --restart=unless-stopped \
 | `OPENROUTER_API_KEY` | Yes (or provider-specific key) | — |
 | `KERN_AUTH_TOKEN` | No | Auto-generated on first run |
 | `KERN_NAME` | No | `agent` (directory basename) |
-| `KERN_MODEL` | No | `anthropic/claude-opus-4.6` |
+| `KERN_MODEL` | No | `google/gemini-3.8-flash` |
 | `KERN_PROVIDER` | No | `openrouter` |
 | `KERN_PORT` | No | `4100` |
 | `TELEGRAM_BOT_TOKEN` | No | — |

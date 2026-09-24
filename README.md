@@ -161,7 +161,7 @@ First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair w
 
 ```json
 {
-  "model": "anthropic/claude-opus-4.6",
+  "model": "google/gemini-3.8-flash",
   "provider": "openrouter",
   "toolScope": "full",
   "maxContextTokens": 100000,

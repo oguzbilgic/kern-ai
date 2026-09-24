@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Improvements
+- **Updated default and fallback models** — default OpenRouter model is now `google/gemini-3.8-flash`; Anthropic defaults to `claude-opus-5-5`; OpenAI defaults to `gpt-6-sol`. `kern init` fallback lists updated to current model generations across OpenRouter, Anthropic, and OpenAI.
+
 ### Docker
 - **Mount agent home directory at `/home/agent` with workspace at `/home/agent/workspace`** — switches container user to `agent` with home `/home/agent` and default workspace at `/home/agent/workspace`. Mounting `-v <volume>:/home/agent` persists the agent's full user environment (user-space `npm install -g` in `~/.npm-global`, `pip install` in `~/.local`, SSH keys, git configuration, and shell history) alongside its workspace, bringing Docker parity with Linux multi-tenant agent host setups.
 

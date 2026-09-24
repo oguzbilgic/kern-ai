@@ -23,12 +23,12 @@ Create a new agent or reconfigure an existing one.
 
 ```bash
 kern init my-agent --api-key sk-or-...
-kern init my-agent --api-key sk-or-... --provider anthropic --model claude-opus-4.6
+kern init my-agent --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
 kern init my-agent --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
 kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b
 ```
 
-Defaults to `openrouter` + `claude-opus-4.6` when flags are used. For Ollama, `--api-key` is the server URL.
+Defaults to `openrouter` + `google/gemini-3.8-flash` when flags are used. For Ollama, `--api-key` is the server URL.
 
 ---
 
@@ -92,7 +92,7 @@ kern run --init-if-needed /home/agent/workspace
 
 Environment variables used during scaffold:
 - `KERN_NAME` — agent name (default: directory basename)
-- `KERN_MODEL` — model identifier (default: `anthropic/claude-opus-4.6`)
+- `KERN_MODEL` — model identifier (default: `google/gemini-3.8-flash`)
 - `KERN_PROVIDER` — provider name (default: `openrouter`)
 - `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_BASE_URL` — written to `.kern/.env`
 - `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` — written to `.kern/.env` if set
