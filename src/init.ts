@@ -410,11 +410,24 @@ export interface ScaffoldOpts {
   telegramToken: string;
   slackBotToken: string;
   slackAppToken: string;
+  matrixHomeserver?: string;
+  matrixUserId?: string;
+  matrixAccessToken?: string;
+  discordToken?: string;
+  nostrNsec?: string;
+  nostrRelays?: string;
+  ircUrl?: string;
   skipStart?: boolean;
 }
 
 export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
-  const { name, dir, provider, model, apiKey, envVar, telegramToken, slackBotToken, slackAppToken, skipStart } = opts;
+  const {
+    name, dir, provider, model, apiKey, envVar,
+    telegramToken, slackBotToken, slackAppToken,
+    matrixHomeserver, matrixUserId, matrixAccessToken,
+    discordToken, nostrNsec, nostrRelays, ircUrl,
+    skipStart,
+  } = opts;
 
   const dirExists = existsSync(dir);
   print("");
@@ -462,6 +475,27 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
     envLines.push(`SLACK_APP_TOKEN=${slackAppToken}`);
   } else {
     envLines.push(`# SLACK_APP_TOKEN=`);
+  }
+  if (matrixHomeserver) {
+    envLines.push(`MATRIX_HOMESERVER=${matrixHomeserver}`);
+  }
+  if (matrixUserId) {
+    envLines.push(`MATRIX_USER_ID=${matrixUserId}`);
+  }
+  if (matrixAccessToken) {
+    envLines.push(`MATRIX_ACCESS_TOKEN=${matrixAccessToken}`);
+  }
+  if (discordToken) {
+    envLines.push(`DISCORD_TOKEN=${discordToken}`);
+  }
+  if (nostrNsec) {
+    envLines.push(`NOSTR_NSEC=${nostrNsec}`);
+  }
+  if (nostrRelays) {
+    envLines.push(`NOSTR_RELAYS=${nostrRelays}`);
+  }
+  if (ircUrl) {
+    envLines.push(`IRC_URL=${ircUrl}`);
   }
 
   // .gitignore

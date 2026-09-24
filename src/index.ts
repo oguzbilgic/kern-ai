@@ -413,6 +413,13 @@ async function main() {
         telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",
         slackBotToken: process.env.SLACK_BOT_TOKEN || "",
         slackAppToken: process.env.SLACK_APP_TOKEN || "",
+        matrixHomeserver: process.env.MATRIX_HOMESERVER || "",
+        matrixUserId: process.env.MATRIX_USER_ID || "",
+        matrixAccessToken: process.env.MATRIX_ACCESS_TOKEN || "",
+        discordToken: process.env.DISCORD_TOKEN || "",
+        nostrNsec: process.env.NOSTR_NSEC || "",
+        nostrRelays: process.env.NOSTR_RELAYS || "",
+        ircUrl: process.env.IRC_URL || "",
       });
     }
 

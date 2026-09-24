@@ -5,7 +5,7 @@
 ### Docker
 - **Mount agent home directory at `/home/agent` with workspace at `/home/agent/workspace`** — switches container user to `agent` with home `/home/agent` and default workspace at `/home/agent/workspace`. Mounting `-v <volume>:/home/agent` persists the agent's full user environment (user-space `npm install -g` in `~/.npm-global`, `pip install` in `~/.local`, SSH keys, git configuration, and shell history) alongside its workspace, bringing Docker parity with Linux multi-tenant agent host setups.
 
-  **New agent (init)** — auto-scaffolds `workspace/.kern/config.json` with the agent name and writes the provider key and Telegram/Slack tokens to `.kern/.env`:
+  **New agent (init)** — auto-scaffolds `workspace/.kern/config.json` with the agent name and persists provider keys and all configured interface credentials (Telegram, Slack, Matrix, Discord, Nostr, IRC) to `.kern/.env`:
   ```bash
   docker run -d --restart=unless-stopped \
     --name bob \

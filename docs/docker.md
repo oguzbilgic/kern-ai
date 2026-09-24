@@ -31,7 +31,7 @@ docker run -d --restart=unless-stopped \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-*(Note: during initial scaffold, the provider API key and Telegram/Slack tokens are written to `.kern/.env`. Other interfaces like Matrix, Discord, or IRC can be added directly to `workspace/.kern/.env` to run without `-e` flags).*
+*(Note: during initial scaffold, provider keys and all configured interface credentials — Telegram, Slack, Matrix, Discord, Nostr, IRC — are automatically saved to `workspace/.kern/.env`).*
 
 ## Environment variables
 
@@ -46,6 +46,13 @@ docker run -d --restart=unless-stopped \
 | `TELEGRAM_BOT_TOKEN` | No | — |
 | `SLACK_BOT_TOKEN` | No | — |
 | `SLACK_APP_TOKEN` | No | — |
+| `MATRIX_HOMESERVER` | No | — |
+| `MATRIX_USER_ID` | No | — |
+| `MATRIX_ACCESS_TOKEN` | No | — |
+| `DISCORD_TOKEN` | No | — |
+| `NOSTR_NSEC` | No | — |
+| `NOSTR_RELAYS` | No | — |
+| `IRC_URL` | No | — |
 
 For other providers, pass the matching API key:
 
