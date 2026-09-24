@@ -22,7 +22,7 @@ On first run, the agent writes its name, model, and port into `workspace/.kern/c
 
 ### 2. Running an existing agent
 
-Once initialized (or if credentials are saved in `workspace/.kern/.env`), the container needs no environment variables at all:
+Once initialized, all config, conversation history, memory database, and user-installed tools (`npm install -g`, `pip install`) live permanently in the volume. If API keys and bot tokens are stored in `workspace/.kern/.env`, the container needs no environment variables at all:
 
 ```bash
 docker run -d --restart=unless-stopped \
@@ -31,7 +31,7 @@ docker run -d --restart=unless-stopped \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-Everything — credentials, model selection, conversation history, memory database, and user-installed tools (`npm install -g`, `pip install`) — lives permanently in the `bob-home` volume. Upgrading the agent or recreating the container is just this one command.
+*(Note: during initial scaffold, the provider API key and Telegram/Slack tokens are written to `.kern/.env`. Other interfaces like Matrix, Discord, or IRC can be added directly to `workspace/.kern/.env` to run without `-e` flags).*
 
 ## Environment variables
 
