@@ -5,8 +5,8 @@
 ### Improvements
 - **Updated default, fallback, and secondary models** — refreshed default models and fallback lists for current frontier generations:
   - **Primary chat**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-opus-5-5`, OpenAI to `gpt-6-sol`. `kern init` fallback choices refreshed across all providers.
-  - **Background summary**: OpenRouter defaults to `google/gemini-3.5-flash-lite`, Anthropic to `claude-haiku-5` (via OpenRouter), OpenAI to `gpt-6-luna-pro`.
-  - **Media vision digest**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-sonnet-5`, OpenAI to `gpt-6-luna-pro`.
+  - **Background summary**: OpenRouter defaults to `google/gemini-3.5-flash-lite`, Anthropic to `claude-haiku-5` (via OpenRouter), OpenAI to `gpt-6-luna`.
+  - **Media vision digest**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-sonnet-5`, OpenAI to `gpt-6-luna`.
   - **Audio transcription**: OpenRouter fallback defaults to `google/gemini-3.8-flash`.
 
 ### Docker

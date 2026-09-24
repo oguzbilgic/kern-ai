@@ -54,7 +54,7 @@ Examples:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `mediaDigest` | `true` | Enable image pre-digest pipeline: vision model describes images on arrival, caches descriptions, replaces raw images with text in context |
-| `mediaModel` | `""` | Vision model for descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default (e.g. `gpt-6-luna-pro` for OpenAI, `claude-sonnet-5` for Anthropic, `google/gemini-3.8-flash` for OpenRouter) |
+| `mediaModel` | `""` | Vision model for descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default (e.g. `gpt-6-luna` for OpenAI, `claude-sonnet-5` for Anthropic, `google/gemini-3.8-flash` for OpenRouter) |
 | `mediaContext` | `0` | How many recent turns resolve raw media Buffers to the model. 0 = never send raw binary (descriptions or placeholders only) |
 
 ## Message format

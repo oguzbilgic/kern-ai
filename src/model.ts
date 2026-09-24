@@ -89,11 +89,11 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
  *
  * Model selection:
  * - If `config.summaryModel` is set, use it. For ollama/openai agents, a
- *   namespaced ID (contains `/`, e.g. `openai/gpt-6-luna-pro`) is routed via
+ *   namespaced ID (contains `/`, e.g. `openai/gpt-6-luna`) is routed via
  *   OpenRouter when OPENROUTER_API_KEY is set — the agent's own provider
  *   can't serve those IDs. Ollama `hf.co/...` IDs stay local.
  * - Otherwise, use a provider-specific default:
- *   - openai: gpt-6-luna-pro
+ *   - openai: gpt-6-luna
  *   - anthropic: anthropic/claude-haiku-5 (via OpenRouter)
  *   - openrouter: google/gemini-3.5-flash-lite
  *   - ollama: reuses the agent's chat model (avoids forcing users to pull
@@ -150,7 +150,7 @@ export function createSummaryModel(config: KernConfig): any {
 
   switch (config.provider) {
     case "openai":
-      return client.chat("gpt-6-luna-pro");
+      return client.chat("gpt-6-luna");
     case "anthropic":
       return client.chat("anthropic/claude-haiku-5");
     case "openrouter":

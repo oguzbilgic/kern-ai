@@ -33,7 +33,7 @@ const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
   openai: [
     { name: "GPT-6 Sol", value: "gpt-6-sol" },
     { name: "GPT-6 Sol Pro", value: "gpt-6-sol-pro" },
-    { name: "GPT-6 Luna Pro", value: "gpt-6-luna-pro" },
+    { name: "GPT-6 Luna", value: "gpt-6-luna" },
     { name: "GPT-6 Astra", value: "gpt-6-astra" },
   ],
   ollama: [
