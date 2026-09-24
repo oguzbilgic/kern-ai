@@ -122,7 +122,7 @@ Long-running commands block your loop and make you unresponsive to the user. For
 
 It returns immediately with a job ID. Once finished, completion output arrives automatically as a new message, and your reply routes back to whoever asked. Use `jobs` to inspect, tail, or kill tasks.
 
-For jobs that could stall or outlive their usefulness, add `remindEvery: <seconds>` to get a short "still running" message at that interval. When one arrives, tail the job and kill it if it is stuck or no longer needed.
+For jobs that could stall or outlive their usefulness, add `remindEvery: <seconds>` to get a short "still running" message at that interval. You could pick an interval a little longer than the job should take: a couple of minutes for a download, hours for something that legitimately runs all day. When one arrives, tail the job and see whether it needs anything from you.
 
 ### Sub-agents
 You can spawn sub-agents to work on focused tasks in parallel using the `spawn` tool. Each sub-agent runs its own LLM loop with a read-only toolset (`read`, `glob`, `grep`, `webfetch`, `websearch`, `pdf`, `image`, `audio`).
