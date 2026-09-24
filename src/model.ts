@@ -1,5 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { embed } from "ai";
 import type { KernConfig } from "./config.js";
@@ -9,6 +10,15 @@ import { log } from "./log.js";
 function openaiBaseURL(): string | undefined {
   const raw = process.env.OPENAI_BASE_URL?.trim().replace(/\/+$/, "");
   return raw || undefined;
+}
+
+/** Google's own OpenAI-compatible endpoint, which needs its own provider. */
+function isGoogleEndpoint(baseURL: string): boolean {
+  try {
+    return new URL(baseURL).hostname === "generativelanguage.googleapis.com";
+  } catch {
+    return false;
+  }
 }
 
 const OPENROUTER_HEADERS = {
@@ -224,6 +234,20 @@ export function createModel(config: KernConfig): any {
     }
     case "openai": {
       const baseURL = openaiBaseURL();
+      // Google omits `index` on streamed tool-call deltas, which this provider's
+      // schema requires, so the first tool call fails validation. It also wants
+      // `thought_signature` echoed on the next request, and the compatible
+      // provider only re-serializes that under the `google` providerOptions
+      // namespace, which the provider name selects (vercel/ai#18962).
+      // includeUsage requests stream usage, which this provider omits by default.
+      if (baseURL && isGoogleEndpoint(baseURL)) {
+        return createOpenAICompatible({
+          name: "google",
+          baseURL,
+          apiKey: process.env.OPENAI_API_KEY,
+          includeUsage: true,
+        }).chatModel(config.model);
+      }
       const openai = createOpenAI({ baseURL });
       // Custom OpenAI-compatible endpoints (Azure, LiteLLM, local proxies)
       // typically only support the Chat Completions API, not the Responses API
