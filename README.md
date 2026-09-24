@@ -66,7 +66,7 @@ kern tui
 
 The init wizard scaffolds your agent, asks for a provider and API key, then starts it. `kern tui` opens an interactive chat. `kern web start` serves the web UI.
 
-For automation: `kern init my-agent --api-key sk-or-...` (no prompts, defaults to openrouter + opus 4.6). For Ollama: `kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
+For automation: `kern init my-agent --api-key sk-or-...` (no prompts, defaults to openrouter + gemini 3.8 flash). For Ollama: `kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
 
 ## Dashboards
 
