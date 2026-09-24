@@ -4,15 +4,34 @@ Run a kern agent as a Docker container. All state persists in a mounted volume.
 
 ## Quick start
 
+### 1. Initialize a new agent
+
+To scaffold a fresh agent, pass its name and API key(s). This creates the agent workspace, generates its configuration, and starts polling on your configured interfaces:
+
 ```bash
-docker run -d \
-  -v kern-data:/home/agent \
-  -p 4100:4100 \
+docker run -d --restart=unless-stopped \
+  --name bob \
+  -v bob-home:/home/agent \
+  -e KERN_NAME=bob \
   -e OPENROUTER_API_KEY=sk-or-... \
+  -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-This starts an agent with default settings. The agent scaffolds its workspace on first run if no config exists.
+On first run, the agent writes its name, model, and port into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`.
+
+### 2. Running an existing agent
+
+Once initialized (or if credentials are saved in `workspace/.kern/.env`), the container needs no environment variables at all:
+
+```bash
+docker run -d --restart=unless-stopped \
+  --name bob \
+  -v bob-home:/home/agent \
+  ghcr.io/oguzbilgic/kern-ai
+```
+
+Everything — credentials, model selection, conversation history, memory database, and user-installed tools (`npm install -g`, `pip install`) — lives permanently in the `bob-home` volume. Upgrading the agent or recreating the container is just this one command.
 
 ## Environment variables
 
