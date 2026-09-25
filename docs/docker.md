@@ -82,6 +82,29 @@ If you only want to mount a local directory for the workspace without persisting
 -v $(pwd):/home/agent/workspace
 ```
 
+### Custom workspace directory
+
+By default, the container starts inside `/home/agent/workspace`. If your agent lives in a different subfolder within the mounted volume (e.g. named after the agent or repo), override the working directory with `-w` (or `working_dir` in Docker Compose):
+
+**Docker CLI:**
+```bash
+docker run -d \
+  -v kern-data:/home/agent \
+  -w /home/agent/my-agent \
+  ghcr.io/oguzbilgic/kern-ai
+```
+
+**Docker Compose:**
+```yaml
+services:
+  agent:
+    image: ghcr.io/oguzbilgic/kern-ai:latest
+    restart: unless-stopped
+    volumes:
+      - kern-data:/home/agent
+    working_dir: /home/agent/my-agent
+```
+
 ## Pre-installed tools
 
 The base image includes: `git`, `ssh`, `curl`, `wget`, `jq`, `python3`, `pip`, `unzip`, `build-essential`.
