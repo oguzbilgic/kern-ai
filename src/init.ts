@@ -582,7 +582,7 @@ node_modules/
     print("");
     await startAgent(dir);
     const rel = relative(resolve("."), dir);
-    const here = rel === "" ? "" : ` ${rel.startsWith("..") ? dir : rel}`;
+    const here = rel === "" ? "" : ` ${rel.startsWith("..") ? dir : rel}/`;
     print("");
     print("  Next steps:");
     print(`    \x1b[36mkern tui${here}\x1b[0m            terminal chat`);

@@ -60,13 +60,13 @@ Agent state lives in the `my-agent` volume mounted to `/home/agent` — sessions
 
 ```bash
 npm install -g kern-ai
-kern init my-agent
-kern tui my-agent
+kern init my-agent/
+kern tui my-agent/
 ```
 
 The init wizard scaffolds your agent, asks for a provider and API key, then starts it. `kern tui` opens an interactive chat. `kern web start` serves the web UI.
 
-For automation: `kern init my-agent --api-key sk-or-...` (no prompts, defaults to openrouter + gemini 3.8 flash). For Ollama: `kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
+For automation: `kern init my-agent/ --api-key sk-or-...` (no prompts, defaults to openrouter + gemini 3.8 flash). For Ollama: `kern init my-agent/ --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
 
 ## Dashboards
 
@@ -127,7 +127,7 @@ kern backup [path]        # backup agent to .tar.gz
 kern web <run|start|status|stop> [--port 8080] [--host 0.0.0.0]  # static web UI server
 ```
 
-Run several agents by giving each its own directory: `kern start ~/alice`, `kern start ~/bob`.
+Run several agents by giving each its own directory: `kern start ~/alice/`, `kern start ~/bob/`.
 
 ### Connecting
 

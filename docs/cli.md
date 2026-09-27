@@ -4,7 +4,7 @@ The `kern` command-line interface manages agent lifecycles, background daemons, 
 
 An agent is a directory containing `.kern/`. There is no registry and no global config file: the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes an optional `[path]`, which defaults to the current directory. Nothing is written outside the agent directory except runtime state under `~/.kern/` (the web daemon's state file and log, and backups).
 
-To run several agents, give each its own directory: `kern start ~/alice`, `kern start ~/bob`, `kern status ~/bob`.
+To run several agents, give each its own directory: `kern start ~/alice/`, `kern start ~/bob/`, `kern status ~/bob/`.
 
 ## General
 
@@ -20,17 +20,17 @@ kern
 
 Create a new agent or reconfigure an existing one.
 
-- **Target**: `path` defaults to the current directory. A bare name such as `kern init my-agent` scaffolds into `./my-agent/`.
+- **Target**: `path` defaults to the current directory. A bare name such as `kern init my-agent/` scaffolds into `./my-agent/`; the trailing slash is optional but makes it clear it is a folder.
 - **New agent**: interactive wizard asks for name, provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, and starts the agent.
 - **Existing agent**: if the directory already has `.kern/`, shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
 - **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI. The agent name is the directory's basename.
 
 ```bash
-kern init my-agent --api-key sk-or-...
-kern init my-agent --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
-kern init my-agent --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
-kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b
+kern init my-agent/ --api-key sk-or-...
+kern init my-agent/ --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
+kern init my-agent/ --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
+kern init my-agent/ --provider ollama --api-key http://localhost:11434 --model gemma4:31b
 kern init . --api-key sk-or-...          # adopt the current directory
 ```
 
@@ -57,7 +57,7 @@ Start the agent as a background daemon.
 
 ```bash
 kern start            # agent in the current directory
-kern start ~/atlas    # agent elsewhere
+kern start ~/atlas/    # agent elsewhere
 ```
 
 ### kern stop [path]
@@ -66,7 +66,7 @@ Stop the agent via its PID file. Sends SIGTERM and removes `<path>/.kern/agent.p
 
 ```bash
 kern stop
-kern stop ~/atlas
+kern stop ~/atlas/
 ```
 
 ### kern restart [path]
@@ -74,7 +74,7 @@ kern stop ~/atlas
 Stop then start. 500ms delay between for clean shutdown.
 
 ```bash
-kern restart ~/atlas
+kern restart ~/atlas/
 ```
 
 ### kern run [path]
@@ -83,7 +83,7 @@ Run the agent in the foreground (for development, debugging, and Docker). Starts
 
 ```bash
 kern run
-kern run ./my-agent
+kern run ./my-agent/
 ```
 
 #### --init-if-needed
@@ -121,7 +121,7 @@ Aliases: `kern list`, `kern ls`
 
 ```bash
 kern status
-kern status ~/atlas
+kern status ~/atlas/
 ```
 
 Run in a directory without `.kern/`, it explains where to look. If an old `~/.kern/config.json` from a previous kern version still lists agents, it prints those paths once as a hint and suggests deleting the file; that file is never read for anything else.
@@ -140,7 +140,7 @@ Interactive terminal chat. Connects to the running daemon via HTTP/SSE.
 
 ```bash
 kern tui
-kern tui ~/atlas
+kern tui ~/atlas/
 ```
 
 ### kern logs [path] [-f] [-n N] [--level LEVEL]
@@ -155,7 +155,7 @@ Follow agent logs. Structured, leveled, colored output.
 
 ```bash
 kern logs -f
-kern logs ~/atlas -n 100 --level error
+kern logs ~/atlas/ -n 100 --level error
 ```
 
 ### kern pair [path] <code>
@@ -164,7 +164,7 @@ Approve a pairing code from the command line. No agent interaction needed. With 
 
 ```bash
 kern pair KERN-7X4M
-kern pair ~/atlas KERN-7X4M
+kern pair ~/atlas/ KERN-7X4M
 ```
 
 ---
@@ -207,7 +207,7 @@ Backup an agent to a `.tar.gz` file.
 
 ```bash
 kern backup
-kern backup ~/atlas
+kern backup ~/atlas/
 ```
 
 ### kern restore <file>

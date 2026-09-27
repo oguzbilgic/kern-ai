@@ -53,7 +53,7 @@ async function showHelp() {
   w(`    ${cyan("kern scripts")} ${dim("recall-health <recall.db>")}     analyze embedding coverage, vector health, batch blockers`);
   w(`    ${cyan("kern scripts")} ${dim("recall-repair <recall.db>")}     repair missing vectors and backfill orphaned chunks (dry-run by default)`);
   w("");
-  w(`  ${dim("Multiple agents: one directory each, e.g.")} kern start ~/alice ${dim("and")} kern start ~/bob`);
+  w(`  ${dim("Multiple agents: one directory each, e.g.")} kern start ~/alice/ ${dim("and")} kern start ~/bob/`);
   w("");
 }
 

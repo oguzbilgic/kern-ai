@@ -109,7 +109,7 @@ export async function restoreAgent(tarFile?: string): Promise<void> {
   }
 
   console.log("");
-  console.log(`  Run: ${dim(`kern start ${folderName}`)}`);
+  console.log(`  Run: ${dim(`kern start ${folderName}/`)}`);
   console.log("");
   process.exit(0);
 }
