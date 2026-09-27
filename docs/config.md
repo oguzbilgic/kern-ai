@@ -124,35 +124,14 @@ Only set the API keys for providers/interfaces you use.
 **`KERN_AUTH_TOKEN`** — per-agent Bearer token required on all agent API endpoints (except `/health`).
 
 - Auto-generated on first agent start — written to `.kern/.env` automatically
-- TUI and web proxy read it from the agent's `.kern/.env` automatically
-- Web proxy injects it into proxied requests — the browser never sees agent tokens
+- The TUI reads it from the agent's `.kern/.env` automatically
+- The web UI asks for it when you add the agent in the sidebar
 
-**`KERN_PROXY_TOKEN`** — proxy auth token stored in `~/.kern/.env`.
+You never need to set it manually unless you want a specific value.
 
-- Auto-generated on first `kern proxy start`
-- Required on all `/api/*` proxy routes (Bearer header or `?token=` query param)
-- Printed by `kern proxy start` and `kern proxy token`
-- Legacy `KERN_WEB_TOKEN` also accepted as fallback
+## No global config
 
-You never need to set either token manually unless you want specific values.
-
-## Global: ~/.kern/config.json
-
-Global settings and agent registry. Optional — defaults apply if the file doesn't exist.
-
-```json
-{
-  "web_port": 8080,
-  "proxy_port": 9000,
-  "agents": ["/home/user/my-agent"]
-}
-```
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `web_port` | `8080` | Port for the `kern web` static file server. |
-| `proxy_port` | `9000` | Port for the `kern proxy` authenticated reverse proxy. |
-| `agents` | `[]` | List of registered agent directory paths. Managed automatically by `kern init` and `kern start`. |
+There is no `~/.kern/config.json`. The only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. The web daemon's port and host are command flags (`kern web start --port 8080 --host 0.0.0.0`); see [docs/cli.md](cli.md#kern-web-runstartstatusstop---port-p---host-h).
 
 ## .kern/ local files
 

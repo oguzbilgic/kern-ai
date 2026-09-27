@@ -25,20 +25,35 @@ import { join, resolve } from "path";
 import { existsSync } from "fs";
 import { homedir } from "os";
 
-import { loadRegistry, readAgentInfo, isProcessRunning, type AgentInfo } from "./registry.js";
-import { loadGlobalConfig, getProxyToken } from "./global-config.js";
+import { isProcessRunning, type AgentInfo } from "./agent-dir.js";
+import { randomBytes } from "crypto";
+import { appendFile } from "fs/promises";
+
+/**
+ * NOTE: the proxy is not reachable from the CLI in this version. It needs agent
+ * discovery, which returns with fleet mode. Until then it sees no agents.
+ */
+async function loadAgents(): Promise<AgentInfo[]> {
+  return [];
+}
+
+const PROXY_ENV_FILE = join(homedir(), ".kern", ".env");
+const DEFAULT_PROXY_PORT = 9000;
+
+/** Load or auto-generate the proxy auth token from ~/.kern/.env */
+async function getProxyToken(): Promise<string> {
+  if (existsSync(PROXY_ENV_FILE)) {
+    const content = await readFile(PROXY_ENV_FILE, "utf-8");
+    const match = content.match(/^KERN_PROXY_TOKEN=(.+)$/m)
+      || content.match(/^KERN_WEB_TOKEN=(.+)$/m);
+    if (match) return match[1].trim();
+  }
+  const token = randomBytes(16).toString("hex");
+  await appendFile(PROXY_ENV_FILE, `${existsSync(PROXY_ENV_FILE) ? "\n" : ""}KERN_PROXY_TOKEN=${token}\n`);
+  return token;
+}
 
 let proxyToken: string;
-
-async function loadAgents(): Promise<AgentInfo[]> {
-  const paths = await loadRegistry();
-  const agents: AgentInfo[] = [];
-  for (const p of paths) {
-    const info = readAgentInfo(p);
-    if (info) agents.push(info);
-  }
-  return agents;
-}
 
 function log(msg: string) {
   const ts = new Date().toISOString();
@@ -182,12 +197,10 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
 async function start() {
   proxyToken = await getProxyToken();
-  const config = await loadGlobalConfig();
-  const port = config.proxy_port;
-  server.listen(port, "0.0.0.0", async () => {
+  const portIdx = process.argv.indexOf("--port");
+  const port = portIdx >= 0 ? Number(process.argv[portIdx + 1]) || DEFAULT_PROXY_PORT : DEFAULT_PROXY_PORT;
+  server.listen(port, "0.0.0.0", () => {
     log(`listening on 0.0.0.0:${port}`);
-    const pidFile = join(homedir(), ".kern", "proxy.pid");
-    await writeFile(pidFile, String(process.pid));
   });
 }
 

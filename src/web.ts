@@ -2,15 +2,15 @@
 
 /**
  * kern web — minimal static file server for the web UI.
- * No auth, no proxy, no agent discovery. For multi-agent proxy, use `kern proxy`.
+ * No auth, no proxy, no agent discovery. Port and host come from argv
+ * (`--port`, `--host`), never from a config file.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
-import { readFile, writeFile } from "fs/promises";
+import { readFile } from "fs/promises";
 import { join, resolve } from "path";
 import { existsSync } from "fs";
-import { homedir } from "os";
-import { loadGlobalConfig } from "./global-config.js";
+import { parseWebFlags } from "./web-daemon.js";
 
 function log(msg: string) {
   const ts = new Date().toISOString();
@@ -87,13 +87,21 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 });
 
-async function start() {
-  const config = await loadGlobalConfig();
-  const port = config.web_port;
-  server.listen(port, "0.0.0.0", async () => {
-    log(`listening on 0.0.0.0:${port}`);
-    const pidFile = join(homedir(), ".kern", "web.pid");
-    await writeFile(pidFile, String(process.pid));
+function start() {
+  let flags;
+  try {
+    flags = parseWebFlags(process.argv.slice(2));
+  } catch (err: any) {
+    log(`error: ${err.message}`);
+    process.exit(1);
+  }
+  const { port, host } = flags;
+  server.on("error", (err: any) => {
+    log(`error: ${err.message}`);
+    process.exit(1);
+  });
+  server.listen(port, host, () => {
+    log(`listening on ${host}:${port}`);
   });
 }
 

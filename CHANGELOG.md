@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking
+- **Directory-based local mode, no registry** — an agent is a directory containing `.kern/`. `~/.kern/config.json` and the `~/.kern/agents.json` migration are gone; the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes `[path]` (default `.`): `kern init`, `start`, `stop`, `restart`, `run`, `status`, `logs`, `tui`, `pair [path] <code>`, `backup`. `kern start` with no argument starts the agent in the current directory instead of every registered agent. `kern list` / `kern ls` are aliases of `kern status`, which prints a single card. Multi-agent development is per directory: `kern start ~/alice`, `kern start ~/bob`.
+- **Removed commands** — `kern remove` (delete the folder), `kern install` / `kern uninstall` (systemd returns with fleet mode), and `kern proxy` (needs agent discovery; `proxy.ts` stays in the tree, unwired). Each exits 1 with a message saying so.
+- **`kern web` flags** — `web_port` / `web_host` become `--port` (default 8080) and `--host` (default `0.0.0.0`) on `kern web run` and `kern web start`. `start` records `{ pid, port, host }` in `~/.kern/web.json` (replaces `web.pid`, which is still read once so an older daemon can be stopped).
+
+### Fixes
+- **`/restart` no longer depends on `PATH`** — replies `Restarting.` first, then spawns `kern restart <agent dir>` detached with the running `process.execPath` and the package's own entry point, passing the directory rather than the name. `kern start` likewise spawns with `process.execPath` instead of the bare word `node`.
+- **Sticky port fallback** — if an agent's saved port is busy at startup after the server's own retries, it picks a fresh port from 4100–4999, saves it, and logs `port :4100 in use, reassigned :4101` instead of failing. A port pinned by `KERN_PORT` is never reassigned.
+- **`kern init` on an existing agent keeps the sticky port** — reconfiguring previously rewrote `.kern/config.json` with only name, model, provider, and tool scope.
+- **Upgrade hint** — `kern status` in a directory without `.kern/` prints the paths an old `~/.kern/config.json` still lists, once, and suggests deleting the file.
+
 ## v0.42.0
 
 ### Features

@@ -3,7 +3,6 @@ import { render, Box, Text, Static, useInput, useApp, useStdout } from "ink";
 // @ts-ignore
 import Spinner from "ink-spinner";
 import type { ServerEvent } from "./server.js";
-import { findAgent } from "./registry.js";
 import { isNoReply } from "./util.js";
 
 // --- Types ---
@@ -23,6 +22,7 @@ type RenderBlock =
 interface TuiProps {
   port: number;
   agentName: string;
+  agentDir: string;
   version: string;
   authToken?: string;
 }
@@ -382,7 +382,7 @@ function RenderBlockView({ block, width }: { block: RenderBlock; width: number }
 
 // --- App ---
 
-function App({ port, agentName, version, authToken }: TuiProps) {
+function App({ port, agentName, agentDir, version, authToken }: TuiProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const authHeaders: Record<string, string> = authToken ? { "Authorization": `Bearer ${authToken}` } : {};
@@ -524,8 +524,9 @@ function App({ port, agentName, version, authToken }: TuiProps) {
         }
         if (!aborted) {
           setConnected(false);
-          import("./registry.js").then(async ({ findAgent, isProcessRunning }) => {
-            const agent = await findAgent(agentName);
+          // After a restart the agent may have moved ports: re-read <agentDir>/.kern/
+          import("./agent-dir.js").then(({ readAgentInfo, isProcessRunning }) => {
+            const agent = readAgentInfo(agentDir);
             if (agent?.port && agent.port !== currentPort && agent.pid && isProcessRunning(agent.pid)) {
               setCurrentPort(agent.port);
             } else {
@@ -536,8 +537,9 @@ function App({ port, agentName, version, authToken }: TuiProps) {
       } catch {
         if (!aborted) {
           setConnected(false);
-          import("./registry.js").then(async ({ findAgent, isProcessRunning }) => {
-            const agent = await findAgent(agentName);
+          // After a restart the agent may have moved ports: re-read <agentDir>/.kern/
+          import("./agent-dir.js").then(({ readAgentInfo, isProcessRunning }) => {
+            const agent = readAgentInfo(agentDir);
             if (agent?.port && agent.port !== currentPort && agent.pid && isProcessRunning(agent.pid)) {
               setCurrentPort(agent.port);
             } else {
@@ -622,7 +624,7 @@ function App({ port, agentName, version, authToken }: TuiProps) {
 
 // --- Entry ---
 
-export async function connectTui(port: number, agentName: string, authToken?: string): Promise<void> {
+export async function connectTui(port: number, agentName: string, agentDir: string, authToken?: string): Promise<void> {
   const headers: Record<string, string> = {};
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
@@ -651,7 +653,7 @@ export async function connectTui(port: number, agentName: string, authToken?: st
   } catch {}
 
   const { waitUntilExit } = render(
-    <App port={port} agentName={agentName} version={version} authToken={authToken} />,
+    <App port={port} agentName={agentName} agentDir={agentDir} version={version} authToken={authToken} />,
     { exitOnCtrlC: true }
   );
   await waitUntilExit();

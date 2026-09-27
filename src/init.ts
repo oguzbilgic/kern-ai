@@ -1,8 +1,8 @@
 import { mkdir, writeFile, readFile } from "fs/promises";
-import { join, resolve, basename } from "path";
+import { join, resolve, basename, relative } from "path";
 import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
-import { registerAgent, findAgent, isProcessRunning, readPid, removePidFile, assignPort } from "./registry.js";
+import { isAgentDir, readLivePid, removePidFile, assignPort } from "./agent-dir.js";
 import { startAgent } from "./daemon.js";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
@@ -160,16 +160,18 @@ function print(text: string) {
   console.log(text);
 }
 
-async function runConfig(name: string, dir: string): Promise<void> {
-  print("");
-  print(`  kern config — ${name}`);
-  print("");
-
+async function runConfig(dir: string): Promise<void> {
   // Load existing config and env
   let currentConfig: Partial<KernConfig> = {};
   try {
     currentConfig = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
   } catch {}
+  const name = currentConfig.name || basename(dir);
+
+  print("");
+  print(`  kern config — ${name}`);
+  print(`  ${dir}`);
+  print("");
 
   let currentEnv: Record<string, string> = {};
   try {
@@ -251,8 +253,9 @@ async function runConfig(name: string, dir: string): Promise<void> {
     });
   }
 
-  // Build new config
+  // Build new config (keep the sticky port and any other fields as they are)
   const config: Partial<KernConfig> = {
+    ...currentConfig,
     name,
     model,
     provider,
@@ -292,40 +295,40 @@ async function runConfig(name: string, dir: string): Promise<void> {
   print("  ✓ Config updated");
 
   // Restart if running, otherwise start
-  const agent = findAgent(name);
-  if (agent) {
-    const pid = readPid(agent.path);
-    if (pid && isProcessRunning(pid)) {
-      process.kill(pid, "SIGTERM");
-      await removePidFile(agent.path);
-      print("  ✓ Stopped");
-      await new Promise((r) => setTimeout(r, 500));
-    }
+  const pid = await readLivePid(dir);
+  if (pid) {
+    process.kill(pid, "SIGTERM");
+    await removePidFile(dir);
+    print("  ✓ Stopped");
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   print("  ✓ Starting...");
   print("");
-  await startAgent(name);
+  await startAgent(dir);
+}
+
+/**
+ * Where `kern init [path]` scaffolds: `path` as given (default `.`), or
+ * `./<name>` when a bare name is given and no such directory exists.
+ */
+export function resolveInitDir(targetArg?: string): string {
+  return resolve(targetArg ?? ".");
 }
 
 export async function runInit(targetArg?: string, flags?: Record<string, string>): Promise<void> {
-  // Check if target is an existing agent — go straight to config
-  if (targetArg && !flags) {
-    const registered = findAgent(targetArg);
-    const dir = registered ? registered.path : resolve(targetArg);
-    if (existsSync(dir) && (existsSync(join(dir, "AGENTS.md")) || existsSync(join(dir, ".kern")))) {
-      await runConfig(registered?.name || targetArg, dir);
-      return;
-    }
+  const dir = resolveInitDir(targetArg);
+
+  // Existing agent (has .kern/) — go straight to config. A directory that only
+  // has AGENTS.md is adopted by the scaffold below.
+  if (!flags && isAgentDir(dir)) {
+    await runConfig(dir);
+    return;
   }
 
   // Non-interactive mode
   if (flags && flags["api-key"]) {
-    const name = targetArg;
-    if (!name) {
-      console.error("Usage: kern init <name> --api-key <key>");
-      process.exit(1);
-    }
+    const name = basename(dir);
 
     const provider = flags.provider || "openrouter";
     const apiKey = flags["api-key"];
@@ -338,7 +341,6 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
-    const dir = resolve(name);
 
     await scaffoldAgent({
       name, dir, provider, model, apiKey, envVar,
@@ -355,11 +357,9 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   // Agent name
   const name = await input({
     message: "Agent name",
-    default: targetArg,
+    default: basename(dir),
     required: true,
   });
-
-  const dir = resolve(targetArg || name);
 
   // Provider
   const provider = await select({
@@ -576,19 +576,18 @@ node_modules/
     print("  ○ git repo (exists)");
   }
 
-  // Register and start
-  await registerAgent(dir);
-
   if (!skipStart) {
     print("");
     print("  ✓ Starting...");
     print("");
-    await startAgent(name);
+    await startAgent(dir);
+    const rel = relative(resolve("."), dir);
+    const here = rel === "" ? "" : ` ${rel.startsWith("..") ? dir : rel}`;
     print("");
     print("  Next steps:");
-    print(`    \x1b[36mkern tui\x1b[0m            terminal chat`);
+    print(`    \x1b[36mkern tui${here}\x1b[0m            terminal chat`);
     print(`    \x1b[36mkern web start\x1b[0m      browser chat`);
-    print(`    \x1b[36mkern install ${name}\x1b[0m     auto-restart + boot persistence (systemd)`);
+    print(`    \x1b[36mkern status${here}\x1b[0m         agent status`);
     print("");
   }
 }

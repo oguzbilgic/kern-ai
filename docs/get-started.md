@@ -40,15 +40,15 @@ my-agent/
 ## Start the agent
 
 ```
-kern start
+kern start my-agent
 ```
 
-The agent runs as a background daemon. Start once, connect from anywhere.
+The agent runs as a background daemon. Start once, connect from anywhere. An agent is just its directory: every command takes a path, and inside `my-agent/` you can leave it off (`kern start`, `kern status`, `kern tui`).
 
 ## Chat from the terminal
 
 ```
-kern tui
+kern tui my-agent
 ```
 
 Interactive terminal chat. Type a message, get a response. The agent has tools — it can run commands, read/write files, search the web.

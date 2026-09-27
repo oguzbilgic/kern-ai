@@ -57,7 +57,7 @@ Every subsequent Telegram/Slack/Matrix user goes through the pairing code flow.
 Three ways to approve:
 
 1. **Through the agent** — tell it "pair KERN-XXXX — that's Sarah"
-2. **CLI** — `kern pair <agent> <code>` (no agent interaction needed)
+2. **CLI** — `kern pair [path] <code>` (no agent interaction needed)
 3. **kern tool** — agent calls `kern({ action: "pair", code: "KERN-XXXX" })`
 
 ## Checking users

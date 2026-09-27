@@ -141,7 +141,7 @@ Notes:
 Interactive terminal chat. Connects to a running agent via HTTP/SSE.
 
 ```bash
-kern tui [name]
+kern tui [path]
 ```
 
 - Interface: `tui`, channel: `tui`, user: `tui`
@@ -186,21 +186,13 @@ Access control happens at the agent:
 
 2. **Direct browser connection** — when connecting from the Web UI, users enter the agent URL and token in the sidebar. The browser connects to the agent directly.
 
-### Agent discovery
+### Adding agents
 
-- **Local agents** are auto-discovered from `~/.kern/config.json`
-- **Remote servers** can be added in the sidebar ("Add server" with URL + token)
+Agents are added in the sidebar ("Add server" with URL + token). There is no automatic discovery.
 
-### Global config
+### Port and host
 
-```json
-{
-  "web_port": 9000,
-  "web_host": "0.0.0.0"
-}
-```
-
-Stored in `~/.kern/config.json`. Optional — defaults apply if missing.
+`kern web start --port 8080 --host 0.0.0.0` (both optional; these are the defaults). The same flags apply to `kern web run`.
 
 ## Telegram
 
