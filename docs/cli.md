@@ -107,7 +107,7 @@ Each agent gets a **sticky port** from 4100–4999, picked by live bind checking
 
 ### Removing an agent
 
-Agents are directories; delete the folder to remove one. `kern remove` no longer exists.
+Agents are directories; delete the folder to remove one.
 
 ---
 
@@ -188,9 +188,9 @@ kern web stop                         # stop daemon
 - `kern web start` daemonizes: `{ pid, port, host }` recorded in `~/.kern/web.json`, logs in `~/.kern/web.log`; `status` reads that file
 - Connect to agents directly from the sidebar (enter URL + token)
 
-### kern proxy, kern install, kern uninstall
+### Deprecated commands
 
-Removed. The proxy is gone; `kern install` needs systemd unit management, which returns with fleet mode. Each exits 1 with a message saying so.
+`kern remove`, `kern install`, `kern uninstall`, and `kern proxy` are deprecated. Each exits 1 and points at the CHANGELOG. Agents are directories (delete the folder to remove one); systemd support returns with fleet mode; the proxy is gone.
 
 ---
 

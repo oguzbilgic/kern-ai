@@ -105,18 +105,8 @@ async function main() {
     process.exit(0);
   }
 
-  if (cmd === "install" || cmd === "uninstall") {
-    console.error("systemd services are not available in this version.");
-    process.exit(1);
-  }
-
-  if (cmd === "remove" || cmd === "rm") {
-    console.error("Agents are directories; delete the folder to remove one.");
-    process.exit(1);
-  }
-
-  if (cmd === "proxy") {
-    console.error("kern proxy is not available in this version.");
+  if (cmd === "install" || cmd === "uninstall" || cmd === "remove" || cmd === "rm" || cmd === "proxy") {
+    console.error(`kern ${cmd} has been deprecated. See CHANGELOG.md: https://github.com/oguzbilgic/kern-ai/blob/master/CHANGELOG.md`);
     process.exit(1);
   }
 
