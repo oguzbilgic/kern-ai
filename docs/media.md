@@ -97,4 +97,4 @@ See [tools.md](tools.md) for full documentation.
 ## API
 
 - `GET /media/:filename` — serve a stored media file (requires auth)
-- Media URLs in web UI use the proxy: `/api/agents/{agent}/media/{file}?token=AUTH`
+- The web UI loads media from the agent directly: `{agentUrl}/media/{file}?token=KERN_AUTH_TOKEN`

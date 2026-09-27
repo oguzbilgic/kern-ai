@@ -190,7 +190,7 @@ kern web stop                         # stop daemon
 
 ### kern proxy, kern install, kern uninstall
 
-Not available in this version. `kern proxy` needs agent discovery and `kern install` needs systemd unit management; both return with fleet mode. Each exits 1 with a message saying so.
+Removed. The proxy is gone; `kern install` needs systemd unit management, which returns with fleet mode. Each exits 1 with a message saying so.
 
 ---
 

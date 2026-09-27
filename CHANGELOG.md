@@ -4,7 +4,7 @@
 
 ### Breaking
 - **Directory-based local mode, no registry** — an agent is a directory containing `.kern/`. `~/.kern/config.json` and the `~/.kern/agents.json` migration are gone; the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes `[path]` (default `.`): `kern init`, `start`, `stop`, `restart`, `run`, `status`, `logs`, `tui`, `pair [path] <code>`, `backup`. `kern start` with no argument starts the agent in the current directory instead of every registered agent. `kern list` / `kern ls` are aliases of `kern status`, which prints a single card. Multi-agent development is per directory: `kern start ~/alice`, `kern start ~/bob`.
-- **Removed commands** — `kern remove` (delete the folder), `kern install` / `kern uninstall` (systemd returns with fleet mode), and `kern proxy` (needs agent discovery; `proxy.ts` stays in the tree, unwired). Each exits 1 with a message saying so.
+- **Removed commands** — `kern remove` (delete the folder), `kern install` / `kern uninstall` (systemd returns with fleet mode), and `kern proxy`. The proxy server (`proxy.ts`, `proxy-daemon.ts`, `KERN_PROXY_TOKEN`) is deleted. Each removed command exits 1 with a message saying so.
 - **`kern web` flags** — `web_port` / `web_host` become `--port` (default 8080) and `--host` (default `0.0.0.0`) on `kern web run` and `kern web start`. `start` records `{ pid, port, host }` in `~/.kern/web.json` (replaces `web.pid`, which is still read once so an older daemon can be stopped).
 
 ### Fixes
