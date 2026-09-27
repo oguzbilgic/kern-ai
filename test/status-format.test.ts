@@ -1,6 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatStatus, StatusData } from "../src/tools/kern.js";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join, basename } from "path";
+import { formatStatus, getStatusData, initKernTool, StatusData } from "../src/tools/kern.js";
+import { configDefaults } from "../src/config.js";
+
+test("status retains the name field as the directory basename, not a config label", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kern-status-"));
+  try {
+    await initKernTool({
+      agentDir: dir,
+      config: { ...configDefaults, name: "old-label" },
+      sessionId: "test",
+    });
+    const data = getStatusData();
+    assert.equal(data.name, basename(dir));
+    assert.equal(data.agent, dir);
+    assert.ok(formatStatus(data).includes(`\nagent: ${basename(dir)}\n`));
+    assert.ok(!formatStatus(data).includes("old-label"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("formatStatus formats status output in a yaml code block", () => {
   const dummyData: StatusData = {

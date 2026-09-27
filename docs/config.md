@@ -4,6 +4,8 @@
 
 The main config file. Committed to git. Unknown fields and wrong types are warned on startup and ignored — defaults apply.
 
+Agent labels come from the directory basename, including the `name` field in `/status`. To rename an agent, stop it, rename its directory, then start it from the new path. Legacy `name` config fields and `KERN_NAME` environment variables are ignored; no migration is needed.
+
 ```json
 {
   "model": "google/gemini-3.8-flash",
@@ -16,7 +18,6 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `name` | directory name | Agent name. Auto-set to directory basename on first startup if missing. Exposed in `/status` response. |
 | `model` | `google/gemini-3.8-flash` | Model ID. Format depends on provider. |
 | `provider` | `openrouter` | API provider: `openrouter`, `anthropic`, `openai`, `ollama` |
 | `toolScope` | `full` | Tool access level: `full`, `write`, `read` |
@@ -83,7 +84,6 @@ Environment variables override matching `config.json` fields. Useful for Docker 
 
 | Env var | Config field | Type |
 |---------|-------------|------|
-| `KERN_NAME` | `name` | string |
 | `KERN_PORT` | `port` | number |
 | `KERN_MODEL` | `model` | string |
 | `KERN_PROVIDER` | `provider` | string |

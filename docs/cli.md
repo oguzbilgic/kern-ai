@@ -20,8 +20,8 @@ kern
 
 Create a new agent or reconfigure an existing one.
 
-- **Target**: `path` defaults to the current directory. A bare name such as `kern init my-agent/` scaffolds into `./my-agent/`; the trailing slash is optional but makes it clear it is a folder.
-- **New agent**: interactive wizard asks for name, provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, and starts the agent.
+- **Target**: `path` defaults to the current directory. A bare name such as `kern init my-agent/` scaffolds into `./my-agent/`; the trailing slash is optional but makes it clear it is a folder. The directory basename is the agent's display label.
+- **New agent**: interactive wizard asks for provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, and starts the agent.
 - **Existing agent**: if the directory already has `.kern/`, shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
 - **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI. The agent name is the directory's basename.
@@ -95,7 +95,6 @@ kern run --init-if-needed /home/agent/workspace
 ```
 
 Environment variables used during scaffold:
-- `KERN_NAME` — agent name (default: directory basename)
 - `KERN_MODEL` — model identifier (default: `google/gemini-3.8-flash`)
 - `KERN_PROVIDER` — provider name (default: `openrouter`)
 - `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_BASE_URL` — written to `.kern/.env`

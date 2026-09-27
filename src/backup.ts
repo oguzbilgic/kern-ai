@@ -1,9 +1,9 @@
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { basename, resolve, join } from "path";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { mkdir } from "fs/promises";
-import { resolveAgentDir, readAgentInfo, readLivePid } from "./agent-dir.js";
+import { resolveAgentDir, readLivePid } from "./agent-dir.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
@@ -13,23 +13,22 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 /** Write `~/.kern/backups/<name>-<date>.tar.gz` from the agent in `[path]`. */
 export async function backupAgent(pathArg?: string): Promise<void> {
   const agentDir = resolveAgentDir(pathArg);
-  const info = readAgentInfo(agentDir)!;
   const parentDir = resolve(agentDir, "..");
   const folderName = basename(agentDir);
   const date = new Date().toISOString().slice(0, 10);
-  const tarName = `${info.name}-${date}.tar.gz`;
+  const tarName = `${folderName}-${date}.tar.gz`;
 
   const backupDir = join(homedir(), ".kern", "backups");
   await mkdir(backupDir, { recursive: true });
   const tarPath = join(backupDir, tarName);
 
   console.log("");
-  console.log(`  ${bold("kern backup")} ${info.name}`);
+  console.log(`  ${bold("kern backup")} ${folderName}`);
   console.log(`  ${dim(agentDir)} → ${dim(tarPath)}`);
 
   try {
-    execSync(
-      `tar czf "${tarPath}" --exclude='.kern/logs' -C "${parentDir}" "${folderName}/"`,
+    execFileSync(
+      "tar", ["czf", tarPath, "--exclude=.kern/logs", "-C", parentDir, "--", `${folderName}/`],
       { stdio: "pipe" },
     );
     console.log(`  ${green("✓")} ${tarPath}`);

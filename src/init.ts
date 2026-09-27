@@ -166,7 +166,7 @@ async function runConfig(dir: string): Promise<void> {
   try {
     currentConfig = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
   } catch {}
-  const name = currentConfig.name || basename(dir);
+  const name = basename(dir);
 
   print("");
   print(`  kern config — ${name}`);
@@ -256,7 +256,6 @@ async function runConfig(dir: string): Promise<void> {
   // Build new config (keep the sticky port and any other fields as they are)
   const config: Partial<KernConfig> = {
     ...currentConfig,
-    name,
     model,
     provider,
     toolScope: currentConfig.toolScope || "full",
@@ -324,8 +323,6 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
 
   // Non-interactive mode
   if (flags && flags["api-key"]) {
-    const name = basename(dir);
-
     const provider = flags.provider || "openrouter";
     const apiKey = flags["api-key"];
     let model = flags.model;
@@ -339,7 +336,7 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     const slackAppToken = flags["slack-app-token"] || "";
 
     await scaffoldAgent({
-      name, dir, provider, model, apiKey, envVar,
+      dir, provider, model, apiKey, envVar,
       telegramToken, slackBotToken, slackAppToken,
     });
     return;
@@ -349,13 +346,6 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   print("");
   print("  kern init");
   print("");
-
-  // Agent name
-  const name = await input({
-    message: "Agent name",
-    default: basename(dir),
-    required: true,
-  });
 
   // Provider
   const provider = await select({
@@ -401,13 +391,12 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   }
 
   await scaffoldAgent({
-    name, dir, provider, model, apiKey, envVar,
+    dir, provider, model, apiKey, envVar,
     telegramToken, slackBotToken, slackAppToken,
   });
 }
 
 export interface ScaffoldOpts {
-  name: string;
   dir: string;
   provider: string;
   model: string;
@@ -428,7 +417,7 @@ export interface ScaffoldOpts {
 
 export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   const {
-    name, dir, provider, model, apiKey, envVar,
+    dir, provider, model, apiKey, envVar,
     telegramToken, slackBotToken, slackAppToken,
     matrixHomeserver, matrixUserId, matrixAccessToken,
     discordToken, nostrNsec, nostrRelays, ircUrl,
@@ -455,7 +444,6 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   // .kern/config.json — no port yet: the first start assigns one from live
   // state, so two agents scaffolded while nothing runs don't both get 4100
   const config: Partial<KernConfig> = {
-    name,
     model,
     provider,
     toolScope: "full",
@@ -587,4 +575,3 @@ node_modules/
     print("");
   }
 }
-

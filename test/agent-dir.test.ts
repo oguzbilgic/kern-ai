@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createServer, type Server } from "net";
 import {
   isAgentDir,
   resolveAgentDir,
+  readAgentInfo,
   AgentDirError,
   assignPort,
   writePidFile,
@@ -72,6 +73,26 @@ test("resolveAgentDir defaults to the current directory", () => {
   } finally {
     process.chdir(prev);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readAgentInfo derives its name from the directory, ignoring legacy config names", () => {
+  const root = tmp();
+  const dir = join(root, "alice");
+  const renamed = join(root, "bob");
+  try {
+    mkdirSync(join(dir, ".kern"), { recursive: true });
+    assert.equal(readAgentInfo(dir)?.name, "alice");
+    writeFileSync(join(dir, ".kern", "config.json"), JSON.stringify({ name: "old-label", port: 4123 }));
+    assert.equal(readAgentInfo(dir)?.name, "alice");
+    assert.equal(readAgentInfo(dir)?.port, 4123);
+
+    renameSync(dir, renamed);
+    assert.equal(readAgentInfo(renamed)?.name, "bob");
+    assert.equal(readAgentInfo(renamed)?.port, 4123);
+    assert.equal(readAgentInfo(dir), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

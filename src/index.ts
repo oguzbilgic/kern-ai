@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --no-deprecation
 
-import { resolve, basename } from "path";
+import { resolve } from "path";
 import { existsSync } from "fs";
 import { startApp } from "./app.js";
 import { runInit } from "./init.js";
@@ -278,11 +278,10 @@ async function main() {
 
     if (initIfNeeded && !existsSync(join(agentDir, ".kern", "config.json"))) {
       const { scaffoldAgent, API_KEY_ENV, DEFAULT_PROVIDER_MODELS } = await import("./init.js");
-      const name = process.env.KERN_NAME || basename(agentDir);
       const provider = process.env.KERN_PROVIDER || "openrouter";
       const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
       await scaffoldAgent({
-        name, dir: agentDir, provider, envVar, skipStart: true,
+        dir: agentDir, provider, envVar, skipStart: true,
         model: process.env.KERN_MODEL || DEFAULT_PROVIDER_MODELS[provider] || "google/gemini-3.8-flash",
         apiKey: process.env[envVar] || "",
         telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",

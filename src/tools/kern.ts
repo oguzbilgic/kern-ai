@@ -207,7 +207,7 @@ export function getStatusData(): StatusData {
 
   return {
     version: _version,
-    name: _config.name || basename(_agentDir),
+    name: basename(_agentDir),
     agent: _agentDir,
     model: _config.model,
     provider: _config.provider,
