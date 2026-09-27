@@ -206,7 +206,7 @@ spawn({ prompt: "Research Node.js 22 crypto changes and summarize breaking chang
 - `prompt` — the task for the sub-agent (self-contained — child starts with no context about your current work)
 - `maxSteps` — max reasoning steps (default 20, max 50)
 
-When the child finishes, its result arrives as a new turn with metadata like `[via subagent, subagent:<id>, user: subagent, time: <iso8601>]`. The envelope identifies the source; the body is the child's final answer (no extra header on success). Failed sub-agents prefix the body with a `[subagent:<id> failed, 12s]` style line so the outcome is visible; cancelled sub-agents emit only the header line with no body. You can spawn multiple sub-agents in parallel and synthesize their results as they arrive.
+When the child finishes, its result arrives as a new message in the conversation that asked for it — stamped with the origin's envelope, like a [background job](#background-jobs) completion — and the agent's reply routes back to that chat. The body starts with a `[subagent:<id> done, 12s]` line followed by the child's final answer; failed sub-agents use `[subagent:<id> failed, 12s]` followed by the error, and cancelled sub-agents emit only the `[subagent:<id> cancelled, 12s]` header. You can spawn multiple sub-agents in parallel and synthesize their results as they arrive. See [sub-agents](subagents.md#announces).
 
 Sub-agents run with a read-only toolset: `read`, `glob`, `grep`, `webfetch`, `websearch`, `pdf`, `image`, `audio`. They cannot run shell commands, edit files, call plugin tools, or spawn further sub-agents.
 
