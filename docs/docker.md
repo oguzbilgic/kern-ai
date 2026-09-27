@@ -19,7 +19,7 @@ docker run -d --restart=unless-stopped \
 
 On first run, the agent writes its model and provider into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`. The port comes from `KERN_PORT` (4100 in the image).
 
-The agent's display label is the workspace directory basename: `workspace` by default. Docker's `--name` does not change it, and `KERN_NAME` is ignored. To display `bob`, use `-w /home/agent/bob` on every run (or `working_dir: /home/agent/bob` in Compose); see [Custom workspace directory](#custom-workspace-directory).
+The agent's display label is the workspace directory basename: `workspace` by default. Docker's `--name` does not change it, and `KERN_NAME` is ignored. To display `bob`, pass `/home/agent/bob` to `kern run --init-if-needed` on every run; see [Custom workspace directory](#custom-workspace-directory).
 
 ### 2. Running an existing agent
 
@@ -84,14 +84,13 @@ If you only want to mount a local directory for the workspace without persisting
 
 ### Custom workspace directory
 
-By default, the container starts inside `/home/agent/workspace`. If your agent lives in a different subfolder within the mounted volume (e.g. named after the agent or repo), override the working directory with `-w` (or `working_dir` in Docker Compose):
+By default, the container starts inside `/home/agent/workspace`. To use a different subfolder within the mounted volume (e.g. named after the agent or repo), pass its path to `kern run --init-if-needed` on every run (or set `command` in Docker Compose). Kern creates the directory as the non-root `agent` user, so this also works on fresh volumes:
 
 **Docker CLI:**
 ```bash
 docker run -d \
   -v kern-data:/home/agent \
-  -w /home/agent/my-agent \
-  ghcr.io/oguzbilgic/kern-ai
+  ghcr.io/oguzbilgic/kern-ai kern run --init-if-needed /home/agent/my-agent
 ```
 
 **Docker Compose:**
@@ -102,8 +101,10 @@ services:
     restart: unless-stopped
     volumes:
       - kern-data:/home/agent
-    working_dir: /home/agent/my-agent
+    command: ["kern", "run", "--init-if-needed", "/home/agent/my-agent"]
 ```
+
+For an existing directory writable by `agent`, `-w /home/agent/my-agent` (or Compose's `working_dir`) also works. Avoid it for missing directories: Docker may create them as root, preventing kern from writing its files.
 
 ## Pre-installed tools
 

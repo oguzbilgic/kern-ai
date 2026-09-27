@@ -66,7 +66,7 @@ services:
     image: ghcr.io/oguzbilgic/kern-ai
     restart: unless-stopped
     volumes: ["ops-home:/home/agent"]
-    working_dir: /home/agent/ops
+    command: ["kern", "run", "--init-if-needed", "/home/agent/ops"]
     environment:
       OPENROUTER_API_KEY: sk-or-...
       SLACK_BOT_TOKEN: xoxb-...
@@ -76,7 +76,7 @@ services:
     image: ghcr.io/oguzbilgic/kern-ai
     restart: unless-stopped
     volumes: ["research-home:/home/agent"]
-    working_dir: /home/agent/research
+    command: ["kern", "run", "--init-if-needed", "/home/agent/research"]
     environment:
       OPENROUTER_API_KEY: sk-or-...
       SLACK_BOT_TOKEN: xoxb-...
