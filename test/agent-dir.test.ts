@@ -15,6 +15,7 @@ import {
   removePidFile,
   restartArgv,
   bindAgentServer,
+  waitForExit,
 } from "../src/agent-dir.js";
 import { parseWebFlags } from "../src/web-daemon.js";
 
@@ -109,6 +110,24 @@ test("PID helpers round-trip and clear a stale PID", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("removePidFile with a PID only removes a file that still names it", async () => {
+  const dir = tmp();
+  try {
+    await writePidFile(dir, 1234);
+    await removePidFile(dir, 5678);
+    assert.equal(readPid(dir), 1234, "another process's PID file is left alone");
+    await removePidFile(dir, 1234);
+    assert.equal(readPid(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("waitForExit resolves once the process is gone and times out while it lives", async () => {
+  assert.equal(await waitForExit(999999999, 200), true);
+  assert.equal(await waitForExit(process.pid, 150, 20), false);
 });
 
 test("restartArgv uses the running node binary and the package entry point", () => {

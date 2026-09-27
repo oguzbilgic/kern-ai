@@ -745,7 +745,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     await plugins.shutdown(pluginCtx);
     server.stop();
     memoryDB.close();
-    await removePidFile(agentDir);
+    await removePidFile(agentDir, process.pid);
     log("kern", `stopped ${agentName}`);
     process.exit(0);
   };

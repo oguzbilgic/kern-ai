@@ -164,11 +164,26 @@ export async function writePidFile(agentDir: string, pid: number): Promise<void>
   await writeFile(pidPath, String(pid), "utf-8");
 }
 
-export async function removePidFile(agentDir: string): Promise<void> {
+/**
+ * Remove the PID file. With `onlyIfPid`, remove it only while it still names
+ * that PID, so a process shutting down late never deletes its successor's file.
+ */
+export async function removePidFile(agentDir: string, onlyIfPid?: number): Promise<void> {
   const pidPath = join(agentDir, ".kern", "agent.pid");
+  if (onlyIfPid !== undefined && readPid(agentDir) !== onlyIfPid) return;
   try {
     await unlink(pidPath);
   } catch {}
+}
+
+/** Poll until `pid` is gone. Resolves true when it exited, false on timeout. */
+export async function waitForExit(pid: number, timeoutMs: number, intervalMs = 100): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessRunning(pid)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return true;
 }
 
 export function readPid(agentDir: string): number | null {

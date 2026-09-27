@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { mkdir, readFile } from "fs/promises";
 import { join } from "path";
 import { openSync } from "fs";
-import { readAgentInfo, readLivePid, writePidFile, removePidFile, isProcessRunning } from "./agent-dir.js";
+import { readAgentInfo, readLivePid, writePidFile, removePidFile, isProcessRunning, waitForExit } from "./agent-dir.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
@@ -67,7 +67,14 @@ export async function startAgent(agentDir: string): Promise<void> {
   }
 }
 
-/** Stop the agent in `agentDir` via its PID file. A stale PID is cleared. */
+/** How long `stopAgent` waits for a graceful exit before SIGKILL. */
+const STOP_TIMEOUT_MS = 10_000;
+
+/**
+ * Stop the agent in `agentDir` via its PID file and wait until the process
+ * has actually exited, so its port is free and its PID file is gone before
+ * anything starts in its place. A stale PID is cleared.
+ */
 export async function stopAgent(agentDir: string): Promise<void> {
   const name = agentName(agentDir);
   const pid = await readLivePid(agentDir);
@@ -79,16 +86,27 @@ export async function stopAgent(agentDir: string): Promise<void> {
 
   try {
     process.kill(pid, "SIGTERM");
-    await removePidFile(agentDir);
-    console.log(`  ${red("●")} ${bold(name)} stopped ${dim(`(was pid ${pid})`)}`);
   } catch (e: any) {
     console.error(`  Failed to stop ${name}: ${e.message}`);
+    return;
   }
+
+  if (await waitForExit(pid, STOP_TIMEOUT_MS)) {
+    await removePidFile(agentDir, pid);
+    console.log(`  ${red("●")} ${bold(name)} stopped ${dim(`(was pid ${pid})`)}`);
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {}
+  await waitForExit(pid, 2_000);
+  await removePidFile(agentDir, pid);
+  console.log(`  ${red("●")} ${bold(name)} killed ${dim(`(pid ${pid} did not exit within ${STOP_TIMEOUT_MS / 1000}s)`)}`);
 }
 
-/** Stop then start, with a short pause for a clean shutdown. */
+/** Stop, wait for the old process to exit, then start. */
 export async function restartAgent(agentDir: string): Promise<void> {
   await stopAgent(agentDir);
-  await new Promise((r) => setTimeout(r, 500));
   await startAgent(agentDir);
 }

@@ -2,8 +2,8 @@ import { mkdir, writeFile, readFile } from "fs/promises";
 import { join, resolve, basename, relative } from "path";
 import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
-import { isAgentDir, readLivePid, removePidFile, assignPort } from "./agent-dir.js";
-import { startAgent } from "./daemon.js";
+import { isAgentDir, readLivePid, assignPort } from "./agent-dir.js";
+import { startAgent, stopAgent } from "./daemon.js";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
 
@@ -295,12 +295,8 @@ async function runConfig(dir: string): Promise<void> {
   print("  ✓ Config updated");
 
   // Restart if running, otherwise start
-  const pid = await readLivePid(dir);
-  if (pid) {
-    process.kill(pid, "SIGTERM");
-    await removePidFile(dir);
-    print("  ✓ Stopped");
-    await new Promise((r) => setTimeout(r, 500));
+  if (await readLivePid(dir)) {
+    await stopAgent(dir);
   }
 
   print("  ✓ Starting...");

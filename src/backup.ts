@@ -3,11 +3,10 @@ import { basename, resolve, join } from "path";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { mkdir } from "fs/promises";
-import { resolveAgentDir, readAgentInfo, readLivePid, removePidFile } from "./agent-dir.js";
+import { resolveAgentDir, readAgentInfo, readLivePid } from "./agent-dir.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
@@ -87,15 +86,10 @@ export async function restoreAgent(tarFile?: string): Promise<void> {
       process.exit(0);
     }
 
-    // Stop if running
-    const pid = await readLivePid(targetDir);
-    if (pid) {
-      try {
-        process.kill(pid, "SIGTERM");
-        await removePidFile(targetDir);
-        console.log(`  ${yellow("●")} stopped running agent`);
-      } catch {}
-      await new Promise((r) => setTimeout(r, 500));
+    // Stop if running, waiting for it to exit before overwriting its files
+    if (await readLivePid(targetDir)) {
+      const { stopAgent } = await import("./daemon.js");
+      await stopAgent(targetDir);
     }
   }
 
