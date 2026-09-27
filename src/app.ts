@@ -14,7 +14,7 @@ import { randomBytes } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
 import type { Interface, MessageHandler } from "./interfaces/types.js";
 import type { TurnOrigin } from "./plugins/types.js";
-import { registerAgent, writePidFile, removePidFile, assignPort } from "./registry.js";
+import { writePidFile, removePidFile, assignPort, readLivePid, portInUseMessage } from "./agent-dir.js";
 import { AgentServer } from "./server.js";
 import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
@@ -36,23 +36,21 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
   switch (cmd) {
     case "/restart": {
       log("kern", `restart requested by ${userId} via ${iface}`);
+      // Reply first so the caller sees it, then hand off to a detached
+      // `kern restart <dir>` run with this process's own node binary.
+      // The directory is passed, never the name, and PATH is never consulted.
       const { spawn } = await import("child_process");
-      const child = spawn("kern", ["restart", agentName], { stdio: "pipe" });
-
-      const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
-        let stderr = "";
-        child.stderr.on("data", (chunk) => {
-          stderr += chunk.toString();
-        });
-        child.on("close", (code) => resolve({ code, stderr: stderr.trim() }));
-        child.on("error", (err) => resolve({ code: 1, stderr: err.message }));
-      });
-
-      if (result.code === 0) {
-        return "Restart initiated.";
-      }
-
-      return `Restart failed: ${result.stderr || `exit code ${result.code}`}`;
+      const { restartArgv } = await import("./agent-dir.js");
+      const [execPath, ...argv] = restartArgv(agentDir);
+      setTimeout(() => {
+        try {
+          const child = spawn(execPath, argv, { detached: true, stdio: "ignore" });
+          child.unref();
+        } catch (err: any) {
+          log.error("kern", `restart spawn failed: ${err?.message ?? err}`);
+        }
+      }, 1000);
+      return "Restarting.";
     }
 
     case "/status": {
@@ -129,6 +127,14 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   await updateKernel(agentDir);
 
   const config = await loadConfig(agentDir);
+
+  // Refuse to run twice for the same directory: the PID file is the lock.
+  // Checked before the database or any interface is opened.
+  const livePid = await readLivePid(agentDir);
+  if (livePid && livePid !== process.pid) {
+    log.error("kern", `${config.name} is already running (pid ${livePid}). Use 'kern stop' first.`);
+    process.exit(1);
+  }
 
   // Auto-generate auth token if missing
   if (!process.env.KERN_AUTH_TOKEN) {
@@ -499,8 +505,18 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
   }
 
-  const port = await server.start("0.0.0.0", config.port);
-  await registerAgent(agentDir);
+  // A saved port is never changed automatically: if it is busy after the
+  // server's own retries, say so and exit.
+  let port: number;
+  try {
+    port = await server.start("0.0.0.0", config.port);
+  } catch (err: any) {
+    if (err?.code === "EADDRINUSE") {
+      log.error("kern", portInUseMessage(config.port));
+      process.exit(1);
+    }
+    throw err;
+  }
   await writePidFile(agentDir, process.pid);
 
   // Start Telegram if configured
@@ -746,7 +762,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     await plugins.shutdown(pluginCtx);
     server.stop();
     memoryDB.close();
-    await removePidFile(agentDir);
+    await removePidFile(agentDir, process.pid);
     log("kern", `stopped ${agentName}`);
     process.exit(0);
   };

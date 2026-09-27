@@ -54,11 +54,12 @@ Shows status, registered tools, routes, and active configuration for all loaded 
 
 ### /restart (or !restart)
 
-Gracefully restarts the agent process.
+Restarts the agent process.
 
-- Introduces a 2-second delay to ensure the calling interface receives confirmation before shutdown.
+- Replies `Restarting.` first, so the calling interface sees confirmation before shutdown.
+- Then spawns `kern restart <agent directory>` as a detached process, using the same `node` binary the agent is running on and this package's own entry point. The directory is passed, never the agent name, and `PATH` is never consulted, so it works from any daemon environment.
+- That process stops the agent via `<dir>/.kern/agent.pid` and starts it again; the TUI re-reads the port from `<dir>/.kern/` and reconnects.
 - Registered as a Telegram bot command (appears in Telegram's `/` menu).
-- Safe — delegates to the supervisor daemon or systemd without corrupting sessions or causing restart loops.
 - Agents cannot invoke this command themselves; it must be typed by a human operator.
 
 ```text

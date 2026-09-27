@@ -7,7 +7,7 @@ UI clients that connect to kern agents. All clients connect via the same HTTP/SS
 Terminal chat client.
 
 ```bash
-kern tui [name]
+kern tui [path]
 ```
 
 - Renders Markdown (code blocks, quotes, bold, italic)

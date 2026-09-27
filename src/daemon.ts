@@ -1,72 +1,63 @@
 import { spawn } from "child_process";
-import { basename } from "path";
-import { existsSync } from "fs";
-import { mkdir } from "fs/promises";
+import { mkdir, readFile } from "fs/promises";
 import { join } from "path";
 import { openSync } from "fs";
-import { findAgent, loadRegistry, registerAgent, readAgentInfo, readPid, writePidFile, removePidFile, isProcessRunning } from "./registry.js";
-import { isServiceInstalled } from "./install.js";
+import { readAgentInfo, readLivePid, writePidFile, removePidFile, isProcessRunning, waitForExit } from "./agent-dir.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
-async function startOne(name: string, path: string): Promise<void> {
-  // Check if already running via PID file
-  const existingPid = readPid(path);
-  if (existingPid && isProcessRunning(existingPid)) {
+function agentName(agentDir: string): string {
+  return readAgentInfo(agentDir)?.name ?? agentDir;
+}
+
+/**
+ * Start the agent in `agentDir` as a detached daemon.
+ * PID goes to `<agentDir>/.kern/agent.pid`, output to `<agentDir>/.kern/logs/kern.log`.
+ * Already running (live PID) prints and returns.
+ */
+export async function startAgent(agentDir: string): Promise<void> {
+  const name = agentName(agentDir);
+
+  const existingPid = await readLivePid(agentDir);
+  if (existingPid) {
     console.log(`  ${green("●")} ${bold(name)} already running ${dim(`(pid ${existingPid})`)}`);
     return;
   }
 
-  if (!existsSync(path)) {
-    console.log(`  ${red("●")} ${bold(name)} path not found: ${path}`);
-    return;
-  }
-
   // Ensure log directory
-  const logDir = join(path, ".kern", "logs");
+  const logDir = join(agentDir, ".kern", "logs");
   await mkdir(logDir, { recursive: true });
   const logFile = join(logDir, "kern.log");
   const logFd = openSync(logFile, "a");
 
-  // Find the kern entry point
+  // Spawn with the same node binary that runs this CLI, never `node` from PATH
   const kernBin = join(import.meta.dirname, "index.js");
-
-  // Fork detached process using kern run
-  const child = spawn("node", ["--no-deprecation", kernBin, "run", path], {
+  const child = spawn(process.execPath, ["--no-deprecation", kernBin, "run", agentDir], {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    cwd: path,
+    cwd: agentDir,
   });
 
   child.unref();
 
   const pid = child.pid!;
-  await registerAgent(path);
-  await writePidFile(path, pid);
+  await writePidFile(agentDir, pid);
 
   // Wait and verify the process stays alive
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
   if (isProcessRunning(pid)) {
-    const info = readAgentInfo(path);
+    const info = readAgentInfo(agentDir);
     const portStr = info?.port ? `, :${info.port}` : "";
     console.log(`  ${green("●")} ${bold(name)} started ${dim(`(pid ${pid}${portStr})`)}`);
-    if (!isServiceInstalled(name)) {
-      try {
-        const { execSync } = await import("child_process");
-        execSync("which systemctl", { stdio: "ignore" });
-        console.log(`  ${dim(`tip: 'kern install ${name}' enables auto-restart and boot persistence`)}`);
-      } catch {}
-    }
   } else {
-    await removePidFile(path);
+    await removePidFile(agentDir);
     console.log(`  ${red("●")} ${bold(name)} failed to start`);
     // Show last few lines of log
     try {
-      const { readFile } = await import("fs/promises");
       const log = await readFile(logFile, "utf-8");
       const lines = log.trim().split("\n").slice(-5);
       for (const line of lines) {
@@ -76,101 +67,46 @@ async function startOne(name: string, path: string): Promise<void> {
   }
 }
 
-export async function startAgent(nameOrPath?: string): Promise<void> {
-  if (nameOrPath) {
-    // Try registry first
-    let agent = findAgent(nameOrPath);
+/** How long `stopAgent` waits for a graceful exit before SIGKILL. */
+const STOP_TIMEOUT_MS = 10_000;
 
-    if (!agent) {
-      // Check if it's a directory path
-      const { resolve } = await import("path");
-      const dir = resolve(nameOrPath);
-      if (existsSync(dir) && (existsSync(join(dir, ".kern")) || existsSync(join(dir, "AGENTS.md")))) {
-        const name = basename(dir);
-        await registerAgent(dir);
-        agent = { name, path: dir, port: 0, token: null, pid: null };
-      }
-    }
-
-    if (!agent) {
-      console.error(`Agent not found: ${nameOrPath}`);
-      console.error("Use an agent name from 'kern status' or a path to an agent directory.");
-      process.exit(1);
-      return;
-    }
-    console.log("");
-    await startOne(agent.name, agent.path);
-    console.log("");
-  } else {
-    // Start all registered agents
-    const paths = await loadRegistry();
-    if (paths.length === 0) {
-      console.error("No agents registered. Run 'kern init <name>' first.");
-      process.exit(1);
-      return;
-    }
-    console.log("");
-    console.log(`  ${bold("starting all agents")}`);
-    console.log("");
-    for (const agentPath of paths) {
-      const info = readAgentInfo(agentPath);
-      const name = info?.name || basename(agentPath);
-      await startOne(name, agentPath);
-    }
-    console.log("");
-  }
-}
-
-async function stopOne(name: string, agentPath: string): Promise<void> {
-  const pid = readPid(agentPath);
+/**
+ * Stop the agent in `agentDir` via its PID file and wait until the process
+ * has actually exited, so its port is free and its PID file is gone before
+ * anything starts in its place. A stale PID is cleared.
+ */
+export async function stopAgent(agentDir: string): Promise<void> {
+  const name = agentName(agentDir);
+  const pid = await readLivePid(agentDir);
 
   if (!pid) {
     console.log(`  ${dim("●")} ${bold(name)} not running`);
     return;
   }
 
-  if (!isProcessRunning(pid)) {
-    console.log(`  ${dim("●")} ${bold(name)} not running ${dim("(stale pid cleared)")}`);
-    await removePidFile(agentPath);
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (e: any) {
+    console.error(`  Failed to stop ${name}: ${e.message}`);
+    return;
+  }
+
+  if (await waitForExit(pid, STOP_TIMEOUT_MS)) {
+    await removePidFile(agentDir, pid);
+    console.log(`  ${red("●")} ${bold(name)} stopped ${dim(`(was pid ${pid})`)}`);
     return;
   }
 
   try {
-    process.kill(pid, "SIGTERM");
-    await removePidFile(agentPath);
-    console.log(`  ${red("●")} ${bold(name)} stopped ${dim(`(was pid ${pid})`)}`);
-  } catch (e: any) {
-    console.error(`  Failed to stop ${name}: ${e.message}`);
-  }
+    process.kill(pid, "SIGKILL");
+  } catch {}
+  await waitForExit(pid, 2_000);
+  await removePidFile(agentDir, pid);
+  console.log(`  ${red("●")} ${bold(name)} killed ${dim(`(pid ${pid} did not exit within ${STOP_TIMEOUT_MS / 1000}s)`)}`);
 }
 
-export async function stopAgent(name?: string): Promise<void> {
-  if (name) {
-    const agent = findAgent(name);
-    if (!agent) {
-      console.error(`Agent not found: ${name}`);
-      process.exit(1);
-      return;
-    }
-    console.log("");
-    await stopOne(agent.name, agent.path);
-    console.log("");
-  } else {
-    // Stop all
-    const paths = await loadRegistry();
-    if (paths.length === 0) {
-      console.log("No agents registered.");
-      process.exit(0);
-      return;
-    }
-    console.log("");
-    console.log(`  ${bold("stopping all agents")}`);
-    console.log("");
-    for (const agentPath of paths) {
-      const info = readAgentInfo(agentPath);
-      const name = info?.name || basename(agentPath);
-      await stopOne(name, agentPath);
-    }
-    console.log("");
-  }
+/** Stop, wait for the old process to exit, then start. */
+export async function restartAgent(agentDir: string): Promise<void> {
+  await stopAgent(agentDir);
+  await startAgent(agentDir);
 }

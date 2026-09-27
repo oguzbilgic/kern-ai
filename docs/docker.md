@@ -18,7 +18,7 @@ docker run -d --restart=unless-stopped \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-On first run, the agent writes its name, model, and port into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`.
+On first run, the agent writes its name and model into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`. The port comes from `KERN_PORT` (4100 in the image).
 
 ### 2. Running an existing agent
 

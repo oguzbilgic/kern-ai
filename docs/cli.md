@@ -1,6 +1,10 @@
 # CLI Commands
 
-The `kern` command-line interface manages agent lifecycles, background daemons, system services, pairing, logs, and backups.
+The `kern` command-line interface manages agent lifecycles, background daemons, pairing, logs, and backups.
+
+An agent is a directory containing `.kern/`. There is no registry and no global config file: the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes an optional `[path]`, which defaults to the current directory. Nothing is written outside the agent directory except runtime state under `~/.kern/` (the web daemon's state file and log, and backups).
+
+To run several agents, give each its own directory: `kern start ~/alice/`, `kern start ~/bob/`, `kern status ~/bob/`.
 
 ## General
 
@@ -12,20 +16,22 @@ Show help and available CLI commands.
 kern
 ```
 
-### kern init <name>
+### kern init [path]
 
 Create a new agent or reconfigure an existing one.
 
-- **New agent**: interactive wizard asks for provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, registers in `~/.kern/config.json`, and starts the agent.
-- **Existing agent**: detects by name or path. Shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
+- **Target**: `path` defaults to the current directory. A bare name such as `kern init my-agent/` scaffolds into `./my-agent/`; the trailing slash is optional but makes it clear it is a folder.
+- **New agent**: interactive wizard asks for name, provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, and starts the agent.
+- **Existing agent**: if the directory already has `.kern/`, shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
-- **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI.
+- **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI. The agent name is the directory's basename.
 
 ```bash
-kern init my-agent --api-key sk-or-...
-kern init my-agent --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
-kern init my-agent --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
-kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b
+kern init my-agent/ --api-key sk-or-...
+kern init my-agent/ --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
+kern init my-agent/ --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
+kern init my-agent/ --provider ollama --api-key http://localhost:11434 --model gemma4:31b
+kern init . --api-key sk-or-...          # adopt the current directory
 ```
 
 Defaults to `openrouter` + `google/gemini-3.8-flash` when flags are used. For Ollama, `--api-key` is the server URL.
@@ -34,52 +40,50 @@ Defaults to `openrouter` + `google/gemini-3.8-flash` when flags are used. For Ol
 
 ## Agent Lifecycle
 
-### kern start [name|path]
+Every command below resolves `[path]` to an absolute directory and requires it to contain `.kern/`. Anything else exits 1 with:
 
-Start agents as background daemons.
-
-- No argument: starts all registered agents
-- With name: starts that agent (looks up in `~/.kern/config.json`)
-- With path: auto-registers and starts (e.g. `kern start ./cloned-repo`)
-- Waits 2 seconds after fork, verifies process is alive
-- Shows error log if startup fails
-- Writes PID to agent's `.kern/agent.pid`
-- If a systemd service is installed for the agent, delegates to `systemctl --user start`
-
-```bash
-kern start          # start all agents
-kern start atlas    # start specific agent
+```
+Error: no agent in /abs/path (no .kern/ directory). Run 'kern init' there first.
 ```
 
-### kern stop [name]
+### kern start [path]
 
-Stop agents.
+Start the agent as a background daemon.
 
-- No argument: stops all running agents
-- With name: stops that agent
-- Sends SIGTERM, removes agent's `.kern/agent.pid`
-- If a systemd service is installed, delegates to `systemctl --user stop`
+- Spawns a detached process with the same `node` binary that runs the CLI (never `node` from `PATH`)
+- Writes PID to `<path>/.kern/agent.pid`, logs to `<path>/.kern/logs/kern.log`
+- Waits 2 seconds after fork, verifies process is alive; shows the error log if startup fails
+- Already running (live PID): prints and exits 0
 
 ```bash
-kern stop           # stop all agents
-kern stop atlas     # stop specific agent
+kern start            # agent in the current directory
+kern start ~/atlas/    # agent elsewhere
 ```
 
-### kern restart [name]
+### kern stop [path]
 
-Stop then start. 500ms delay between for clean shutdown. Delegates to systemd when installed.
+Stop the agent via its PID file. Sends SIGTERM and removes `<path>/.kern/agent.pid`. A stale PID file is cleared.
 
 ```bash
-kern restart atlas
+kern stop
+kern stop ~/atlas/
 ```
 
-### kern run <name|path>
+### kern restart [path]
 
-Run an agent in the foreground (for development/debugging). Starts all configured interfaces (Telegram, Slack, Matrix, Discord, IRC, Nostr) in-process.
+Stop then start. 500ms delay between for clean shutdown.
 
 ```bash
-kern run atlas
-kern run ./my-agent
+kern restart ~/atlas/
+```
+
+### kern run [path]
+
+Run the agent in the foreground (for development, debugging, and Docker). Starts all configured interfaces (Telegram, Slack, Matrix, Discord, IRC, Nostr) in-process.
+
+```bash
+kern run
+kern run ./my-agent/
 ```
 
 #### --init-if-needed
@@ -97,166 +101,113 @@ Environment variables used during scaffold:
 - `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_BASE_URL` — written to `.kern/.env`
 - `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` — written to `.kern/.env` if set
 
-### kern remove <name>
+### Ports
 
-Unregister an agent. Uninstalls systemd service if installed, stops it if running. Does not delete files.
+Each agent gets a **sticky port** from 4100–4999, picked by live bind checking on its first start and saved to `.kern/config.json`. `kern init` does not assign one, so two agents scaffolded while nothing is running don't both end up on 4100: the first to start takes 4100, the next takes 4101. Once saved, a port is never changed automatically. If it is busy when the agent starts, the agent exits with `port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.` Starting an agent whose directory already has a live process exits with `already running (pid N)`. `KERN_PORT` overrides the saved port.
 
-Alias: `kern rm`
+### Removing an agent
 
-```bash
-kern remove atlas
-```
+Agents are directories; delete the folder to remove one.
 
 ---
 
 ## Inspection & Interaction
 
-### kern list
+### kern status [path]
 
-Show all registered agents and the web daemon with status.
+Show a single status card for the agent: name, provider/model, port, PID, uptime, tool scope, and mode (`daemon` / `—`).
 
-- Green dot: running (shows PID and port)
-- Dim dot: stopped
-- Red dot: path not found
-- Shows model, tool scope, and mode (`systemd` / `daemon` / `—`)
-- Shows web daemon status and port
-
-Aliases: `kern ls`, `kern status`
+Aliases: `kern list`, `kern ls`
 
 ```bash
-kern list
+kern status
+kern status ~/atlas/
 ```
 
-### kern tui [name]
+Run in a directory without `.kern/`, it explains where to look. If an old `~/.kern/config.json` from a previous kern version still lists agents, it prints those paths once as a hint and suggests deleting the file; that file is never read for anything else.
 
-Interactive terminal chat. Connects to running daemon via HTTP/SSE.
+Web daemon status is under `kern web status`.
 
-- No argument, one agent: auto-connects
-- No argument, multiple agents: arrow-key select
-- Auto-starts daemon if not running
+### kern tui [path]
+
+Interactive terminal chat. Connects to the running daemon via HTTP/SSE.
+
+- Auto-starts the daemon if not running
+- After a `/restart`, re-reads the port from `<path>/.kern/` and reconnects
 - Cross-channel messages visible in real time
 - Heartbeat activity visible
 - Ctrl-C only exits TUI, daemon stays alive
 
 ```bash
-kern tui atlas
+kern tui
+kern tui ~/atlas/
 ```
 
-### kern logs [name] [-f] [-n N] [--level LEVEL]
+### kern logs [path] [-f] [-n N] [--level LEVEL]
 
 Follow agent logs. Structured, leveled, colored output.
 
-- No argument: auto-selects agent
 - Default: follow mode (like `tail -f`). `-n 50` shows last 50 lines and exits.
 - `--level warn` filters to warnings and errors only. Levels: `debug`, `info`, `warn`, `error`.
-- Logs stored in `.kern/logs/kern.log`
+- Logs stored in `<path>/.kern/logs/kern.log`
 - Components: `[kern]` `[queue]` `[runtime]` `[context]` `[telegram]` `[slack]` `[matrix]` `[discord]` `[irc]` `[nostr]` `[server]` `[recall]` `[segments]` `[notes]` `[config]` `[memory]`
 - Level labels: `ERR` (red), `WRN` (yellow), `DBG` (dim). Info has no label.
 
 ```bash
-kern logs atlas -f
-kern logs atlas -n 100 --level error
+kern logs -f
+kern logs ~/atlas/ -n 100 --level error
 ```
 
-### kern pair <agent> <code>
+### kern pair [path] <code>
 
-Approve a pairing code from the command line. No agent interaction needed.
+Approve a pairing code from the command line. No agent interaction needed. With one argument, `path` is the current directory.
 
 ```bash
-kern pair atlas KERN-7X4M
+kern pair KERN-7X4M
+kern pair ~/atlas/ KERN-7X4M
 ```
 
 ---
 
-## Daemons & Services
+## Daemons
 
-### kern install [name|--web]
+### kern web <run|start|status|stop> [--port P] [--host H]
 
-Install systemd user services for agents and the web daemon. Provides auto-restart on crash and boot persistence.
-
-- No argument: installs all registered agents + web
-- With name: installs a single agent
-- `--web`: installs only the web daemon
-- Migrates from PID-based daemon: stops existing process before installing
-- Warns if `loginctl enable-linger` is not enabled (required for services to survive logout)
-- Idempotent — safe to run again after adding new agents
-
-Services are written to `~/.config/systemd/user/`:
-- `kern-agent-<name>.service` for each agent
-- `kern-web.service` for the web daemon
+Minimal static file server for the web UI. No auth, no proxy, no agent directory needed.
 
 ```bash
-kern install          # all agents + web
-kern install atlas    # single agent
-kern install --web    # web only
-```
-
-Requires Linux with systemd. On systems without systemd, use `kern start` instead.
-
-### kern uninstall [name]
-
-Remove systemd services installed by `kern install`.
-
-- No argument: uninstalls all agent services + web
-- With name: uninstalls a single agent service
-- Stops and disables the service, deletes the unit file
-
-```bash
-kern uninstall        # all
-kern uninstall atlas  # single agent
-```
-
-### kern web <run|start|stop|status>
-
-Minimal static file server for the web UI. No auth, no proxy.
-
-```bash
-kern web run      # run in foreground (for Docker or manual use)
-kern web start    # start as background daemon
-kern web stop     # stop daemon
-kern web status   # check if running
+kern web run                          # run in foreground (for Docker or manual use)
+kern web start                        # start as background daemon
+kern web start --port 9090 --host 127.0.0.1
+kern web status                       # check if running
+kern web stop                         # stop daemon
 ```
 
 - Serves the web UI static files only — no API proxy, no auth
-- Port configurable via `web_port` in `~/.kern/config.json` (default 8080)
-- `kern web run` runs in the foreground — useful for Docker containers
-- `kern web start` daemonizes: PID tracked in `~/.kern/web.pid`, logs in `~/.kern/web.log`
-- If installed via `kern install --web`, start/stop/restart delegate to systemd
+- `--port` defaults to 8080, `--host` to `0.0.0.0`; both apply to `run` and `start` only
+- `kern web start` daemonizes: `{ pid, port, host }` recorded in `~/.kern/web.json`, logs in `~/.kern/web.log`; `status` reads that file
 - Connect to agents directly from the sidebar (enter URL + token)
 
-### kern proxy <start|stop|status|token>
+### Deprecated commands
 
-Authenticated reverse proxy for multi-agent access. Also serves the web UI.
-
-```bash
-kern proxy start    # start proxy, prints URL with auth token
-kern proxy stop     # stop it
-kern proxy status   # check if running
-kern proxy token    # print URL with auth token
-```
-
-- Proxies all agent API requests (`/api/agents/:name/*`) with token injection
-- `KERN_PROXY_TOKEN` auto-generated on first start, stored in `~/.kern/.env` (also accepts legacy `KERN_WEB_TOKEN`)
-- All `/api/*` routes require the proxy token (Bearer header or `?token=` query param)
-- Port configurable via `proxy_port` in `~/.kern/config.json` (default 9000)
-- PID tracked in `~/.kern/proxy.pid`, logs in `~/.kern/proxy.log`
-- If installed via `kern install --proxy`, start/stop/restart delegate to systemd
+`kern remove`, `kern install`, `kern uninstall`, and `kern proxy` are deprecated. Each exits 1 and points at the CHANGELOG. Agents are directories (delete the folder to remove one); systemd support returns with fleet mode; the proxy is gone.
 
 ---
 
 ## Backup & Import
 
-### kern backup <name>
+### kern backup [path]
 
 Backup an agent to a `.tar.gz` file.
 
-- Creates `~/.kern/backups/{name}-{date}.tar.gz`
+- Creates `~/.kern/backups/{name}-{date}.tar.gz` from the agent in `path`
 - Includes everything: `AGENTS.md`, `IDENTITY.md`, `knowledge/`, `notes/`, `.kern/config.json`, `.kern/sessions/`, `.kern/.env`, `.kern/pairing.json`
 - Excludes: `.kern/logs/`
 - Agent can be running during backup
 
 ```bash
-kern backup atlas
+kern backup
+kern backup ~/atlas/
 ```
 
 ### kern restore <file>
@@ -264,9 +215,9 @@ kern backup atlas
 Restore an agent from a backup archive.
 
 - Extracts to `./{agent-name}/` in the current directory
-- Registers the agent in `~/.kern/config.json`
-- If agent already exists: warns and asks to confirm overwrite
-- If agent is running: stops it before overwriting
+- Registers nothing — the extracted directory is the agent
+- If that directory already exists: asks to confirm overwrite
+- If the agent there is running: stops it before overwriting
 
 ```bash
 kern restore ~/.kern/backups/atlas-2026-09-19.tar.gz

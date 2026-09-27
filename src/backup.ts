@@ -1,41 +1,30 @@
 import { execSync } from "child_process";
 import { basename, resolve, join } from "path";
 import { existsSync } from "fs";
-import { findAgent, registerAgent, isProcessRunning, readPid, removePidFile } from "./registry.js";
+import { homedir } from "os";
+import { mkdir } from "fs/promises";
+import { resolveAgentDir, readAgentInfo, readLivePid } from "./agent-dir.js";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
-export async function backupAgent(nameOrPath?: string): Promise<void> {
-  if (!nameOrPath) {
-    console.error("Usage: kern backup <name>");
-    process.exit(1);
-  }
-
-  const agent = findAgent(nameOrPath);
-  if (!agent) {
-    console.error(`Agent not found: ${nameOrPath}`);
-    process.exit(1);
-  }
-
-  const agentDir = agent.path;
+/** Write `~/.kern/backups/<name>-<date>.tar.gz` from the agent in `[path]`. */
+export async function backupAgent(pathArg?: string): Promise<void> {
+  const agentDir = resolveAgentDir(pathArg);
+  const info = readAgentInfo(agentDir)!;
   const parentDir = resolve(agentDir, "..");
   const folderName = basename(agentDir);
   const date = new Date().toISOString().slice(0, 10);
-  const tarName = `${agent.name}-${date}.tar.gz`;
+  const tarName = `${info.name}-${date}.tar.gz`;
 
-  // Store backups in ~/.kern/backups/
-  const { homedir } = await import("os");
-  const { mkdir } = await import("fs/promises");
   const backupDir = join(homedir(), ".kern", "backups");
   await mkdir(backupDir, { recursive: true });
   const tarPath = join(backupDir, tarName);
 
   console.log("");
-  console.log(`  ${bold("kern backup")} ${agent.name}`);
+  console.log(`  ${bold("kern backup")} ${info.name}`);
   console.log(`  ${dim(agentDir)} → ${dim(tarPath)}`);
 
   try {
@@ -53,6 +42,7 @@ export async function backupAgent(nameOrPath?: string): Promise<void> {
   process.exit(0);
 }
 
+/** Extract a backup into `./<folder>/`, confirming before overwriting. Registers nothing. */
 export async function restoreAgent(tarFile?: string): Promise<void> {
   if (!tarFile) {
     console.error("Usage: kern restore <file.tar.gz>");
@@ -85,13 +75,10 @@ export async function restoreAgent(tarFile?: string): Promise<void> {
   console.log(`  ${bold("kern restore")} ${folderName}`);
   console.log(`  ${dim(tarFile)} → ${targetDir}`);
 
-  // Check if agent exists
-  const existing = findAgent(folderName);
-  if (existing || existsSync(targetDir)) {
+  if (existsSync(targetDir)) {
     const { confirm } = await import("@inquirer/prompts");
-    const existsWhere = existing ? `in registry (${existing.path})` : `at ${targetDir}`;
     const yes = await confirm({
-      message: `${folderName} already exists ${existsWhere}. Overwrite?`,
+      message: `${targetDir} already exists. Overwrite?`,
       default: false,
     });
     if (!yes) {
@@ -99,17 +86,10 @@ export async function restoreAgent(tarFile?: string): Promise<void> {
       process.exit(0);
     }
 
-    // Stop if running
-    if (existing) {
-      const pid = readPid(existing.path);
-      if (pid && isProcessRunning(pid)) {
-        try {
-          process.kill(pid, "SIGTERM");
-          await removePidFile(existing.path);
-          console.log(`  ${yellow("●")} stopped running agent`);
-        } catch {}
-        await new Promise((r) => setTimeout(r, 500));
-      }
+    // Stop if running, waiting for it to exit before overwriting its files
+    if (await readLivePid(targetDir)) {
+      const { stopAgent } = await import("./daemon.js");
+      await stopAgent(targetDir);
     }
   }
 
@@ -122,12 +102,8 @@ export async function restoreAgent(tarFile?: string): Promise<void> {
     process.exit(1);
   }
 
-  // Register
-  await registerAgent(targetDir);
-  console.log(`  ${green("✓")} registered`);
-
   console.log("");
-  console.log(`  Run: ${dim(`kern start ${folderName}`)}`);
+  console.log(`  Run: ${dim(`kern start ${folderName}/`)}`);
   console.log("");
   process.exit(0);
 }

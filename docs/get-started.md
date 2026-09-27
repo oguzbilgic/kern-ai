@@ -15,7 +15,7 @@ Requires Node.js 20+.
 ## Create an agent
 
 ```
-kern init my-agent
+kern init my-agent/
 ```
 
 The wizard asks for:
@@ -40,15 +40,15 @@ my-agent/
 ## Start the agent
 
 ```
-kern start
+kern start my-agent/
 ```
 
-The agent runs as a background daemon. Start once, connect from anywhere.
+The agent runs as a background daemon. Start once, connect from anywhere. An agent is just its directory: every command takes a path, and inside `my-agent/` you can leave it off (`kern start`, `kern status`, `kern tui`).
 
 ## Chat from the terminal
 
 ```
-kern tui
+kern tui my-agent/
 ```
 
 Interactive terminal chat. Type a message, get a response. The agent has tools — it can run commands, read/write files, search the web.
@@ -69,13 +69,13 @@ Agent sidebar, slash commands, markdown rendering, collapsible tool output. Shar
 2. Add the token to your config:
 
 ```
-kern init my-agent
+kern init my-agent/
 ```
 
 Select Telegram and paste the token. Restart the agent:
 
 ```
-kern restart my-agent
+kern restart my-agent/
 ```
 
 Message your bot on Telegram — same agent, same memory.
@@ -104,7 +104,7 @@ The first user to message the agent on Telegram, Slack, or Matrix is automatical
 
 1. New user messages the agent → receives `KERN-XXXX`
 2. They share the code with you
-3. You approve it: `kern pair my-agent KERN-XXXX`
+3. You approve it: `kern pair my-agent/ KERN-XXXX`
 
 ## Agent memory
 

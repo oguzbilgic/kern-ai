@@ -60,13 +60,13 @@ Agent state lives in the `my-agent` volume mounted to `/home/agent` — sessions
 
 ```bash
 npm install -g kern-ai
-kern init my-agent
-kern tui
+kern init my-agent/
+kern tui my-agent/
 ```
 
 The init wizard scaffolds your agent, asks for a provider and API key, then starts it. `kern tui` opens an interactive chat. `kern web start` serves the web UI.
 
-For automation: `kern init my-agent --api-key sk-or-...` (no prompts, defaults to openrouter + gemini 3.8 flash). For Ollama: `kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
+For automation: `kern init my-agent/ --api-key sk-or-...` (no prompts, defaults to openrouter + gemini 3.8 flash). For Ollama: `kern init my-agent/ --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
 
 ## Dashboards
 
@@ -113,25 +113,25 @@ The agent reads and writes its own memory files through tools — takes notes, u
 
 ## CLI
 
+An agent is a directory containing `.kern/`. Every command takes an optional `[path]`, defaulting to the current directory.
+
 ```bash
-kern init <name>          # create or configure an agent
-kern start [name|path]    # start agents in background
-kern stop [name]          # stop agents
-kern restart [name]       # restart agents
-kern install [name|--web|--proxy] # install systemd services
-kern tui [name]           # interactive chat
-kern web <run|start|stop> # static web UI server
-kern proxy <start|stop|token>  # authenticated reverse proxy
-kern logs [name]          # follow agent logs
-kern list                 # show all agents and services
-kern backup <name>        # backup agent to .tar.gz
+kern init [path]          # create or configure an agent
+kern start [path]         # start the agent in the background
+kern stop [path]          # stop the agent
+kern restart [path]       # restart the agent
+kern status [path]        # show the agent status
+kern tui [path]           # interactive chat
+kern logs [path]          # follow agent logs
+kern backup [path]        # backup agent to .tar.gz
+kern web <run|start|status|stop> [--port 8080] [--host 0.0.0.0]  # static web UI server
 ```
+
+Run several agents by giving each its own directory: `kern start ~/alice/`, `kern start ~/bob/`.
 
 ### Connecting
 
 Agents bind to `0.0.0.0` on sticky ports (4100-4999), accessible over Tailscale or LAN. The web UI connects directly — enter the agent's URL and `KERN_AUTH_TOKEN` in the sidebar.
-
-Optionally, `kern proxy start` launches an authenticated reverse proxy that discovers and forwards to local agents.
 
 ### Slash commands
 

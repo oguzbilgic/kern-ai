@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking
+- **Directory-based local mode, no registry** — an agent is a directory containing `.kern/`. `~/.kern/config.json` and the `~/.kern/agents.json` migration are gone; the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes `[path]` (default `.`): `kern init`, `start`, `stop`, `restart`, `run`, `status`, `logs`, `tui`, `pair [path] <code>`, `backup`. `kern start` with no argument starts the agent in the current directory instead of every registered agent. `kern list` / `kern ls` are aliases of `kern status`, which prints a single card. Multi-agent development is per directory: `kern start ~/alice/`, `kern start ~/bob/`.
+- **Deprecated commands** — `kern remove` (agents are directories; delete the folder), `kern install` / `kern uninstall` (systemd support returns with fleet mode), and `kern proxy` (the proxy server, `proxy.ts`, `proxy-daemon.ts`, and `KERN_PROXY_TOKEN` are deleted). Each exits 1 with `kern <cmd> has been deprecated. See CHANGELOG.md`.
+- **`kern web` flags** — `web_port` / `web_host` become `--port` (default 8080) and `--host` (default `0.0.0.0`) on `kern web run` and `kern web start`. `start` records `{ pid, port, host }` in `~/.kern/web.json` (replaces `web.pid`, which is still read once so an older daemon can be stopped).
+
+### Fixes
+- **`/restart` no longer depends on `PATH`** — replies `Restarting.` first, then spawns `kern restart <agent dir>` detached with the running `process.execPath` and the package's own entry point, passing the directory rather than the name. `kern start` likewise spawns with `process.execPath` instead of the bare word `node`.
+- **Sticky port assigned on first start, never changed after** — `kern init` no longer pre-assigns a port, so two agents scaffolded while nothing runs don't both get 4100; the first start picks a free one and saves it. A saved port is never changed automatically: if it is busy, the agent exits with `port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.` An agent also refuses to start when its `.kern/agent.pid` names a live process, so `kern run` on a directory whose daemon is up cannot create a duplicate.
+- **`kern init` on an existing agent keeps the sticky port** — reconfiguring previously rewrote `.kern/config.json` with only name, model, provider, and tool scope.
+- **Upgrade hint** — `kern status` in a directory without `.kern/` prints the paths an old `~/.kern/config.json` still lists, once, and suggests deleting the file.
+
 ## v0.42.0
 
 ### Features

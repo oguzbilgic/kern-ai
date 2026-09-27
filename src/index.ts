@@ -5,8 +5,8 @@ import { existsSync } from "fs";
 import { startApp } from "./app.js";
 import { runInit } from "./init.js";
 import { showStatus } from "./status.js";
-import { startAgent, stopAgent } from "./daemon.js";
-import { findAgent, loadRegistry, readAgentInfo } from "./registry.js";
+import { startAgent, stopAgent, restartAgent } from "./daemon.js";
+import { AgentDirError, resolveAgentDir, readAgentInfo, readLivePid } from "./agent-dir.js";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -31,14 +31,20 @@ async function showHelp() {
   w(`  ${dim("One agent. One folder. One continuous conversation.")}`);
   w("");
   w(`  ${yellow("Commands")}`);
-  w(`    ${cyan("kern init")} ${dim("<name>")}            create or configure an agent`);
-  w(`    ${cyan("kern start")} ${dim("[name|path]")}      start agents`);
-  w(`    ${cyan("kern stop")} ${dim("[name]")}            stop agents`);
-  w(`    ${cyan("kern restart")} ${dim("[name]")}         restart agents`);
-  w(`    ${cyan("kern list")}                   show all agents`);
-  w(`    ${cyan("kern remove")} ${dim("<name>")}          unregister an agent`);
-  w(`    ${cyan("kern pair")} ${dim("<agent> <code>")}    approve a pairing code`);
-  w(`    ${cyan("kern backup")} ${dim("<name>")}          backup agent to .tar.gz`);
+  w(`    ${dim("An agent is a directory containing .kern/. [path] defaults to the current directory.")}`);
+  w("");
+  w(`    ${cyan("kern init")} ${dim("[path]")}             create or configure an agent`);
+  w(`    ${cyan("kern start")} ${dim("[path]")}            start the agent in the background`);
+  w(`    ${cyan("kern stop")} ${dim("[path]")}             stop the agent`);
+  w(`    ${cyan("kern restart")} ${dim("[path]")}          restart the agent`);
+  w(`    ${cyan("kern run")} ${dim("[path]")}              run the agent in the foreground`);
+  w(`    ${cyan("kern status")} ${dim("[path]")}           show the agent status (alias: list, ls)`);
+  w(`    ${cyan("kern logs")} ${dim("[path] [-f] [-n 50] [--level warn]")}  show agent logs`);
+  w(`    ${cyan("kern tui")} ${dim("[path]")}              interactive chat`);
+  w(`    ${cyan("kern pair")} ${dim("[path] <code>")}      approve a pairing code`);
+  w(`    ${cyan("kern backup")} ${dim("[path]")}           backup agent to .tar.gz`);
+  w(`    ${cyan("kern restore")} ${dim("<file>")}          restore agent from backup`);
+  w(`    ${cyan("kern web")} ${dim("<run|start|status|stop> [--port 8080] [--host 0.0.0.0]")}  static web UI server`);
   w(`    ${cyan("kern import")} ${dim("opencode <name>")}         import session from OpenCode`);
   w(`    ${cyan("kern import")} ${dim("openclaw-lcm <lcm.db>")}   import session from OpenClaw LCM`);
   w(`    ${cyan("kern scripts")} ${dim("recover-session <recall.db>")}  rebuild a session from recall.db`);
@@ -46,49 +52,9 @@ async function showHelp() {
   w(`    ${cyan("kern scripts")} ${dim("segment-prune <recall.db>")}    prune overlapping segments to one tiling per level (dry-run by default)`);
   w(`    ${cyan("kern scripts")} ${dim("recall-health <recall.db>")}     analyze embedding coverage, vector health, batch blockers`);
   w(`    ${cyan("kern scripts")} ${dim("recall-repair <recall.db>")}     repair missing vectors and backfill orphaned chunks (dry-run by default)`);
-  w(`    ${cyan("kern restore")} ${dim("<file>")}         restore agent from backup`);
-  w(`    ${cyan("kern logs")} ${dim("[name] [-f] [-n 50] [--level warn]")}  show agent logs`);
-  w(`    ${cyan("kern install")} ${dim("[name|--web|--proxy]")} install systemd services`);
-  w(`    ${cyan("kern uninstall")} ${dim("[name]")}        remove systemd services`);
-  w(`    ${cyan("kern tui")} ${dim("[name]")}             interactive chat`);
-  w(`    ${cyan("kern web")} ${dim("<run|start|stop|status>")}     static web UI server`);
-  w(`    ${cyan("kern proxy")} ${dim("<start|stop|status|token>")} authenticated proxy server`);
   w("");
-}
-
-async function resolveAgentDir(nameOrPath?: string): Promise<string> {
-  if (nameOrPath) {
-    // Check registry
-    const agent = findAgent(nameOrPath);
-    if (agent) return agent.path;
-
-    // Check path
-    const dir = resolve(nameOrPath);
-    if (existsSync(dir) && (existsSync(join(dir, ".kern")) || existsSync(join(dir, "AGENTS.md")))) {
-      return dir;
-    }
-
-    console.error(`Agent not found: ${nameOrPath}`);
-    process.exit(1);
-  }
-
-  // No arg — auto-select
-  const paths = await loadRegistry();
-  if (paths.length === 0) {
-    console.error("No agents registered. Run 'kern init <name>' first.");
-    process.exit(1);
-  }
-  if (paths.length === 1) {
-    return paths[0];
-  }
-
-  // Multiple agents — prompt to select
-  const { select } = await import("@inquirer/prompts");
-  const choices = paths.map((p) => {
-    const info = readAgentInfo(p);
-    return { name: info?.name || p, value: p };
-  });
-  return select({ message: "Select agent", choices });
+  w(`  ${dim("Multiple agents: one directory each, e.g.")} kern start ~/alice/ ${dim("and")} kern start ~/bob/`);
+  w("");
 }
 
 async function main() {
@@ -114,96 +80,34 @@ async function main() {
   }
 
   if (cmd === "list" || cmd === "ls" || cmd === "status") {
-    await showStatus();
+    await showStatus(args[1]);
     process.exit(0);
   }
 
   if (cmd === "start") {
-    if (args[1]) {
-      const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("start", args[1]);
-        if (!ok) {
-          console.error(`Failed to start service-managed agent: ${args[1]}`);
-          process.exit(1);
-        }
-        process.exit(0);
-      }
-    }
-    await startAgent(args[1]);
+    console.log("");
+    await startAgent(resolveAgentDir(args[1]));
+    console.log("");
     process.exit(0);
   }
 
   if (cmd === "stop") {
-    if (args[1]) {
-      const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("stop", args[1]);
-        if (!ok) {
-          console.error(`Failed to stop service-managed agent: ${args[1]}`);
-          process.exit(1);
-        }
-        process.exit(0);
-      }
-    }
-    await stopAgent(args[1]);
+    console.log("");
+    await stopAgent(resolveAgentDir(args[1]));
+    console.log("");
     process.exit(0);
   }
 
   if (cmd === "restart") {
-    if (args[1]) {
-      const { isServiceInstalled, serviceControl } = await import("./install.js");
-      if (isServiceInstalled(args[1])) {
-        const ok = serviceControl("restart", args[1]);
-        if (!ok) {
-          console.error(`Failed to restart service-managed agent: ${args[1]}`);
-          process.exit(1);
-        }
-        process.exit(0);
-      }
-    }
-    await stopAgent(args[1]);
-    await new Promise((r) => setTimeout(r, 500));
-    await startAgent(args[1]);
+    console.log("");
+    await restartAgent(resolveAgentDir(args[1]));
+    console.log("");
     process.exit(0);
   }
 
-  if (cmd === "install") {
-    const { install } = await import("./install.js");
-    await install(args[1]);
-    process.exit(0);
-  }
-
-  if (cmd === "uninstall") {
-    const { uninstall } = await import("./install.js");
-    await uninstall(args[1]);
-    process.exit(0);
-  }
-
-  if (cmd === "remove" || cmd === "rm") {
-    const name = args[1];
-    if (!name) {
-      console.error("Usage: kern remove <name>");
-      process.exit(1);
-    }
-    const { removeAgent, findAgent, isProcessRunning } = await import("./registry.js");
-    const { stopAgent } = await import("./daemon.js");
-    const agent = findAgent(name);
-    if (!agent) {
-      console.error(`Agent not found: ${name}`);
-      process.exit(1);
-    }
-    // Uninstall systemd service if installed
-    const { isServiceInstalled, uninstall } = await import("./install.js");
-    if (isServiceInstalled(name)) {
-      await uninstall(name);
-    }
-    if (agent.pid && isProcessRunning(agent.pid)) {
-      await stopAgent(name);
-    }
-    await removeAgent(name);
-    console.log(`  Removed ${name}`);
-    process.exit(0);
+  if (cmd === "install" || cmd === "uninstall" || cmd === "remove" || cmd === "rm" || cmd === "proxy") {
+    console.error(`kern ${cmd} has been deprecated. See CHANGELOG.md: https://github.com/oguzbilgic/kern-ai/blob/master/CHANGELOG.md`);
+    process.exit(1);
   }
 
   if (cmd === "logs") {
@@ -211,16 +115,16 @@ async function main() {
     let follow: boolean | null = null;  // null = auto (follow unless -n)
     let lines = 50;
     let level: string | null = null;
-    let nameArg: string | undefined;
+    let pathArg: string | undefined;
     const logArgs = args.slice(1);
     for (let i = 0; i < logArgs.length; i++) {
       if (logArgs[i] === "-f") { follow = true; }
       else if (logArgs[i] === "-n" && logArgs[i + 1]) { lines = parseInt(logArgs[++i], 10) || 50; }
       else if (logArgs[i] === "--level" && logArgs[i + 1]) { level = logArgs[++i]; }
-      else if (!logArgs[i].startsWith("-")) { nameArg = logArgs[i]; }
+      else if (!logArgs[i].startsWith("-")) { pathArg = logArgs[i]; }
     }
 
-    const agentDir = await resolveAgentDir(nameArg);
+    const agentDir = resolveAgentDir(pathArg);
     const logFile = join(agentDir, ".kern", "logs", "kern.log");
     if (!existsSync(logFile)) {
       console.error("No logs yet. Start the agent first.");
@@ -312,24 +216,22 @@ async function main() {
   }
 
   if (cmd === "pair") {
-    const agentName = args[1];
-    const code = args[2];
-    if (!agentName || !code) {
-      console.error("Usage: kern pair <agent> <code>");
+    // kern pair <code>          → agent in the current directory
+    // kern pair <path> <code>   → agent in <path>
+    const pathArg = args.length >= 3 ? args[1] : undefined;
+    const code = args.length >= 3 ? args[2] : args[1];
+    if (!code) {
+      console.error("Usage: kern pair [path] <code>");
       process.exit(1);
     }
-    const { findAgent } = await import("./registry.js");
+    const agentDir = resolveAgentDir(pathArg);
+    const info = readAgentInfo(agentDir)!;
     const { PairingManager } = await import("./pairing.js");
-    const agent = findAgent(agentName);
-    if (!agent) {
-      console.error(`Agent not found: ${agentName}`);
-      process.exit(1);
-    }
-    const pairing = new PairingManager(agent.path);
+    const pairing = new PairingManager(agentDir);
     await pairing.load();
     const result = await pairing.pair(code);
     if (result) {
-      console.log(`  Paired user ${result.userId} (${result.interface}) to ${agentName}`);
+      console.log(`  Paired user ${result.userId} (${result.interface}) to ${info.name}`);
     } else {
       console.error(`  Invalid or expired code: ${code}`);
     }
@@ -350,56 +252,29 @@ async function main() {
 
   if (cmd === "tui") {
     const { connectTui } = await import("./tui.js");
-    const { findAgent, loadRegistry, readAgentInfo, isProcessRunning } = await import("./registry.js");
-    const { startAgent } = await import("./daemon.js");
+    const agentDir = resolveAgentDir(args[1]);
 
-    let agentName = args[1];
-
-    // Auto-select if no arg
-    if (!agentName) {
-      const paths = await loadRegistry();
-      if (paths.length === 0) {
-        console.error("No agents registered. Run 'kern init <name>' first.");
-        process.exit(1);
-      } else if (paths.length === 1) {
-        const info = readAgentInfo(paths[0]);
-        agentName = info?.name || paths[0];
-      } else {
-        const { select } = await import("@inquirer/prompts");
-        const choices = paths.map((p) => {
-          const info = readAgentInfo(p);
-          return { name: info?.name || p, value: info?.name || p };
-        });
-        agentName = await select({ message: "Select agent", choices });
-      }
+    // Auto-start if not running
+    if (!(await readLivePid(agentDir))) {
+      console.log("");
+      await startAgent(agentDir);
+      console.log("");
     }
 
-    // Check if running, auto-start if not
-    let agent = findAgent(agentName);
-    if (!agent) {
-      console.error(`Agent not found: ${agentName}`);
+    const agent = readAgentInfo(agentDir)!;
+    if (!agent.port) {
+      console.error(`Cannot determine port for ${agent.name}. Is it running?`);
       process.exit(1);
     }
 
-    if (!agent.pid || !isProcessRunning(agent.pid)) {
-      await startAgent(agentName);
-      // Reload to get the port
-      agent = findAgent(agentName);
-    }
-
-    if (!agent?.port) {
-      console.error(`Cannot determine port for ${agentName}. Is it running?`);
-      process.exit(1);
-    }
-
-    await connectTui(agent.port, agentName, agent.token || undefined);
+    await connectTui(agent.port, agent.name, agentDir, agent.token || undefined);
     return;
   }
 
   if (cmd === "run") {
     const initIfNeeded = args.includes("--init-if-needed");
     const dirArg = args.filter((a: string) => a !== "--init-if-needed")[1];
-    const agentDir = initIfNeeded ? resolve(dirArg || ".") : await resolveAgentDir(dirArg);
+    const agentDir = initIfNeeded ? resolve(dirArg || ".") : resolveAgentDir(dirArg);
 
     if (initIfNeeded && !existsSync(join(agentDir, ".kern", "config.json"))) {
       const { scaffoldAgent, API_KEY_ENV, DEFAULT_PROVIDER_MODELS } = await import("./init.js");
@@ -429,48 +304,32 @@ async function main() {
 
   if (cmd === "web") {
     const subcmd = args[1];
-    const { webStart, webStop, webStatus } = await import("./web-daemon.js");
-    if (subcmd === "start" || subcmd === "stop" || subcmd === "restart") {
-      const { getWebServiceStatus } = await import("./install.js");
-      if (getWebServiceStatus() !== null) {
-        const { spawnSync } = await import("child_process");
-        spawnSync("systemctl", ["--user", subcmd, "kern-web"], { stdio: "pipe" });
-        return;
+    const { webStart, webStop, webStatus, parseWebFlags } = await import("./web-daemon.js");
+    if (subcmd === "start" || subcmd === "run" || subcmd === "restart") {
+      let flags;
+      try {
+        flags = parseWebFlags(args.slice(2));
+      } catch (err: any) {
+        console.error(`Error: ${err.message}`);
+        console.error("Usage: kern web <run|start|status|stop> [--port 8080] [--host 0.0.0.0]");
+        process.exit(1);
       }
-      if (subcmd === "start") await webStart();
-      else if (subcmd === "stop") await webStop();
-      else { await webStop(); await new Promise(r => setTimeout(r, 500)); await webStart(); }
+      if (subcmd === "run") {
+        // Foreground (for Docker). web.js reads --port/--host from this process's argv.
+        await import("./web.js");
+      } else if (subcmd === "start") {
+        await webStart(flags);
+      } else {
+        await webStop();
+        await new Promise((r) => setTimeout(r, 500));
+        await webStart(flags);
+      }
+    } else if (subcmd === "stop") {
+      await webStop();
     } else if (subcmd === "status") {
       await webStatus();
-    } else if (subcmd === "run") {
-      // Run web server in foreground (for Docker)
-      await import("./web.js");
     } else {
-      console.error("Usage: kern web <run|start|stop|status>");
-      process.exit(1);
-    }
-    return;
-  }
-
-  if (cmd === "proxy") {
-    const subcmd = args[1];
-    const { proxyStart, proxyStop, proxyStatus, proxyToken } = await import("./proxy-daemon.js");
-    if (subcmd === "start" || subcmd === "stop" || subcmd === "restart") {
-      const { getProxyServiceStatus } = await import("./install.js");
-      if (getProxyServiceStatus() !== null) {
-        const { spawnSync } = await import("child_process");
-        spawnSync("systemctl", ["--user", subcmd, "kern-proxy"], { stdio: "pipe" });
-        return;
-      }
-      if (subcmd === "start") await proxyStart();
-      else if (subcmd === "stop") await proxyStop();
-      else { await proxyStop(); await new Promise(r => setTimeout(r, 500)); await proxyStart(); }
-    } else if (subcmd === "status") {
-      await proxyStatus();
-    } else if (subcmd === "token") {
-      await proxyToken();
-    } else {
-      console.error("Usage: kern proxy <start|stop|status|token>");
+      console.error("Usage: kern web <run|start|status|stop> [--port 8080] [--host 0.0.0.0]");
       process.exit(1);
     }
     return;
@@ -482,6 +341,10 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Fatal:", error.message);
+  if (error instanceof AgentDirError) {
+    console.error(`Error: ${error.message}`);
+  } else {
+    console.error("Fatal:", error.message);
+  }
   process.exit(1);
 });
