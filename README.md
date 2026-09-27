@@ -6,6 +6,8 @@ kern runs an agent as a long-lived process with one persistent memory, reachable
 
 No dashboards to host, no ports to expose. A fleet is a set of containers, each one a coworker in your workspace.
 
+![kern](https://kern-ai.com/images/agent-intranet.png)
+
 ## Why kern
 
 - **One brain, every channel** — Slack, Matrix, Telegram, Discord, IRC, Nostr, and the terminal all feed one session. The agent knows who is talking, which room it is in, and what was said 10,000 messages ago.
