@@ -3,7 +3,6 @@ import { join, basename, resolve } from "path";
 import { existsSync, readFileSync } from "fs";
 import { createServer } from "net";
 import { parse as parseDotenv } from "dotenv";
-import { saveConfigField } from "./config.js";
 import { log } from "./log.js";
 
 /**
@@ -105,39 +104,15 @@ export async function assignPort(): Promise<number> {
   return 0;
 }
 
-/** The subset of AgentServer that port binding needs. */
-export interface BindableServer {
-  start(host: string, port: number): Promise<number>;
-}
+// --- Processes ---
 
 /**
- * Bind the agent server on its sticky port. If that port is still busy after
- * the server's own EADDRINUSE retries, pick a fresh port, save it to
- * `.kern/config.json`, and bind there instead.
- *
- * A port pinned by `KERN_PORT` is never reassigned: the environment owns it,
- * so the original bind error is rethrown.
+ * The message an agent prints and exits with when its saved port is busy.
+ * A saved port is never changed automatically.
  */
-export async function bindAgentServer(
-  server: BindableServer,
-  agentDir: string,
-  port: number,
-  opts: { host?: string; pinned?: boolean } = {},
-): Promise<number> {
-  const host = opts.host ?? "0.0.0.0";
-  const pinned = opts.pinned ?? process.env.KERN_PORT !== undefined;
-  try {
-    return await server.start(host, port);
-  } catch (err: any) {
-    if (err?.code !== "EADDRINUSE" || port === 0 || pinned) throw err;
-    const next = await assignPort();
-    if (next > 0) await saveConfigField(agentDir, "port", next);
-    log("kern", `port :${port} in use, reassigned :${next || "os-assigned"}`);
-    return server.start(host, next);
-  }
+export function portInUseMessage(port: number): string {
+  return `port :${port} is in use. Stop the process using it, or change "port" in .kern/config.json.`;
 }
-
-// --- Processes ---
 
 export function isProcessRunning(pid: number): boolean {
   try {

@@ -2,7 +2,7 @@ import { mkdir, writeFile, readFile } from "fs/promises";
 import { join, resolve, basename, relative } from "path";
 import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
-import { isAgentDir, readLivePid, assignPort } from "./agent-dir.js";
+import { isAgentDir, readLivePid } from "./agent-dir.js";
 import { startAgent, stopAgent } from "./daemon.js";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
@@ -452,13 +452,13 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   const knowledgeMd = await readFile(join(templatesDir, "KNOWLEDGE.md"), "utf-8");
   const usersMd = await readFile(join(templatesDir, "USERS.md"), "utf-8");
 
-  // .kern/config.json
+  // .kern/config.json — no port yet: the first start assigns one from live
+  // state, so two agents scaffolded while nothing runs don't both get 4100
   const config: Partial<KernConfig> = {
     name,
     model,
     provider,
     toolScope: "full",
-    port: await assignPort(),
   };
   // .kern/.env
   const envLines: string[] = [];

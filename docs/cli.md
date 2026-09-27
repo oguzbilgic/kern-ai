@@ -103,7 +103,7 @@ Environment variables used during scaffold:
 
 ### Ports
 
-Each agent gets a **sticky port** from 4100–4999, picked by live bind checking on first start and saved to `.kern/config.json`. If that port is busy when the agent starts (for example two agents that were both handed 4100 while stopped), the agent picks a fresh port, saves it, and logs `port :4100 in use, reassigned :4101`. A port set with `KERN_PORT` is never reassigned.
+Each agent gets a **sticky port** from 4100–4999, picked by live bind checking on its first start and saved to `.kern/config.json`. `kern init` does not assign one, so two agents scaffolded while nothing is running don't both end up on 4100: the first to start takes 4100, the next takes 4101. Once saved, a port is never changed automatically. If it is busy when the agent starts, the agent exits with `port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.` Starting an agent whose directory already has a live process exits with `already running (pid N)`. `KERN_PORT` overrides the saved port.
 
 ### Removing an agent
 

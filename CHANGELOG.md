@@ -9,7 +9,7 @@
 
 ### Fixes
 - **`/restart` no longer depends on `PATH`** — replies `Restarting.` first, then spawns `kern restart <agent dir>` detached with the running `process.execPath` and the package's own entry point, passing the directory rather than the name. `kern start` likewise spawns with `process.execPath` instead of the bare word `node`.
-- **Sticky port fallback** — if an agent's saved port is busy at startup after the server's own retries, it picks a fresh port from 4100–4999, saves it, and logs `port :4100 in use, reassigned :4101` instead of failing. A port pinned by `KERN_PORT` is never reassigned.
+- **Sticky port assigned on first start, never changed after** — `kern init` no longer pre-assigns a port, so two agents scaffolded while nothing runs don't both get 4100; the first start picks a free one and saves it. A saved port is never changed automatically: if it is busy, the agent exits with `port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.` An agent also refuses to start when its `.kern/agent.pid` names a live process, so `kern run` on a directory whose daemon is up cannot create a duplicate.
 - **`kern init` on an existing agent keeps the sticky port** — reconfiguring previously rewrote `.kern/config.json` with only name, model, provider, and tool scope.
 - **Upgrade hint** — `kern status` in a directory without `.kern/` prints the paths an old `~/.kern/config.json` still lists, once, and suggests deleting the file.
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createServer, type Server } from "net";
@@ -14,7 +14,7 @@ import {
   readLivePid,
   removePidFile,
   restartArgv,
-  bindAgentServer,
+  portInUseMessage,
   waitForExit,
 } from "../src/agent-dir.js";
 import { parseWebFlags } from "../src/web-daemon.js";
@@ -151,73 +151,9 @@ test("parseWebFlags defaults, accepts --port/--host, rejects --port 0", () => {
   assert.throws(() => parseWebFlags(["--host"]), /--host requires a value/);
 });
 
-test("bindAgentServer falls back to a fresh port and saves it when the sticky port is busy", async () => {
-  const dir = tmp();
-  const held = await listen(4100);
-  try {
-    mkdirSync(join(dir, ".kern"));
-    writeFileSync(join(dir, ".kern", "config.json"), JSON.stringify({ name: "t", port: 4100 }) + "\n");
-
-    const attempts: number[] = [];
-    const fakeServer = {
-      async start(_host: string, port: number): Promise<number> {
-        attempts.push(port);
-        if (port === 4100) {
-          const err: any = new Error("listen EADDRINUSE");
-          err.code = "EADDRINUSE";
-          throw err;
-        }
-        return port;
-      },
-    };
-
-    const bound = await bindAgentServer(fakeServer, dir, 4100, { pinned: false });
-    assert.notEqual(bound, 4100);
-    assert.equal(attempts[0], 4100);
-    assert.equal(attempts[1], bound);
-
-    const saved = JSON.parse(readFileSync(join(dir, ".kern", "config.json"), "utf-8"));
-    assert.equal(saved.port, bound);
-    assert.equal(saved.name, "t", "other config fields are preserved");
-  } finally {
-    await close(held);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("bindAgentServer never reassigns a port pinned by the environment", async () => {
-  const dir = tmp();
-  try {
-    mkdirSync(join(dir, ".kern"));
-    writeFileSync(join(dir, ".kern", "config.json"), JSON.stringify({ port: 4100 }) + "\n");
-    const fakeServer = {
-      async start(): Promise<number> {
-        const err: any = new Error("listen EADDRINUSE");
-        err.code = "EADDRINUSE";
-        throw err;
-      },
-    };
-    await assert.rejects(bindAgentServer(fakeServer, dir, 4100, { pinned: true }), /EADDRINUSE/);
-    const saved = JSON.parse(readFileSync(join(dir, ".kern", "config.json"), "utf-8"));
-    assert.equal(saved.port, 4100);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("bindAgentServer rethrows errors other than EADDRINUSE", async () => {
-  const dir = tmp();
-  try {
-    mkdirSync(join(dir, ".kern"));
-    const fakeServer = {
-      async start(): Promise<number> {
-        const err: any = new Error("listen EACCES");
-        err.code = "EACCES";
-        throw err;
-      },
-    };
-    await assert.rejects(bindAgentServer(fakeServer, dir, 80, { pinned: false }), /EACCES/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("portInUseMessage names the port and the config field", () => {
+  assert.equal(
+    portInUseMessage(4100),
+    'port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.',
+  );
 });

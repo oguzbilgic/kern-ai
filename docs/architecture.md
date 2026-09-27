@@ -22,7 +22,8 @@ An agent is a directory containing `.kern/`. There is no registry and no global 
 
 `kern start [path]` launches the agent in `path` as a background daemon (`kern run [path]` runs it in the foreground). Each agent process:
 
-- Binds an HTTP server to `0.0.0.0` on a **sticky port** (picked from 4100-4999 by live bind checking on first start, saved to `.kern/config.json`). If the sticky port is busy at startup, the agent picks a fresh one, saves it, and logs `port :4100 in use, reassigned :4101`. A port set with `KERN_PORT` is never reassigned.
+- Refuses to start if `.kern/agent.pid` names a live process (the PID file is the lock)
+- Binds an HTTP server to `0.0.0.0` on a **sticky port** (picked from 4100-4999 by live bind checking on first start, saved to `.kern/config.json`). A saved port is never changed automatically; if it is busy, the agent exits and says so.
 - Writes its PID to its own `.kern/agent.pid`
 - Connects to Telegram (long polling), Slack (socket mode), and/or Matrix (`/sync` long poll) if tokens are configured
 - Runs the message queue, tool executor, and model calls

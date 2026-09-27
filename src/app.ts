@@ -14,7 +14,7 @@ import { randomBytes } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
 import type { Interface, MessageHandler } from "./interfaces/types.js";
 import type { TurnOrigin } from "./plugins/types.js";
-import { writePidFile, removePidFile, assignPort, bindAgentServer } from "./agent-dir.js";
+import { writePidFile, removePidFile, assignPort, readLivePid, portInUseMessage } from "./agent-dir.js";
 import { AgentServer } from "./server.js";
 import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
@@ -127,6 +127,14 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   await updateKernel(agentDir);
 
   const config = await loadConfig(agentDir);
+
+  // Refuse to run twice for the same directory: the PID file is the lock.
+  // Checked before the database or any interface is opened.
+  const livePid = await readLivePid(agentDir);
+  if (livePid && livePid !== process.pid) {
+    log.error("kern", `${config.name} is already running (pid ${livePid}). Use 'kern stop' first.`);
+    process.exit(1);
+  }
 
   // Auto-generate auth token if missing
   if (!process.env.KERN_AUTH_TOKEN) {
@@ -497,9 +505,18 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
   }
 
-  // Bind on the sticky port; if it is still busy after the server's own
-  // retries, pick a fresh one and save it (unless KERN_PORT pinned it).
-  const port = await bindAgentServer(server, agentDir, config.port);
+  // A saved port is never changed automatically: if it is busy after the
+  // server's own retries, say so and exit.
+  let port: number;
+  try {
+    port = await server.start("0.0.0.0", config.port);
+  } catch (err: any) {
+    if (err?.code === "EADDRINUSE") {
+      log.error("kern", portInUseMessage(config.port));
+      process.exit(1);
+    }
+    throw err;
+  }
   await writePidFile(agentDir, process.pid);
 
   // Start Telegram if configured
