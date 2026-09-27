@@ -1,7 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type { embed } from "ai";
+import type { embed, LanguageModel } from "ai";
 import type { KernConfig } from "./config.js";
 import { log } from "./log.js";
 
@@ -119,8 +119,7 @@ export function summaryViaOpenRouter(config: KernConfig): boolean {
   return id.includes("/");
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createSummaryModel(config: KernConfig): any {
+export function createSummaryModel(config: KernConfig): LanguageModel | null {
   if (summaryViaOpenRouter(config)) {
     const orClient = createOpenAIClient("openrouter");
     if (orClient) return orClient.chat(config.summaryModel);
@@ -180,8 +179,7 @@ export interface AudioModelRef {
  * Create a model instance for audio input (transcription / analysis).
  * See {@link AudioModelRef} for why routing is explicit per entry.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createAudioModel(config: KernConfig, ref: AudioModelRef): any {
+export function createAudioModel(config: KernConfig, ref: AudioModelRef): LanguageModel {
   if (ref.viaOpenRouter) {
     const openrouter = createOpenRouter({
       apiKey: process.env.OPENROUTER_API_KEY,
@@ -196,8 +194,7 @@ export function createAudioModel(config: KernConfig, ref: AudioModelRef): any {
  * Create an AI SDK model instance from kern config.
  * Shared across runtime (chat) and notes (summary generation).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createModel(config: KernConfig): any {
+export function createModel(config: KernConfig): LanguageModel {
   switch (config.provider) {
     case "anthropic": {
       const anthropic = createAnthropic();

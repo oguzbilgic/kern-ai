@@ -236,7 +236,7 @@ export class Runtime {
     Object.assign(tools, this.pluginTools);
 
     const model = createModel(this.config);
-    let streamError: any = null;
+    let streamError: unknown = null;
 
     try {
       let fullText = "";
@@ -298,7 +298,7 @@ export class Runtime {
         },
         onStepFinish: async (step) => {
           // Persist only new messages from this step (response.messages is cumulative)
-          const allMsgs = step.response.messages as ModelMessage[];
+          const allMsgs: ModelMessage[] = step.response.messages;
           const newMsgs = allMsgs.slice(persistedCount).map((msg) => {
             if (msg.role === "assistant" && typeof msg.content === "string") {
               return { ...msg, content: msg.content.replace(/^\n+/, "") };
@@ -414,7 +414,7 @@ export class Runtime {
       let textStarted = false;
       for await (const part of result.fullStream) {
         if (part.type === "text-delta") {
-          let text = ("delta" in part ? part.delta : (part as any).text) || "";
+          let text = part.text;
           if (!textStarted) {
             text = text.replace(/^\n+/, "");
             if (!text) continue;
@@ -423,7 +423,7 @@ export class Runtime {
           fullText += text;
           onEvent({ type: "text-delta", text });
         } else if (part.type === "tool-call") {
-          const args = ("args" in part ? part.args : part.input) as Record<string, unknown>;
+          const args = (part.input ?? {}) as Record<string, unknown>;
           let detail = String(args.path || args.command || args.pattern || args.url || args.action || args.userId || args.query || args.file || "");
           // Enrich detail for tools with extra display-worthy params
           if (args.pages) detail += ` pages:${args.pages}`;
@@ -440,7 +440,7 @@ export class Runtime {
             this.currentTurnSnapshot.activeCommand = detail;
           }
         } else if (part.type === "tool-result") {
-          const output = (part as any).output;
+          const output = part.output;
           const rawResultText = typeof output === "string" ? output : JSON.stringify(output);
           const resultText = (this.config.stripAnsi ?? true) ? stripAnsi(rawResultText) : rawResultText;
           if (this.currentTurnSnapshot && this.currentTurnSnapshot.toolCalls.length > 0) {
