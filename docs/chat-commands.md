@@ -123,7 +123,7 @@ Lists all discovered skills across local workspace (`skills/`), installed direct
 
 *Provided by the `subagents` plugin.*
 
-Lists active and completed sub-agent tasks spawned during the current agent process lifetime, showing their ID, status, step count, and execution time.
+Lists active and completed sub-agent tasks spawned during the current agent process lifetime, showing their ID, status, step count, execution time, and the interface/channel their result is delivered to.
 
 ```text
 !subagents

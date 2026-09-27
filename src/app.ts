@@ -24,7 +24,6 @@ import { MemoryDB } from "./memory.js";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { getStatusData as getStatusDataFn, setQueueStatusFn, setInterfaceStatusFn, setSegmentStatsFn, setPluginStatusFn, type InterfaceStatus } from "./tools/kern.js";
 import { plugins, type PluginContext } from "./plugins/index.js";
-import { setSubAgentAnnouncer, formatAnnounce } from "./plugins/subagents/plugin.js";
 import { formatLocalISO, resolveHostTimezone } from "./util.js";
 import { log } from "./log.js";
 
@@ -274,19 +273,6 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   // Message queue — serializes messages, same-channel injection
   const queue = new MessageQueue();
   setQueueStatusFn(() => queue.getStatus());
-
-  // Sub-agent announces: when a child finishes, enqueue its result as a new
-  // turn so the parent can react to it. Channel is "subagent" so it doesn't
-  // collide with same-channel injection for human interfaces.
-  setSubAgentAnnouncer((id, record) => {
-    const text = formatAnnounce(record);
-    queue.enqueue({
-      text,
-      userId: "subagent",
-      interface: "subagent",
-      channel: `subagent:${id}`,
-    }).catch((e) => log.error("subagent", `announce enqueue failed for ${id}: ${e.message}`));
-  });
 
   // Idle-timeout notices get the same narration treatment as step-limit notices
   // The snapshot is captured before the abort fires — the runtime nulls it on abort.
@@ -670,7 +656,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     return sent;
   });
 
-  // Async completions (background jobs, ...) — enqueue as a turn stamped with
+  // Async completions (background jobs, sub-agents) — enqueue as a turn stamped with
   // the origin envelope so the queue routes it like a message from that
   // conversation, then deliver the agent's reply to the origin chat. Web/TUI
   // clients already receive the reply over SSE; adapter interfaces need an

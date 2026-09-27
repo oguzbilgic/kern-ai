@@ -1,5 +1,5 @@
 import type { KernPlugin, PluginContext } from "../types.js";
-import { SubAgentRegistry, type SubAgentRecord, type AnnounceFn } from "./registry.js";
+import { SubAgentRegistry, formatDuration } from "./registry.js";
 import { spawnTool, subagentsTool, setRegistry } from "./tools.js";
 import { log } from "../../log.js";
 
@@ -8,42 +8,18 @@ import { log } from "../../log.js";
  *
  * Parent agents call the spawn tool to delegate focused tasks. Children run
  * in-process with a restricted toolset (read, glob, grep, webfetch, websearch)
- * and no access to plugins. When a child finishes, its result is announced
- * back to the parent as a new turn via an AnnounceFn that app.ts registers
- * (connecting the completion event to the message queue).
+ * and no access to plugins. When a child finishes, the registry formats a
+ * completion body and hands it to `ctx.announce()` together with the origin
+ * captured from the turn that spawned it. The message queue then splices it
+ * into that conversation's active turn, or wakes the agent — and the runtime
+ * delivers the agent's reply to the origin chat, the same way background
+ * jobs (src/plugins/shell) are routed.
  *
  * See src/plugins/subagents/registry.ts for the registry/worker split.
  */
 
 /** The one live registry for this plugin instance. */
 let registry: SubAgentRegistry | null = null;
-
-/**
- * Called by app.ts to wire child completion back into the message queue.
- * Must be called before any sub-agents are spawned.
- */
-export function setSubAgentAnnouncer(fn: AnnounceFn): void {
-  if (!registry) {
-    log.warn("subagent", "setSubAgentAnnouncer called before plugin loaded — ignored");
-    return;
-  }
-  registry.setAnnouncer(fn);
-}
-
-/** Format a child's completion as an announce message for the parent's queue. */
-export function formatAnnounce(record: SubAgentRecord): string {
-  if (record.status === "done") {
-    return record.result || "(no result)";
-  }
-  const dur = record.finishedAt && record.startedAt
-    ? `${Math.round((+new Date(record.finishedAt) - +new Date(record.startedAt)) / 1000)}s`
-    : "?";
-  const header = `[subagent:${record.id} ${record.status}, ${dur}]`;
-  if (record.status === "failed") {
-    return `${header}\n${record.error || "unknown error"}`;
-  }
-  return header;
-}
 
 export const subagentsPlugin: KernPlugin = {
   name: "subagents",
@@ -62,7 +38,18 @@ export const subagentsPlugin: KernPlugin = {
 
   onStartup: async (ctx: PluginContext) => {
     registry = new SubAgentRegistry(ctx.agentDir, ctx.config);
-    setRegistry(registry);
+    registry.setAnnouncer((record, body) => {
+      if (!record.origin) {
+        // Spawn only runs inside a turn, so this should not happen. The result
+        // is still on disk for `subagents result <id>`.
+        log.error("subagent", `${record.id} finished with no origin — completion not delivered`);
+        return;
+      }
+      return ctx.announce(body, record.origin).catch((e) =>
+        log.error("subagent", `announce failed for ${record.id}: ${e.message}`),
+      );
+    });
+    setRegistry(registry, ctx);
   },
 
   onShutdown: async () => {
@@ -71,6 +58,7 @@ export const subagentsPlugin: KernPlugin = {
       if (cancelled > 0) log("subagent", `cancelled ${cancelled} running on shutdown`);
     }
     registry = null;
+    setRegistry(null, null);
   },
 
   onStatus: () => {
@@ -104,8 +92,7 @@ export const subagentsPlugin: KernPlugin = {
 
         const lines = ["```yaml", "subagents:"];
         for (const r of sorted) {
-          const end = r.finishedAt ? new Date(r.finishedAt) : new Date();
-          const dur = `${Math.round((+end - +new Date(r.startedAt)) / 1000)}s`;
+          const dur = formatDuration(r);
           const cleanPrompt = r.prompt.replace(/\r?\n/g, " ").trim();
           const prompt = cleanPrompt.length > 50 ? cleanPrompt.slice(0, 50) + "..." : cleanPrompt;
 
@@ -117,6 +104,7 @@ export const subagentsPlugin: KernPlugin = {
           if (r.error) {
             lines.push(`    error: "${r.error.replace(/"/g, '\\"')}"`);
           }
+          if (r.origin) lines.push(`    origin: ${r.origin.interface}, ${r.origin.channel}`);
         }
         lines.push("```");
         return lines.join("\n");

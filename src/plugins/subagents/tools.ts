@@ -1,12 +1,18 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { SubAgentRegistry } from "./registry.js";
+import type { PluginContext } from "../types.js";
+import { formatDuration, type SubAgentRegistry } from "./registry.js";
 
 let _registry: SubAgentRegistry | null = null;
+let _ctx: PluginContext | null = null;
 
-export function setRegistry(registry: SubAgentRegistry) {
+export function setRegistry(registry: SubAgentRegistry | null, ctx: PluginContext | null) {
   _registry = registry;
+  _ctx = ctx;
 }
+
+/** Origins with no chat to deliver a completion reply to (web/tui get it over SSE). */
+const UNDELIVERABLE = ["cli", "system"];
 
 export const spawnTool = tool({
   description: [
@@ -17,9 +23,10 @@ export const spawnTool = tool({
     "shell commands, edit files, or spawn further sub-agents.",
     "",
     "This call returns IMMEDIATELY with a sub-agent ID. The child runs in the",
-    "background. When it finishes, its result arrives as a new turn from",
-    "`via subagent, subagent:<id>`. You can spawn multiple children in parallel",
-    "and synthesize their results as they arrive.",
+    "background. When it finishes, its result arrives as a new message in the",
+    "conversation that asked for it, starting with a `[subagent:<id> done, 12s]`",
+    "line, and your reply routes back to whoever asked. You can spawn multiple",
+    "children in parallel and synthesize their results as they arrive.",
     "",
     "Use spawn for: research fan-out, parallel documentation lookups, evaluating",
     "multiple candidates, any read-only task you can delegate while you keep",
@@ -45,16 +52,24 @@ export const spawnTool = tool({
   execute: async ({ prompt, maxSteps, model }) => {
     if (!_registry) return "Error: sub-agents not available.";
 
+    const origin = _ctx?.origin() ?? null;
     try {
-      const handle = _registry.spawn(prompt, maxSteps ?? 20, model);
+      const handle = _registry.spawn(prompt, { origin, maxSteps, model });
+      const deliverable = origin && !UNDELIVERABLE.includes(origin.interface);
       return [
         `Sub-agent spawned: ${handle.id}`,
         `Status: running`,
         ``,
-        `The child is working in the background. Its result will arrive as`,
-        `a new turn when it finishes. Keep working; you can spawn more`,
-        `sub-agents in parallel. Use the subagents tool to check status or`,
-        `cancel if needed.`,
+        deliverable
+          ? `The child is working in the background. Its result will arrive as a\n` +
+            `new message when it finishes, in the conversation that asked for it,\n` +
+            `and your reply will be delivered there.`
+          : `The child is working in the background. Its result will arrive as a\n` +
+            `new message when it finishes.\n` +
+            `Note: this turn came from ${origin?.interface ?? "no interface"}, so your reply to that\n` +
+            `message is not sent to a chat — use the message tool if a person needs the result.`,
+        `Keep working; you can spawn more sub-agents in parallel. Use the`,
+        `subagents tool to check status or cancel if needed.`,
       ].join("\n");
     } catch (e: any) {
       return `Error spawning sub-agent: ${e.message}`;
@@ -89,9 +104,7 @@ export const subagentsTool = tool({
       if (all.length === 0) return "No sub-agents.";
       return all
         .map((r) => {
-          const dur = r.finishedAt
-            ? `${Math.round((+new Date(r.finishedAt) - +new Date(r.startedAt)) / 1000)}s`
-            : `${Math.round((Date.now() - +new Date(r.startedAt)) / 1000)}s`;
+          const dur = formatDuration(r);
           const preview = r.prompt.slice(0, 60).replace(/\n/g, " ");
           return `${r.id}  ${r.status.padEnd(10)}  ${dur.padStart(6)}  ${preview}${r.prompt.length > 60 ? "..." : ""}`;
         })
@@ -130,6 +143,7 @@ export const subagentsTool = tool({
     if (record.inputTokens || record.outputTokens) {
       lines.push(`tokens:     ${record.inputTokens} in / ${record.outputTokens} out`);
     }
+    if (record.origin) lines.push(`origin:     ${record.origin.interface}, ${record.origin.channel}, user ${record.origin.userId}`);
     lines.push(``, `prompt:`, record.prompt);
     if (record.error) lines.push(``, `error:`, record.error);
     return lines.join("\n");
