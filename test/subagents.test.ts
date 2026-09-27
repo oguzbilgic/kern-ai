@@ -46,9 +46,17 @@ test("subagents: completion is announced with the origin and a [subagent:<id> do
   assert.match(body, new RegExp(`^\\[subagent:${h.id} done, \\ds\\]\\nthe answer is 42$`));
 
   // Origin is persisted so `subagents status` can show it after the fact.
-  await new Promise((r) => setTimeout(r, 20));
-  const onDisk = JSON.parse(readFileSync(join(agentDir, ".kern", "subagents", h.id, "record.json"), "utf-8"));
-  assert.deepEqual(onDisk.origin, origin);
+  const recordPath = join(agentDir, ".kern", "subagents", h.id, "record.json");
+  for (let i = 0; i < 50; i++) {
+    try {
+      const onDisk = JSON.parse(readFileSync(recordPath, "utf-8"));
+      assert.deepEqual(onDisk.origin, origin);
+      break;
+    } catch {
+      if (i === 49) throw new Error(`Timed out waiting for ${recordPath}`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
 });
 
 test("subagents: failure and cancellation announce a header with the outcome", async () => {
