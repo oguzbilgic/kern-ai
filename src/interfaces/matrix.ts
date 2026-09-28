@@ -31,6 +31,50 @@ export function mimeToType(mime: string): Attachment["type"] {
  *   MATRIX_USER_ID        e.g. @vega:matrix
  *   MATRIX_ACCESS_TOKEN   from login/register
  */
+/**
+ * Validate a Matrix user ID (MXID) according to the Matrix specification:
+ * `@localpart:server_name` where:
+ * - localpart consists of lowercase letters, digits, and `.-_=/+` (historical chars allowed)
+ *   not containing whitespace or colons
+ * - server_name can be a valid hostname/domain (letters, digits, dots, hyphens),
+ *   IPv4 address, or bracketed IPv6 address
+ * - optional port between 1 and 65535
+ */
+export function isMatrixUserId(id: string): boolean {
+  if (typeof id !== "string" || id.length === 0 || id.length > 255) {
+    return false;
+  }
+  const match = /^@([a-z0-9._=\-/+]+):(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?$/.exec(id);
+  if (!match) {
+    return false;
+  }
+  const [, localpart, serverName, portStr] = match;
+  if (!localpart || !serverName) {
+    return false;
+  }
+  // Validate server_name (bracketed IPv6 or domain name with valid labels)
+  if (serverName.startsWith("[")) {
+    if (!serverName.endsWith("]")) {
+      return false;
+    }
+  } else {
+    // Domain labels cannot be empty and cannot start or end with a hyphen
+    const labels = serverName.split(".");
+    for (const label of labels) {
+      if (label.length === 0 || label.startsWith("-") || label.endsWith("-")) {
+        return false;
+      }
+    }
+  }
+  if (portStr !== undefined) {
+    const port = Number(portStr);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export class MatrixInterface implements Interface {
   private homeserver: string;
   private userId: string;
@@ -41,6 +85,14 @@ export class MatrixInterface implements Interface {
   private abort: AbortController | null = null;
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
+  // Cache of known DM room IDs per user ID to retain mapping in-memory even if account_data persistence fails
+  private dmRoomCache = new Map<string, string>();
+  // In-flight DM room resolution promises to avoid duplicate createRoom calls concurrently
+  private dmResolutions = new Map<string, Promise<string>>();
+  // Promise chain per user to serialize room resolution/creation operations per user while preserving exclusions
+  private userResolutionLocks = new Map<string, Promise<void>>();
+  // Promise chain to serialize m.direct read-modify-write across all users
+  private directAccountDataLock: Promise<void> = Promise.resolve();
   // Gate pairing-code messages so we only send once per (user, room) per process.
   // Prevents agent-to-agent loops in shared rooms.
   private sentCodes = new Set<string>();
@@ -92,14 +144,245 @@ export class MatrixInterface implements Interface {
     this._status = "disconnected";
   }
 
-  async sendToUser(roomId: string, text: string): Promise<boolean> {
+  async sendToUser(target: string, text: string): Promise<boolean> {
     try {
-      await this.sendMessage(roomId, text);
-      return true;
+      let roomId = target;
+      const isMxid = isMatrixUserId(target);
+      // If target is a Matrix user ID (@user:server), resolve or create a DM room
+      if (isMxid) {
+        roomId = await this.getOrCreateDmRoom(target);
+      }
+      try {
+        await this.sendMessage(roomId, text);
+        return true;
+      } catch (sendErr: any) {
+        // If send fails with 403/404 on a resolved DM room, invalidate cache, exclude failed room, and retry once with fresh resolution
+        if (
+          isMxid &&
+          (sendErr.status === 403 ||
+            sendErr.status === 404 ||
+            String(sendErr.message || sendErr).includes(" 403") ||
+            String(sendErr.message || sendErr).includes(" 404"))
+        ) {
+          log.warn("matrix", `cached DM room ${roomId} unusable for ${target}, invalidating cache and re-resolving`);
+          if (this.dmRoomCache.get(target) === roomId) {
+            this.dmRoomCache.delete(target);
+          }
+          // Also remove unusable roomId from m.direct account data under serialized lock so it isn't picked again
+          this.removeRoomFromDirectData(target, roomId).catch((err) => {
+            log.warn("matrix", `failed to remove unusable room ${roomId} from m.direct for ${target}: ${err.message || err}`);
+          });
+          const freshRoomId = await this.getOrCreateDmRoom(target, roomId);
+          await this.sendMessage(freshRoomId, text);
+          return true;
+        }
+        throw sendErr;
+      }
     } catch (err: any) {
       log.warn("matrix", `sendToUser failed: ${err.message || err}`);
       return false;
     }
+  }
+
+  private async getOrCreateDmRoom(userId: string, excludeRoomId?: string): Promise<string> {
+    // If there is an existing resolution in-flight for this exact resolution request, reuse it
+    const inflight = this.dmResolutions.get(userId);
+    if (inflight && !excludeRoomId) {
+      return inflight;
+    }
+
+    // Serialize resolution/creation operations per user so retries (with excludeRoomId)
+    // and subsequent concurrent sends do not race m.direct reads or duplicate createRoom
+    const prior = this.userResolutionLocks.get(userId) || Promise.resolve();
+    const resolutionPromise = prior
+      .catch(() => {})
+      .then(() => this.resolveOrCreateDmRoom(userId, excludeRoomId));
+
+    if (!excludeRoomId) {
+      this.dmResolutions.set(userId, resolutionPromise);
+    }
+
+    const lockPromise = resolutionPromise
+      .then(() => {})
+      .catch(() => {})
+      .finally(() => {
+        if (!excludeRoomId && this.dmResolutions.get(userId) === resolutionPromise) {
+          this.dmResolutions.delete(userId);
+        }
+        if (this.userResolutionLocks.get(userId) === lockPromise) {
+          this.userResolutionLocks.delete(userId);
+        }
+      });
+
+    this.userResolutionLocks.set(userId, lockPromise);
+    return resolutionPromise;
+  }
+
+  private async isRoomUsableForUser(roomId: string, userId: string): Promise<boolean> {
+    try {
+      // 1. Verify recipient membership
+      const targetMember = await this.api<{ membership?: string }>(
+        "GET",
+        `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.member/${encodeURIComponent(userId)}`,
+      );
+      if (targetMember?.membership !== "join" && targetMember?.membership !== "invite") {
+        return false;
+      }
+      // 2. Reject encrypted rooms since kern does not support E2EE and sending plaintext would violate room expectations
+      try {
+        const encryption = await this.api<{ algorithm?: string }>(
+          "GET",
+          `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
+        );
+        if (encryption && encryption.algorithm) {
+          log.warn("matrix", `skipping DM room ${roomId} because it has E2EE enabled (not supported)`);
+          return false;
+        }
+      } catch (encErr: any) {
+        // 403 or 404 means either no encryption state event exists or cannot read it
+        if (
+          encErr.status !== 403 &&
+          encErr.status !== 404 &&
+          !String(encErr.message || encErr).includes(" 403") &&
+          !String(encErr.message || encErr).includes(" 404")
+        ) {
+          throw encErr;
+        }
+      }
+      return true;
+    } catch (err: any) {
+      if (
+        err.status === 403 ||
+        err.status === 404 ||
+        String(err.message || err).includes(" 403") ||
+        String(err.message || err).includes(" 404")
+      ) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  private async resolveOrCreateDmRoom(userId: string, excludeRoomId?: string): Promise<string> {
+    // 1. Check in-memory cache first (validate recipient membership and exclude failed room)
+    const cached = this.dmRoomCache.get(userId);
+    if (cached) {
+      if (cached !== excludeRoomId && (await this.isRoomUsableForUser(cached, userId))) {
+        return cached;
+      }
+      if (this.dmRoomCache.get(userId) === cached) {
+        this.dmRoomCache.delete(userId);
+      }
+    }
+
+    // 2. Check m.direct account data
+    const staleRoomsToRemove: string[] = [];
+    try {
+      const directData = await this.api<Record<string, string[]>>(
+        "GET",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+      );
+      const existingRooms = directData?.[userId];
+      if (Array.isArray(existingRooms) && existingRooms.length > 0) {
+        // Iterate mapped rooms and verify whether one is usable (skipping excluded room)
+        for (const candidateRoom of existingRooms) {
+          if (candidateRoom !== excludeRoomId && (await this.isRoomUsableForUser(candidateRoom, userId))) {
+            this.dmRoomCache.set(userId, candidateRoom);
+            return candidateRoom;
+          } else {
+            staleRoomsToRemove.push(candidateRoom);
+          }
+        }
+      }
+    } catch (err: any) {
+      // 404 is normal if no DMs tracked yet; rethrow other errors (e.g. 500, network failure)
+      if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
+        throw err;
+      }
+    }
+
+    // 3. Create a new direct chat room
+    const createRes = await this.api<{ room_id: string }>(
+      "POST",
+      "/_matrix/client/v3/createRoom",
+      {
+        is_direct: true,
+        invite: [userId],
+        preset: "trusted_private_chat",
+      },
+    );
+    const roomId = createRes.room_id;
+    this.dmRoomCache.set(userId, roomId);
+
+    // 4. Update m.direct account data (serialized across all users, removing stale candidates and adding new room)
+    const updatePromise = this.directAccountDataLock.then(async () => {
+      let directData: Record<string, string[]> = {};
+      try {
+        directData = await this.api<Record<string, string[]>>(
+          "GET",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        );
+      } catch (err: any) {
+        if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
+          throw err;
+        }
+      }
+
+      const rooms = directData[userId] || [];
+      const filtered = rooms.filter((r) => !staleRoomsToRemove.includes(r) && r !== roomId);
+      filtered.push(roomId);
+      directData[userId] = filtered;
+      await this.api(
+        "PUT",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        directData,
+      );
+    });
+
+    // Ensure the lock recovers from rejections so future resolutions can still proceed
+    this.directAccountDataLock = updatePromise.catch(() => {});
+    try {
+      await updatePromise;
+    } catch (err: any) {
+      log.warn("matrix", `failed to persist m.direct for ${userId}: ${err.message || err}`);
+    }
+
+    return roomId;
+  }
+
+  private async removeRoomFromDirectData(userId: string, roomId: string): Promise<void> {
+    const removePromise = this.directAccountDataLock.then(async () => {
+      let directData: Record<string, string[]> = {};
+      try {
+        directData = await this.api<Record<string, string[]>>(
+          "GET",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        );
+      } catch (err: any) {
+        if (err.status !== 404 && !String(err.message || err).includes(" 404")) {
+          throw err;
+        }
+        return;
+      }
+
+      const rooms = directData[userId];
+      if (Array.isArray(rooms) && rooms.includes(roomId)) {
+        const filtered = rooms.filter((r) => r !== roomId);
+        if (filtered.length === 0) {
+          delete directData[userId];
+        } else {
+          directData[userId] = filtered;
+        }
+        await this.api(
+          "PUT",
+          `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+          directData,
+        );
+      }
+    });
+
+    this.directAccountDataLock = removePromise.catch(() => {});
+    await removePromise;
   }
 
   private async syncLoop(
@@ -463,7 +746,9 @@ export class MatrixInterface implements Interface {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`matrix ${method} ${path} ${res.status}: ${text.slice(0, 200)}`);
+      const error: any = new Error(`matrix ${method} ${path} ${res.status}: ${text.slice(0, 200)}`);
+      error.status = res.status;
+      throw error;
     }
     return res.json() as Promise<T>;
   }

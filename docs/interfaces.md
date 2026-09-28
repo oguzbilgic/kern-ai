@@ -281,6 +281,7 @@ Long-polled `/sync` against a Matrix homeserver (Synapse, Dendrite, Conduit, etc
 - **Group room behavior.** Once paired, responses follow the `KERN.md` group-room rules (mirrors Slack channel behavior). `NO_REPLY` to stay quiet.
 - **Agents in shared rooms**: first-class — two kern agents can DM each other or coexist in a group room. Pairing codes auto-issue; operator approves via CLI.
 - **Matrix Tool**: Agents with Matrix active have access to the `matrix` tool to inspect room history (`history`), send reactions (`react`), list joined rooms (`rooms`), create rooms/channels (`createRoom`), invite users (`invite`), pin/unpin dashboard widgets (`widget`), manage room state (`state`), or execute arbitrary REST requests (`raw`).
+- **Outbound Messaging**: Send to Matrix users or rooms via the `message` tool with `interface: "matrix"`. Targeting an `@user:server` MXID resolves to an existing direct room via `m.direct` or creates a private 1:1 room; targeting a room ID (`!room:server`) or room alias (`#room:server`) delivers directly to that room.
 
 ### Limitations (MVP)
 

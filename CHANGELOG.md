@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixes
+- **Matrix DM routing for proactive messages** ([#434](https://github.com/oguzbilgic/kern-ai/issues/434)) — `message({ interface: "matrix", userId })` targeting a user MXID (`@user:server`) now resolves to a direct 1:1 chat room via `m.direct` account data or creates a private direct room (`is_direct: true`), instead of misrouting to the group room where the user paired. If `userId` is a room ID (`!room:server`) or room alias (`#room:server`), it delivers directly to that room.
 - **Nostr WebSocket unhandled error on connection timeout** — subclass `ws` with a default error listener in `NostrInterface` to prevent Node process termination when `nostr-tools` calls `.close()` before a connection is fully established.
 
 ## v0.43.0

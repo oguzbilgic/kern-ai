@@ -3,7 +3,7 @@ import { Runtime, type StreamEvent } from "./runtime.js";
 import { updateKernel } from "./kernel.js";
 import { TelegramInterface } from "./interfaces/telegram.js";
 import { SlackInterface } from "./interfaces/slack.js";
-import { MatrixInterface } from "./interfaces/matrix.js";
+import { MatrixInterface, isMatrixUserId } from "./interfaces/matrix.js";
 import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
@@ -637,6 +637,12 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     let chatId: string;
     if (iface === "nostr") {
       chatId = userId;
+    } else if (iface === "matrix") {
+      // For Matrix, prefer the direct user MXID (@user:server) so sendToUser resolves
+      // to a direct chat room (via m.direct or createRoom), rather than routing to a group
+      // room where the user happened to pair. If it's not a user MXID (e.g. !room:server
+      // or #alias:server), fall back to pairing or the raw target.
+      chatId = isMatrixUserId(userId) ? userId : (pairing.getChatId(userId) || userId);
     } else if (iface === "irc") {
       // chatId is "<host>/<nick-or-channel>" — fall back to a bare userId of
       // the same shape so the agent can address a channel it hasn't paired.
