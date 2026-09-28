@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mdToMatrixHtml, mimeToType, MatrixInterface } from "../src/interfaces/matrix.ts";
+import { MatrixInterface, mdToMatrixHtml, mimeToType, isMatrixUserId } from "../src/interfaces/matrix.ts";
 
 test("mimeToType: categorizes mime types correctly", () => {
   assert.equal(mimeToType("image/png"), "image");
@@ -192,5 +192,427 @@ test("MatrixInterface: downloads media with MSC3916 authenticated endpoint fallb
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("sendToUser: sends directly to room ID", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    return {};
+  };
+
+  const sent = await iface.sendToUser("!room1:matrix", "Hello room");
+  assert.equal(sent, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PUT");
+  assert.ok(calls[0].path.includes("/send/m.room.message/"));
+  assert.ok(calls[0].path.includes("room1"));
+  assert.equal(calls[0].body.body, "Hello room");
+});
+
+test("sendToUser: resolves existing DM room from m.direct when target is a user ID", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    if (path.includes("/account_data/m.direct")) {
+      return { "@alice:matrix": ["!existing-dm:matrix"] };
+    }
+    if (path.includes("/state/m.room.member/")) {
+      return { membership: "join" };
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@alice:matrix", "Hello Alice");
+  assert.equal(sent, true);
+  // Checked m.direct, verified membership, checked encryption, then sent message
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0].method, "GET");
+  assert.ok(calls[0].path.includes("/account_data/m.direct"));
+  assert.equal(calls[1].method, "GET");
+  assert.ok(calls[1].path.includes("/state/m.room.member/"));
+  assert.equal(calls[2].method, "GET");
+  assert.ok(calls[2].path.includes("/state/m.room.encryption"));
+  assert.equal(calls[3].method, "PUT");
+  assert.ok(calls[3].path.includes("/send/m.room.message/"));
+  assert.ok(calls[3].path.includes("existing-dm"));
+});
+
+test("sendToUser: creates DM room and updates m.direct when no existing room exists", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      return { room_id: "!new-dm:matrix" };
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@bob:matrix", "Hello Bob");
+  assert.equal(sent, true);
+  assert.ok(calls.some((c) => c.method === "POST" && c.path === "/_matrix/client/v3/createRoom" && c.body.is_direct === true));
+  assert.ok(calls.some((c) => c.method === "PUT" && c.path.includes("/account_data/m.direct")));
+  assert.ok(calls.some((c) => c.method === "PUT" && c.path.includes("new-dm") && c.path.includes("/send/m.room.message/")));
+});
+
+test("sendToUser: deduplicates concurrent resolutions for the same user", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createRoomCount = 0;
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createRoomCount++;
+      // Simulate small network delay
+      await new Promise((r) => setTimeout(r, 10));
+      return { room_id: "!concurrent-dm:matrix" };
+    }
+    return {};
+  };
+
+  const [res1, res2] = await Promise.all([
+    iface.sendToUser("@charlie:matrix", "Message 1"),
+    iface.sendToUser("@charlie:matrix", "Message 2"),
+  ]);
+
+  assert.equal(res1, true);
+  assert.equal(res2, true);
+  assert.equal(createRoomCount, 1);
+});
+
+test("sendToUser: serializes m.direct updates across different users without dropping mappings", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let storedDirectData: Record<string, string[]> = {};
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      // Simulate network delay to expose race conditions if not serialized
+      await new Promise((r) => setTimeout(r, 20));
+      return { ...storedDirectData };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      const targetUser = body.invite[0];
+      return { room_id: targetUser === "@alice:matrix" ? "!room-alice:matrix" : "!room-bob:matrix" };
+    }
+    if (method === "PUT" && path.includes("/account_data/m.direct")) {
+      await new Promise((r) => setTimeout(r, 10));
+      storedDirectData = { ...body };
+      return {};
+    }
+    return {};
+  };
+
+  const [resAlice, resBob] = await Promise.all([
+    iface.sendToUser("@alice:matrix", "Hi Alice"),
+    iface.sendToUser("@bob:matrix", "Hi Bob"),
+  ]);
+
+  assert.equal(resAlice, true);
+  assert.equal(resBob, true);
+  assert.deepEqual(storedDirectData["@alice:matrix"], ["!room-alice:matrix"]);
+  assert.deepEqual(storedDirectData["@bob:matrix"], ["!room-bob:matrix"]);
+});
+
+test("sendToUser: tries next mapped room when candidate is stale and falls back to createRoom when all candidates are unusable", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let sentToRoom = "";
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@stale:matrix": ["!stale-dm-1:matrix", "!left-dm-2:matrix", "!valid-dm-3:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!stale-dm-1")) {
+        const err: any = new Error("matrix GET 403: Forbidden");
+        err.status = 403;
+        throw err;
+      }
+      if (path.includes("!left-dm-2")) {
+        return { membership: "leave" }; // recipient left room
+      }
+      return { membership: "join" }; // member state active for !valid-dm-3:matrix
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@stale:matrix", "Hello via valid room");
+  assert.equal(sent, true);
+  assert.ok(sentToRoom.includes("!valid-dm-3"));
+
+  // Now test all-stale fallback: every mapped candidate is unusable -> creates new room
+  const ifaceAllStale = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  let sentToCreatedRoom = "";
+  (ifaceAllStale as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@allstale:matrix": ["!stale-1:matrix", "!stale-2:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!stale-1")) {
+        const err: any = new Error("matrix GET 404: Not Found");
+        err.status = 404;
+        throw err;
+      }
+      return { membership: "leave" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!replacement-dm:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToCreatedRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sentReplacement = await ifaceAllStale.sendToUser("@allstale:matrix", "Hello via replacement");
+  assert.equal(sentReplacement, true);
+  assert.equal(createCalled, true);
+  assert.ok(sentToCreatedRoom.includes("!replacement-dm"));
+});
+
+test("sendToUser: skips candidate room if E2EE encryption is enabled and falls back to createRoom", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  let sentToRoom = "";
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@alice:matrix": ["!encrypted-dm:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      return { membership: "join" };
+    }
+    if (method === "GET" && path.includes("/state/m.room.encryption")) {
+      // Room has encryption enabled
+      return { algorithm: "m.megolm.v1.aes-sha2" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!unencrypted-replacement:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@alice:matrix", "Plaintext message");
+  assert.equal(sent, true);
+  assert.equal(createCalled, true);
+  assert.ok(sentToRoom.includes("!unencrypted-replacement"));
+});
+
+test("sendToUser: invalidates cached DM room and re-resolves when send returns 403/404", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let sendAttempts = 0;
+  let createdCount = 0;
+  let mDirectRooms = ["!cached-dm:matrix"];
+  let removedFromMDirect = false;
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@alice:matrix": mDirectRooms };
+    }
+    if (method === "PUT" && path.includes("/account_data/m.direct")) {
+      mDirectRooms = body?.["@alice:matrix"] || [];
+      if (!mDirectRooms.includes("!cached-dm:matrix")) {
+        removedFromMDirect = true;
+      }
+      return {};
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!cached-dm")) {
+        // Initially member is in room
+        return { membership: "join" };
+      }
+      return { membership: "join" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createdCount++;
+      return { room_id: "!newly-created-dm:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sendAttempts++;
+      if (path.includes("!cached-dm")) {
+        // Simulate cached room becoming unusable (e.g. 403 Forbidden after ban/leave)
+        const err: any = new Error("matrix PUT 403: Forbidden");
+        err.status = 403;
+        throw err;
+      }
+      return {};
+    }
+    return {};
+  };
+
+  (iface as any).dmRoomCache.set("@alice:matrix", "!cached-dm:matrix");
+  mDirectRooms = ["!cached-dm:matrix"];
+
+  const sent = await iface.sendToUser("@alice:matrix", "Retry message");
+  assert.equal(sent, true);
+  assert.equal(sendAttempts, 2); // 1 on !cached-dm, 1 on !newly-created-dm
+  assert.equal(createdCount, 1);
+  assert.equal((iface as any).dmRoomCache.get("@alice:matrix"), "!newly-created-dm:matrix");
+  // Give background m.direct removal a moment to complete
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(removedFromMDirect, true);
+});
+
+test("sendToUser: propagates non-403/404 errors during candidate room check rather than creating duplicate DM", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return { "@user:matrix": ["!existing-dm:matrix"] };
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      const err: any = new Error("matrix GET 500: Internal Server Error");
+      err.status = 500;
+      throw err;
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!new-dm:matrix" };
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@user:matrix", "Hello");
+  assert.equal(sent, false);
+  assert.equal(createCalled, false);
+});
+
+test("sendToUser: revalidates cached DM room membership and evicts stale cache before sending", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCalled = false;
+  let sentToRoom = "";
+  (iface as any).dmRoomCache.set("@user:matrix", "!cached-room:matrix");
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      if (path.includes("!cached-room")) {
+        return { membership: "leave" }; // recipient left previously cached room
+      }
+      return { membership: "join" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!new-room:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentToRoom = path;
+      return {};
+    }
+    return {};
+  };
+
+  const sent = await iface.sendToUser("@user:matrix", "Hello after leave");
+  assert.equal(sent, true);
+  assert.equal(createCalled, true);
+  assert.ok(sentToRoom.includes("!new-room"));
+  assert.equal((iface as any).dmRoomCache.get("@user:matrix"), "!new-room:matrix");
+});
+
+test("isMatrixUserId: matches valid MXIDs including ports and IPv6 and rejects invalid formats", () => {
+  assert.equal(isMatrixUserId("@alice:matrix.org"), true);
+  assert.equal(isMatrixUserId("@bob:example.com:8448"), true);
+  assert.equal(isMatrixUserId("@carol:192.168.1.1:8008"), true);
+  assert.equal(isMatrixUserId("@dave:[::1]"), true);
+  assert.equal(isMatrixUserId("@eve:[2001:db8::1]:8448"), true);
+  assert.equal(isMatrixUserId("@user_name-1.0:domain.org"), true);
+  assert.equal(isMatrixUserId("@alice/bot:example.org"), true);
+
+  // Invalid targets
+  assert.equal(isMatrixUserId("@alice"), false);
+  assert.equal(isMatrixUserId("alice:matrix.org"), false);
+  assert.equal(isMatrixUserId("!room:matrix.org"), false);
+  assert.equal(isMatrixUserId("@alice:"), false);
+  assert.equal(isMatrixUserId("@:matrix.org"), false);
+  assert.equal(isMatrixUserId(""), false);
+  // Invalid characters / whitespace / invalid hostname labels
+  assert.equal(isMatrixUserId("@alice space:matrix.org"), false);
+  assert.equal(isMatrixUserId("@alice:matrix .org"), false);
+  assert.equal(isMatrixUserId("@alice:matrix/path"), false);
+  assert.equal(isMatrixUserId("@alice:matrix:extra:colon"), false);
+  assert.equal(isMatrixUserId("@alice:matrix..org"), false);
+  assert.equal(isMatrixUserId("@alice:foo.-bar"), false);
+  assert.equal(isMatrixUserId("@alice:-foo.bar"), false);
+  assert.equal(isMatrixUserId("@alice:foo-.bar"), false);
+  // Invalid ports
+  assert.equal(isMatrixUserId("@alice:matrix.org:0"), false);
+  assert.equal(isMatrixUserId("@alice:matrix.org:65536"), false);
+  assert.equal(isMatrixUserId("@alice:matrix.org:999999"), false);
+  assert.equal(isMatrixUserId("@alice:matrix.org:notaport"), false);
+});
+
+test("sendToUser: treats non-MXID @-prefixed target as room ID without attempting DM resolution", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let sentTo = "";
+  let createCalled = false;
+
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCalled = true;
+      return { room_id: "!new:matrix" };
+    }
+    if (method === "PUT" && path.includes("/send/m.room.message/")) {
+      sentTo = path;
+      return {};
+    }
+    return {};
+  };
+
+  // "@notanmxid" does not match valid MXID regex so it shouldn't trigger DM resolution
+  const sent = await iface.sendToUser("@notanmxid", "Hello room");
+  assert.equal(sent, true);
+  assert.equal(createCalled, false);
+  assert.ok(sentTo.includes("%40notanmxid"));
+});
+
+test("sendToUser: retains created DM in memory cache if m.direct persistence fails", async () => {
+  const iface = new MatrixInterface("http://mock-homeserver", "@vega:matrix", "fake-token");
+  let createCount = 0;
+  (iface as any).api = async (method: string, path: string, body?: any) => {
+    if (method === "GET" && path.includes("/account_data/m.direct")) {
+      return {};
+    }
+    if (method === "GET" && path.includes("/state/m.room.member/")) {
+      return { membership: "join" };
+    }
+    if (method === "POST" && path === "/_matrix/client/v3/createRoom") {
+      createCount++;
+      return { room_id: "!created-room:matrix" };
+    }
+    if (method === "PUT" && path.includes("/account_data/m.direct")) {
+      const err: any = new Error("matrix PUT 500: Internal Server Error");
+      err.status = 500;
+      throw err;
+    }
+    return {};
+  };
+
+  const firstSend = await iface.sendToUser("@bob:matrix", "First message");
+  assert.equal(firstSend, true);
+  assert.equal(createCount, 1);
+
+  // Second send should use the in-memory cache and not call createRoom again
+  const secondSend = await iface.sendToUser("@bob:matrix", "Second message");
+  assert.equal(secondSend, true);
+  assert.equal(createCount, 1);
 });
 

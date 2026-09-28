@@ -253,10 +253,10 @@ Send a message to a user on any channel.
 message({ userId: "12345", interface: "telegram", text: "Hello!" })
 ```
 
-- `userId` — from USERS.md or pairing data
-- `interface` — `telegram`, `slack`, or `matrix`
-- Looks up chatId from pairing data
-- Broadcasts outgoing event to TUI
+- `userId` — user or channel/room target (e.g. user ID, or room/channel ID)
+- `interface` — `telegram`, `slack`, `matrix`, `discord`, `nostr`, or `irc`
+- Resolves recipient appropriately per interface (on Matrix, an `@user:server` MXID resolves to a 1:1 direct chat via `m.direct` or creates a private DM room; `!room:server` or `#alias:server` targets the room directly)
+- Broadcasts outgoing event to TUI/Web UI
 
 ## recall
 
