@@ -140,10 +140,16 @@ export class NostrInterface implements Interface {
       // `since = lastEmitted + 1`, so DMs that landed while we were
       // disconnected are replayed. It does NOT retry a failed *initial*
       // connect — that's what this outer loop is for.
-      // Use `ws`, not Node's built-in WebSocket: nostr-tools calls ws.close()
-      // from its onerror handler, and undici's WebSocket re-fires error on
-      // close → infinite recursion → RangeError, process down.
-      const relay = new Relay(url, { enableReconnect: true, websocketImplementation: WebSocket } as any);
+      // Use `ws` subclassed with a default error listener: nostr-tools calls ws.close()
+      // from its timeout/onerror handlers before connection completes, and `ws` emits
+      // an unhandled 'error' event on close-before-connect if no error listener is attached.
+      class SafeWebSocket extends WebSocket {
+        constructor(url: any, protocols: any, options: any) {
+          super(url, protocols, options);
+          this.on("error", () => {});
+        }
+      }
+      const relay = new Relay(url, { enableReconnect: true, websocketImplementation: SafeWebSocket } as any);
       this.relays.set(url, relay);
 
       let closed: () => void = () => {};

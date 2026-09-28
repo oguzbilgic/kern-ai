@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixes
+- **Nostr WebSocket unhandled error on connection timeout** — subclass `ws` with a default error listener in `NostrInterface` to prevent Node process termination when `nostr-tools` calls `.close()` before a connection is fully established.
+
 ## v0.43.0
 
 ### Breaking
