@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.43.0
 
 ### Breaking
 - **Directory-based local mode, no registry** ([#410](https://github.com/oguzbilgic/kern-ai/issues/410), [#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — an agent is a directory containing `.kern/`. `~/.kern/config.json` and the `~/.kern/agents.json` migration are gone; the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes `[path]` (default `.`): `kern init`, `start`, `stop`, `restart`, `run`, `status`, `logs`, `tui`, `pair [path] <code>`, `backup`. `kern start` with no argument starts the agent in the current directory instead of every registered agent. `kern list` / `kern ls` are aliases of `kern status`, which prints a single card. Multi-agent development is per directory: `kern start ~/alice/`, `kern start ~/bob/`.
