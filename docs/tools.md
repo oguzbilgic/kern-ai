@@ -247,15 +247,18 @@ kern({ action: "logs", level: "info", lines: 20 }) // last 20 info+ lines
 
 ## message
 
-Send a message to a user on any channel.
+Send a message to a user or a room on any interface.
 
 ```
 message({ userId: "12345", interface: "telegram", text: "Hello!" })
+message({ userId: "@alice:example.com", interface: "matrix", text: "Hello!" })
+message({ userId: "!ops:example.com", interface: "matrix", text: "Deploy done." })
 ```
 
-- `userId` — from USERS.md or pairing data
-- `interface` — `telegram`, `slack`, or `matrix`
-- Looks up chatId from pairing data
+- `userId` — a user ID (from USERS.md or pairing data) or a room/channel ID
+- `interface` — `telegram`, `slack`, `matrix`, `discord`, `nostr`, or `irc`
+- Looks up chatId from pairing data, falling back to the ID as given
+- A user ID reaches that user's DM on every interface (Matrix resolves or creates the direct room); a room or channel ID posts to that room
 - Broadcasts outgoing event to TUI
 
 ## recall

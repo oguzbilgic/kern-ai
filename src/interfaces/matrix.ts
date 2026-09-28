@@ -24,6 +24,7 @@ export function mimeToType(mime: string): Attachment["type"] {
  * - Inbound media attachments (images, audio, video, files)
  * - Auto-accept invites (any inviter; pairing still gates message handling)
  * - Pairing enforced in every room (DM and group) before messages are processed
+ * - Outbound messages to a user ID resolve (or create) a 1:1 direct room
  * - No E2E encryption, no reactions
  *
  * Config via env:
@@ -44,6 +45,10 @@ export class MatrixInterface implements Interface {
   // Gate pairing-code messages so we only send once per (user, room) per process.
   // Prevents agent-to-agent loops in shared rooms.
   private sentCodes = new Set<string>();
+  // Resolved direct rooms per user (mxid → roomId), plus in-flight resolutions
+  // so concurrent sends to an unknown user create at most one room.
+  private directRooms = new Map<string, string>();
+  private resolving = new Map<string, Promise<string>>();
 
   constructor(
     homeserver: string,
@@ -92,13 +97,138 @@ export class MatrixInterface implements Interface {
     this._status = "disconnected";
   }
 
-  async sendToUser(roomId: string, text: string): Promise<boolean> {
+  /**
+   * Send to a room ID (`!room:server`) as-is, or to a user ID (`@user:server`)
+   * via that user's direct room — found in the cache, `m.direct`, or a scan of
+   * joined rooms, and created if none exists. Mirrors Discord's sendToUser,
+   * which tries the target as a channel first and falls back to a user DM.
+   */
+  async sendToUser(target: string, text: string): Promise<boolean> {
     try {
-      await this.sendMessage(roomId, text);
+      if (isRoomId(target)) {
+        await this.sendMessage(target, text);
+        return true;
+      }
+      if (!isUserId(target)) {
+        log.warn("matrix", `cannot send: "${target}" is neither a room ID nor a user ID`);
+        return false;
+      }
+      const cached = this.directRooms.get(target);
+      const roomId = await this.resolveDirectRoom(target);
+      try {
+        await this.sendMessage(roomId, text);
+      } catch (err) {
+        // A cached room may have gone stale (bot kicked, room left). Drop it
+        // and resolve once more before giving up.
+        if (!cached || cached !== roomId) throw err;
+        this.directRooms.delete(target);
+        const fresh = await this.resolveDirectRoom(target);
+        await this.sendMessage(fresh, text);
+      }
       return true;
     } catch (err: any) {
       log.warn("matrix", `sendToUser failed: ${err.message || err}`);
       return false;
+    }
+  }
+
+  /** Resolve the direct room for a user, creating one if needed. */
+  async resolveDirectRoom(userId: string): Promise<string> {
+    const cached = this.directRooms.get(userId);
+    if (cached) return cached;
+    const inflight = this.resolving.get(userId);
+    if (inflight) return inflight;
+
+    const promise = this.findOrCreateDirectRoom(userId)
+      .then((roomId) => {
+        this.directRooms.set(userId, roomId);
+        return roomId;
+      })
+      .finally(() => this.resolving.delete(userId));
+    this.resolving.set(userId, promise);
+    return promise;
+  }
+
+  private async findOrCreateDirectRoom(userId: string): Promise<string> {
+    const joined = new Set(await this.joinedRooms());
+
+    // 1. m.direct account data — rooms we previously marked as DMs.
+    const direct = await this.getDirectAccountData();
+    for (const roomId of direct[userId] || []) {
+      if (joined.has(roomId)) return roomId;
+    }
+
+    // 2. Joined rooms whose only members are us and the target. Catches DMs
+    //    the user opened from their client: the homeserver never writes the
+    //    invitee's m.direct, so ours is empty until we record it here.
+    for (const roomId of joined) {
+      let members: string[];
+      try {
+        const res = await this.api<{ joined?: Record<string, unknown> }>(
+          "GET",
+          `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`,
+        );
+        members = Object.keys(res.joined || {});
+      } catch {
+        continue;
+      }
+      if (members.length === 2 && members.includes(userId) && members.includes(this.userId)) {
+        await this.rememberDirectRoom(direct, userId, roomId);
+        return roomId;
+      }
+    }
+
+    // 3. No DM yet — create one and invite the user.
+    const created = await this.api<{ room_id: string }>("POST", "/_matrix/client/v3/createRoom", {
+      is_direct: true,
+      invite: [userId],
+      preset: "trusted_private_chat",
+    });
+    log("matrix", `created direct room ${created.room_id} for ${userId}`);
+    await this.rememberDirectRoom(direct, userId, created.room_id);
+    return created.room_id;
+  }
+
+  private async joinedRooms(): Promise<string[]> {
+    const res = await this.api<{ joined_rooms?: string[] }>("GET", "/_matrix/client/v3/joined_rooms");
+    return res.joined_rooms || [];
+  }
+
+  private async getDirectAccountData(): Promise<Record<string, string[]>> {
+    try {
+      const res = await this.api<Record<string, unknown>>(
+        "GET",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+      );
+      const out: Record<string, string[]> = {};
+      for (const [uid, rooms] of Object.entries(res || {})) {
+        if (Array.isArray(rooms)) out[uid] = rooms.filter((r): r is string => typeof r === "string");
+      }
+      return out;
+    } catch (err: any) {
+      // Unset account data is a 404 M_NOT_FOUND — treat as empty.
+      if (/\b404\b|M_NOT_FOUND/.test(String(err?.message || err))) return {};
+      throw err;
+    }
+  }
+
+  /** Record a DM in m.direct so future lookups (and restarts) find it. */
+  private async rememberDirectRoom(
+    direct: Record<string, string[]>,
+    userId: string,
+    roomId: string,
+  ): Promise<void> {
+    const rooms = direct[userId] || [];
+    if (rooms.includes(roomId)) return;
+    direct[userId] = [...rooms, roomId];
+    try {
+      await this.api(
+        "PUT",
+        `/_matrix/client/v3/user/${encodeURIComponent(this.userId)}/account_data/m.direct`,
+        direct,
+      );
+    } catch (err: any) {
+      log.warn("matrix", `failed to update m.direct: ${err.message || err}`);
     }
   }
 
@@ -137,10 +267,14 @@ export class MatrixInterface implements Interface {
         // invites that arrived while offline would be missed until the inviter
         // retries.
         const invites = sync.rooms?.invite || {};
-        for (const roomId of Object.keys(invites)) {
+        for (const [roomId, invite] of Object.entries(invites)) {
           try {
             await this.api("POST", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/join`);
             log("matrix", `joined ${roomId}`);
+            // An invite flagged is_direct is the inviter opening a DM with us.
+            // Remember it so sendToUser reaches them there without a scan.
+            const inviter = directInviter(invite, this.userId);
+            if (inviter) this.directRooms.set(inviter, roomId);
           } catch (err: any) {
             log.warn("matrix", `failed to join ${roomId}: ${err.message || err}`);
           }
@@ -218,15 +352,19 @@ export class MatrixInterface implements Interface {
 
     // Pairing: auto-pair first user, gate others
     if (this.pairing && !this.pairing.isPaired(sender)) {
+      // Record the sender's user ID (not the room) as their chatId: the room
+      // may be a shared group room, and sendToUser resolves a user ID to that
+      // user's direct room — matching the other interfaces, where chatId is
+      // always the user's DM.
       if (!this.pairing.hasAnyPairedUsers()) {
-        await this.pairing.autoPairFirst(sender, "matrix", roomId);
+        await this.pairing.autoPairFirst(sender, "matrix", sender);
       } else {
         // Both Matrix user IDs and room IDs contain colons, so use a
         // structured key to avoid delimiter collisions.
         const key = JSON.stringify([sender, roomId]);
         if (this.sentCodes.has(key)) return;
         this.sentCodes.add(key);
-        const code = await this.pairing.getOrCreateCode(sender, "matrix", `matrix:${roomId}`);
+        const code = await this.pairing.getOrCreateCode(sender, "matrix", `matrix:${sender}`);
         await this.sendMessage(
           roomId,
           `${sender} is not paired with this agent.\n\nPairing code: ${code}\n\nShare this code with the agent's operator to approve access.`,
@@ -469,6 +607,23 @@ export class MatrixInterface implements Interface {
   }
 }
 
+export function isRoomId(id: string): boolean {
+  return id.startsWith("!");
+}
+
+export function isUserId(id: string): boolean {
+  return id.startsWith("@") && id.includes(":");
+}
+
+/** Sender of an invite whose m.room.member event for us carries is_direct. */
+function directInviter(invite: MatrixInvite, selfId: string): string | null {
+  for (const ev of invite.invite_state?.events || []) {
+    if (ev.type !== "m.room.member" || ev.state_key !== selfId) continue;
+    if (ev.content?.is_direct === true && typeof ev.sender === "string") return ev.sender;
+  }
+  return null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -512,9 +667,20 @@ export function mdToMatrixHtml(text: string): string | undefined {
 interface MatrixSync {
   next_batch: string;
   rooms?: {
-    invite?: Record<string, unknown>;
+    invite?: Record<string, MatrixInvite>;
     join?: Record<string, {
       timeline?: { events?: MatrixEvent[] };
+    }>;
+  };
+}
+
+interface MatrixInvite {
+  invite_state?: {
+    events?: Array<{
+      type: string;
+      sender?: string;
+      state_key?: string;
+      content?: { is_direct?: boolean };
     }>;
   };
 }

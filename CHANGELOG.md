@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixes
+- **Matrix `message` tool routed DMs into shared rooms** ([#434](https://github.com/oguzbilgic/kern-ai/issues/434)) — a user paired from a group room had that room stored as their `chatId`, so every `message({ interface: "matrix", userId })` posted to the group room, and a bare `@user:server` target failed outright because Matrix only sends to room IDs. `MatrixInterface.sendToUser` now sends room IDs (`!room:server`) as-is and resolves user IDs (`@user:server`) to the user's direct room via an in-memory cache, `m.direct` account data, a scan of joined rooms for a two-member room, or `createRoom` (`is_direct`, `trusted_private_chat`) — matching Discord, where a channel ID posts to the channel and a user ID opens a DM. Resolved rooms are written back to `m.direct`, and `is_direct` invites are remembered as they arrive. Matrix pairing now records the user's mxid as `chatId` instead of the room, in line with the other interfaces. Existing `pairing.json` entries that hold a group room ID keep posting there; re-pair the user or edit the entry to their mxid.
 - **Nostr WebSocket unhandled error on connection timeout** — subclass `ws` with a default error listener in `NostrInterface` to prevent Node process termination when `nostr-tools` calls `.close()` before a connection is fully established.
 
 ## v0.43.0
