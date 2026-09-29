@@ -49,13 +49,12 @@ export function readAgentInfo(agentPath: string): AgentInfo | null {
   const configPath = join(agentPath, ".kern", "config.json");
   const envPath = join(agentPath, ".kern", ".env");
 
-  // Read config for name and port
-  let name = basename(agentPath);
+  const name = basename(agentPath);
+  // Read config for port
   let port = 0;
   try {
     const raw = readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw);
-    if (config.name) name = config.name;
     if (config.port) port = config.port;
   } catch {}
 

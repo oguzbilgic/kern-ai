@@ -31,7 +31,7 @@ let _pluginCtx: PluginContext | null = null;
 let _runtime: Runtime | null = null;
 let _config: KernConfig | null = null;
 
-async function handleSlashCommand(cmd: string, userId: string, iface: string, agentName: string, agentDir: string): Promise<string | null> {
+async function handleSlashCommand(cmd: string, userId: string, iface: string, agentDir: string): Promise<string | null> {
   switch (cmd) {
     case "/restart": {
       log("kern", `restart requested by ${userId} via ${iface}`);
@@ -126,12 +126,13 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   await updateKernel(agentDir);
 
   const config = await loadConfig(agentDir);
+  const agentName = basename(agentDir);
 
   // Refuse to run twice for the same directory: the PID file is the lock.
   // Checked before the database or any interface is opened.
   const livePid = await readLivePid(agentDir);
   if (livePid && livePid !== process.pid) {
-    log.error("kern", `${config.name} is already running (pid ${livePid}). Use 'kern stop' first.`);
+    log.error("kern", `${agentName} is already running (pid ${livePid}). Use 'kern stop' first.`);
     process.exit(1);
   }
 
@@ -181,14 +182,6 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
   }
 
-  // Auto-migrate name into config if missing
-  if (!config.name) {
-    config.name = basename(agentDir);
-    await saveConfigField(agentDir, "name", config.name);
-    log("kern", `assigned name: ${config.name}`);
-  }
-
-  const agentName = config.name;
   process.chdir(agentDir);
 
   // Resolve envelope timezone once. Config override (IANA string) wins, else
@@ -350,7 +343,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     const trimmed = text.trim();
     if (trimmed.startsWith("/") || trimmed.startsWith("!")) {
       const canonicalCmd = trimmed.startsWith("!") ? "/" + trimmed.slice(1) : trimmed;
-      const result = await handleSlashCommand(canonicalCmd, userId, iface, agentName, agentDir);
+      const result = await handleSlashCommand(canonicalCmd, userId, iface, agentDir);
       if (result !== null) {
         server.broadcast({
           type: "command-result" as any,

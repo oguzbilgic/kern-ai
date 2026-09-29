@@ -27,7 +27,6 @@ Put an agent on Slack:
 docker run -d --restart=unless-stopped \
   --name ops \
   -v ops-home:/home/agent \
-  -e KERN_NAME=ops \
   -e OPENROUTER_API_KEY=sk-or-... \
   -e SLACK_BOT_TOKEN=xoxb-... \
   -e SLACK_APP_TOKEN=xapp-... \
@@ -40,7 +39,6 @@ Or on Telegram:
 docker run -d --restart=unless-stopped \
   --name ops \
   -v ops-home:/home/agent \
-  -e KERN_NAME=ops \
   -e OPENROUTER_API_KEY=sk-or-... \
   -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
   ghcr.io/oguzbilgic/kern-ai
@@ -56,6 +54,8 @@ docker run -d --restart=unless-stopped -v ops-home:/home/agent ghcr.io/oguzbilgi
 
 The volume holds everything: sessions, memory, notes, knowledge, and whatever the agent installs for itself (`npm install -g`, `pip install`, SSH keys, dotfiles). See [Docker docs](docs/docker.md) for every variable and provider.
 
+The agent's display label is its directory basename (`workspace` in the default Docker image), not the container name. Use a [custom workspace directory](docs/docker.md#custom-workspace-directory) to choose a different label.
+
 ## Running a team
 
 Each agent is a directory with a `.kern/` folder, so each agent is a container with its own volume and bot account. Name them after the job:
@@ -66,8 +66,8 @@ services:
     image: ghcr.io/oguzbilgic/kern-ai
     restart: unless-stopped
     volumes: ["ops-home:/home/agent"]
+    command: ["kern", "run", "--init-if-needed", "/home/agent/ops"]
     environment:
-      KERN_NAME: ops
       OPENROUTER_API_KEY: sk-or-...
       SLACK_BOT_TOKEN: xoxb-...
       SLACK_APP_TOKEN: xapp-...
@@ -76,8 +76,8 @@ services:
     image: ghcr.io/oguzbilgic/kern-ai
     restart: unless-stopped
     volumes: ["research-home:/home/agent"]
+    command: ["kern", "run", "--init-if-needed", "/home/agent/research"]
     environment:
-      KERN_NAME: research
       OPENROUTER_API_KEY: sk-or-...
       SLACK_BOT_TOKEN: xoxb-...
       SLACK_APP_TOKEN: xapp-...

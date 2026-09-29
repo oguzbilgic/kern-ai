@@ -8,7 +8,6 @@ export type ToolScope = "full" | "write" | "read";
 
 export interface KernConfig {
   // Core
-  name: string;
   model: string;
   provider: string;
   toolScope: ToolScope;
@@ -81,7 +80,6 @@ const TOOL_SCOPES: Record<ToolScope, string[]> = {
 };
 
 export const configDefaults: KernConfig = {
-  name: "",
   model: "google/gemini-3.8-flash",
   provider: "openrouter",
   toolScope: "full",
@@ -108,7 +106,6 @@ export const configDefaults: KernConfig = {
 };
 
 const FIELD_TYPES: Record<string, string> = {
-  name: "string",
   model: "string",
   provider: "string",
   toolScope: "string",
@@ -204,7 +201,6 @@ export async function loadConfig(agentDir: string): Promise<KernConfig> {
  * Only a small explicit set of fields are supported.
  */
 const ENV_CONFIG_MAP: Record<string, { key: keyof KernConfig; type: "string" | "number" }> = {
-  KERN_NAME:     { key: "name",     type: "string" },
   KERN_PORT:     { key: "port",     type: "number" },
   KERN_MODEL:    { key: "model",    type: "string" },
   KERN_PROVIDER: { key: "provider", type: "string" },

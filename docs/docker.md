@@ -6,19 +6,20 @@ Run a kern agent as a Docker container. All state persists in a mounted volume.
 
 ### 1. Initialize a new agent
 
-To scaffold a fresh agent, pass its name and API key(s). This creates the agent workspace, generates its configuration, and starts polling on your configured interfaces:
+To scaffold a fresh agent, pass its API key(s). This creates the agent workspace, generates its configuration, and starts polling on your configured interfaces:
 
 ```bash
 docker run -d --restart=unless-stopped \
   --name bob \
   -v bob-home:/home/agent \
-  -e KERN_NAME=bob \
   -e OPENROUTER_API_KEY=sk-or-... \
   -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-On first run, the agent writes its name and model into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`. The port comes from `KERN_PORT` (4100 in the image).
+On first run, the agent writes its model and provider into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`. The port comes from `KERN_PORT` (4100 in the image).
+
+The agent's display label is the workspace directory basename: `workspace` by default. Docker's `--name` does not change it, and `KERN_NAME` is ignored. To display `bob`, pass `/home/agent/bob` to `kern run --init-if-needed` on every run; see [Custom workspace directory](#custom-workspace-directory).
 
 ### 2. Running an existing agent
 
@@ -39,7 +40,6 @@ docker run -d --restart=unless-stopped \
 |----------|----------|---------|
 | `OPENROUTER_API_KEY` | Yes (or provider-specific key) | — |
 | `KERN_AUTH_TOKEN` | No | Auto-generated on first run |
-| `KERN_NAME` | No | `agent` (directory basename) |
 | `KERN_MODEL` | No | `google/gemini-3.8-flash` |
 | `KERN_PROVIDER` | No | `openrouter` |
 | `KERN_PORT` | No | `4100` |
@@ -84,14 +84,13 @@ If you only want to mount a local directory for the workspace without persisting
 
 ### Custom workspace directory
 
-By default, the container starts inside `/home/agent/workspace`. If your agent lives in a different subfolder within the mounted volume (e.g. named after the agent or repo), override the working directory with `-w` (or `working_dir` in Docker Compose):
+By default, the container starts inside `/home/agent/workspace`. To use a different subfolder within the mounted volume (e.g. named after the agent or repo), pass its path to `kern run --init-if-needed` on every run (or set `command` in Docker Compose). Kern creates the directory as the non-root `agent` user, so this also works on fresh volumes:
 
 **Docker CLI:**
 ```bash
 docker run -d \
   -v kern-data:/home/agent \
-  -w /home/agent/my-agent \
-  ghcr.io/oguzbilgic/kern-ai
+  ghcr.io/oguzbilgic/kern-ai kern run --init-if-needed /home/agent/my-agent
 ```
 
 **Docker Compose:**
@@ -102,8 +101,10 @@ services:
     restart: unless-stopped
     volumes:
       - kern-data:/home/agent
-    working_dir: /home/agent/my-agent
+    command: ["kern", "run", "--init-if-needed", "/home/agent/my-agent"]
 ```
+
+For an existing directory writable by `agent`, `-w /home/agent/my-agent` (or Compose's `working_dir`) also works. Avoid it for missing directories: Docker may create them as root, preventing kern from writing its files.
 
 ## Pre-installed tools
 
