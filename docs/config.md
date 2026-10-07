@@ -59,7 +59,7 @@ The main config file. Committed to git. Unknown top-level fields are warned on s
 The top-level `provider`, `model`, `baseURL`, `apiKeyEnv`, `auth`, and `api` describe the main chat connection. Secondary fields (`embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, `audioModel`) accept the same reference format:
 
 - **String**: a model ID on the main connection. IDs are opaque: `/` never changes routing.
-- **Object**: `{ "model": "id", "provider": "...", "baseURL": "...", "apiKeyEnv": "..." }`. Only `model` is required. Without `provider` or a new URL, omitted connection settings inherit from the main connection.
+- **Object**: `{ "model": "id", "provider": "...", "baseURL": "...", "apiKeyEnv": "..." }`. Only `model` is required. Without `provider` or a new URL, omitted connection settings inherit from the main connection. Repeating the parent's URL, including with trailing slashes or surrounding whitespace, retains its authentication and API selection.
 - **Explicit provider**: starts from that provider's defaults, even if it has the same provider name as the parent; it does not inherit the parent's custom URL or credentials.
 - **New URL**: uses that provider's defaults plus the new URL, and clears inherited credentials. Supply `apiKeyEnv` if authentication is required. Use the complete API root; Kern never guesses whether to append `/v1`.
 - **Explicit provider with a custom URL**: defaults to no authentication even if the URL matches the parent. Supply `apiKeyEnv` explicitly to authenticate that connection.
@@ -75,9 +75,9 @@ Provider presets:
 | `ollama` | `http://localhost:11434/v1` | none | Chat Completions |
 | `openai-compatible` | explicitly configured | none by default | Chat Completions |
 
-For authenticated local servers or gateways, use `apiKeyEnv` pointing at a distinct secret variable. Do not combine it with `auth: "none"`.
+Writing the main connection's exact hosted preset URL explicitly retains that provider's default authentication and API selection. Custom URLs default to no authentication. For authenticated local servers or gateways, use `apiKeyEnv` pointing at a distinct secret variable. Do not combine it with `auth: "none"`.
 
-When updating an existing agent with `kern init` flags, omitted settings on the same connection are preserved, including the provider, model, API root, credential variable, and API selection. Changing the provider or endpoint clears the old connection settings. `--api-key-env LOCAL_MODEL_API_KEY` selects an existing environment credential without requiring `--api-key` or copying its value into `.env`. Setup validates the effective configuration, including `KERN_*` overrides, before saving changes or stopping a running agent.
+When updating an existing agent with `kern init` flags, omitted settings on the same connection are preserved, including the provider, model, API root, credential variable, and API selection. Comparisons account for omitted provider/URL defaults and normalize trailing slashes and whitespace. Changing the provider or endpoint clears the old connection settings; the wizard also uses the new connection's API default when changing endpoints. `--api-key-env LOCAL_MODEL_API_KEY` selects an existing environment credential without requiring `--api-key` or copying its value into `.env`. Setup validates the effective configuration, including `KERN_*` overrides, before saving changes or stopping a running agent.
 
 **Hosted chat, local embeddings:**
 

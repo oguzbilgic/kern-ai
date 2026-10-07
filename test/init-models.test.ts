@@ -101,6 +101,30 @@ test("CLI key rotation preserves omitted provider, model, endpoint, and API sett
   assert.equal(parse(await readFile(join(dir, ".kern", ".env"), "utf-8")).OPENAI_API_KEY, "new-test-key");
 });
 
+test("CLI updates preserve the default provider's saved connection when provider is omitted", async t => {
+  const dir = await setupDirectory(t, { model: "local-chat", baseURL: "http://gateway.test/v1", apiKeyEnv: "GATEWAY_KEY", api: "chat", embeddingModel: false });
+  await runInit(dir, { "api-key": "rotated-key" });
+  const config = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
+  assert.equal(config.provider, "openrouter");
+  assert.equal(config.model, "local-chat");
+  assert.equal(config.baseURL, "http://gateway.test/v1");
+  assert.equal(config.apiKeyEnv, "GATEWAY_KEY");
+  assert.equal(config.api, "chat");
+  assert.equal(parse(await readFile(join(dir, ".kern", ".env"), "utf-8")).GATEWAY_KEY, "rotated-key");
+});
+
+test("CLI repeating an implicit preset URL retains the saved credential variable and API", async t => {
+  const dir = await setupDirectory(t, { provider: "openai", model: "chat", apiKeyEnv: "CUSTOM_OPENAI_KEY", api: "chat", embeddingModel: false });
+  await runInit(dir, { "base-url": " https://api.openai.com/v1/ " });
+  const config = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
+  assert.equal(config.apiKeyEnv, "CUSTOM_OPENAI_KEY");
+  assert.equal(config.api, "chat");
+  const resolved = resolveModel({ ...configDefaults, ...config });
+  assert.equal(resolved.baseURL, "https://api.openai.com/v1");
+  assert.equal(resolved.apiKeyEnv, "CUSTOM_OPENAI_KEY");
+  assert.equal(resolved.auth, undefined);
+});
+
 test("replacing a connection clears credentials and API settings from the previous route", async t => {
   for (const connection of [{ provider: "anthropic" }, { provider: "openai", baseURL: "http://another.test/v1" }]) {
     const dir = await setupDirectory(t, { provider: "openai", model: "chat", baseURL: "http://local.test/v1", apiKeyEnv: "LOCAL_KEY", api: "responses", embeddingModel: false });

@@ -30,15 +30,21 @@ export interface ResolvedModel extends ModelConnection {
 
 const CONNECTION_FIELDS = ["provider", "baseURL", "apiKeyEnv", "auth", "api"] as const;
 
-function connectionSettings(input: Partial<ModelConnection>): Partial<ModelConnection> {
+export function connectionSettings(input: Partial<ModelConnection>): Partial<ModelConnection> {
   return Object.fromEntries(CONNECTION_FIELDS.filter(key => input[key] !== undefined).map(key => [key, input[key]]));
+}
+
+function connectionIdentity(input: Partial<ModelConnection>) {
+  const provider = input.provider ?? "openrouter";
+  return { provider, baseURL: normalizeURL(input.baseURL ?? CONNECTION_DEFAULTS[provider]?.baseURL ?? "") };
 }
 
 /** Setup updates preserve omitted settings on the same connection. */
 export function configureConnection<T extends Partial<ModelConnection>>(current: T, updates: Partial<ModelConnection>): T & ModelConnection {
   const input = connectionSettings(updates);
-  const provider = input.provider ?? current.provider ?? "openrouter";
-  const replacing = provider !== current.provider || (input.baseURL !== undefined && normalizeURL(input.baseURL) !== normalizeURL(current.baseURL ?? ""));
+  const previous = connectionIdentity(current);
+  const provider = input.provider ?? previous.provider;
+  const replacing = provider !== previous.provider || (input.baseURL !== undefined && normalizeURL(input.baseURL) !== previous.baseURL);
   const settings = replacing ? {} : connectionSettings(current);
   if (input.apiKeyEnv !== undefined) delete settings.auth;
   if (input.auth !== undefined) delete settings.apiKeyEnv;
@@ -52,12 +58,14 @@ function resolveConnection(input: Partial<ModelConnection>, parent?: ModelConnec
   input = connectionSettings(input);
   const provider = input.provider ?? parent?.provider ?? "openrouter";
   if (!Object.hasOwn(CONNECTION_DEFAULTS, provider)) throw new Error(`Unknown provider: ${provider}`);
-  const changesURL = input.baseURL !== undefined && normalizeURL(input.baseURL) !== parent?.baseURL;
+  const defaults = CONNECTION_DEFAULTS[provider];
+  const baseURL = input.baseURL === undefined ? undefined : normalizeURL(input.baseURL);
+  const changesURL = baseURL !== undefined && baseURL !== connectionIdentity(parent ?? defaults).baseURL;
   const resetsConnection = input.provider !== undefined || changesURL || !parent;
-  const base = resetsConnection ? CONNECTION_DEFAULTS[provider] : parent;
+  const base = resetsConnection ? defaults : parent;
   const connection = { ...base, ...input, provider };
   // A custom API root defaults to no authentication, never a hosted-provider key.
-  const customURL = input.baseURL !== undefined && normalizeURL(input.baseURL) !== CONNECTION_DEFAULTS[provider].baseURL;
+  const customURL = baseURL !== undefined && baseURL !== defaults.baseURL;
   if ((changesURL || (resetsConnection && customURL)) && input.apiKeyEnv === undefined && input.auth === undefined) {
     delete connection.apiKeyEnv;
     connection.auth = "none";
@@ -66,7 +74,7 @@ function resolveConnection(input: Partial<ModelConnection>, parent?: ModelConnec
   if (input.auth === "none") delete connection.apiKeyEnv;
   if (!connection.baseURL) throw new Error(`${provider} requires baseURL (the complete API root, including /v1)`);
   connection.baseURL = normalizeURL(connection.baseURL);
-  if (input.baseURL !== undefined && input.api === undefined && provider === "openai") connection.api = "chat";
+  if (resetsConnection && customURL && input.api === undefined && provider === "openai") connection.api = "chat";
   if (connection.api === "responses" && provider !== "openai" && provider !== "openai-compatible") {
     throw new Error(`${provider} does not support api: responses`);
   }

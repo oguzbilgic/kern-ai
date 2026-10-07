@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { embed, generateText } from "ai";
-import { resolveModel, resolveSummaryModel, resolveEmbeddingModel, createModel, createEmbeddingModel, createSummaryModel, embeddingFingerprint, isEmbeddingInputTooLong } from "../src/model.js";
+import { configureConnection, resolveModel, resolveSummaryModel, resolveEmbeddingModel, createModel, createEmbeddingModel, createSummaryModel, embeddingFingerprint, isEmbeddingInputTooLong } from "../src/model.js";
 import { configDefaults, type KernConfig } from "../src/config.js";
 import { modelServer } from "./helpers/model-server.js";
 
@@ -50,6 +50,52 @@ test("endpoint-only override never forwards parent credentials", () => {
 test("same-connection string and object overrides inherit authentication", () => {
   const config = cfg({ provider: "openai-compatible", baseURL: "http://localhost:1234/v1", apiKeyEnv: "LOCAL_KEY", model: "chat" });
   for (const ref of ["embed", { model: "embed" }]) assert.equal(resolveModel(config, ref).apiKeyEnv, "LOCAL_KEY");
+});
+
+test("explicit hosted preset URLs retain default credentials and API selection", async t => {
+  for (const [provider, baseURL, apiKeyEnv, api] of [
+    ["openai", "https://api.openai.com/v1", "OPENAI_API_KEY", "responses"],
+    ["openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "chat"],
+    ["anthropic", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", undefined],
+  ] as const) {
+    const resolved = resolveModel(cfg({ provider, baseURL: ` ${baseURL}/ ` }));
+    assert.equal(resolved.baseURL, baseURL);
+    assert.equal(resolved.auth, undefined);
+    assert.equal(resolved.apiKeyEnv, apiKeyEnv);
+    assert.equal(resolved.api, api);
+  }
+  const server = await modelServer(t, undefined, "https://api.openai.com/v1");
+  const saved = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "hosted-test-key";
+  t.after(() => { if (saved === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = saved; });
+  await embed({ model: createEmbeddingModel(cfg({ provider: "openai", baseURL: server.baseURL }))!, value: "memory" });
+  assert.equal(server.requests[0].authorization, "Bearer hosted-test-key");
+});
+
+test("a secondary reference repeating the endpoint inherits the parent's Responses API", async t => {
+  const server = await modelServer(t, request => {
+    assert.equal(request.path, "/v1/responses");
+    return { body: { id: "resp-test", created_at: 1, model: request.body.model, output: [{ type: "message", id: "msg-test", role: "assistant", content: [{ type: "output_text", text: "response-only", annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } };
+  });
+  const main = cfg({ provider: "openai", baseURL: server.baseURL, api: "responses", auth: "none", model: "chat" });
+  const ref = { model: "summary", baseURL: ` ${server.baseURL}/ ` };
+  const result = await generateText({ model: createModel(main, ref), prompt: "summarize", maxRetries: 0 });
+  assert.equal(result.text, "response-only");
+  assert.equal(server.requests[0].authorization, undefined);
+  // An explicit provider still resets to its own custom-endpoint defaults.
+  assert.equal(resolveModel(main, { ...ref, provider: "openai" }).api, "chat");
+});
+
+test("endpoint changes reset the old API while equivalent setup URLs retain it", () => {
+  const current = { provider: "openai", model: "chat", baseURL: "http://old.test/v1", api: "responses" as const, apiKeyEnv: "OLD_KEY" };
+  const unchanged = configureConnection(current, { provider: "openai", baseURL: " http://old.test/v1/ " });
+  assert.equal(resolveModel(cfg(unchanged)).api, "responses");
+  assert.equal(unchanged.apiKeyEnv, "OLD_KEY");
+  const replacement = configureConnection(current, { provider: "openai", baseURL: "http://new.test/v1" });
+  const resolved = resolveModel(cfg(replacement));
+  assert.equal(resolved.api, "chat");
+  assert.equal(resolved.auth, "none");
+  assert.equal(resolved.apiKeyEnv, undefined);
 });
 
 test("undefined secondary connection fields retain hosted provider defaults", () => {

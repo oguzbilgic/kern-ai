@@ -5,7 +5,7 @@ import { input, select, password } from "@inquirer/prompts";
 import { isAgentDir, readLivePid } from "./agent-dir.js";
 import { startAgent, stopAgent } from "./daemon.js";
 import { configDefaults, resolveConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
-import { resolveModel, configureConnection } from "./model.js";
+import { resolveModel, configureConnection, connectionSettings } from "./model.js";
 import { migrateAgentFiles } from "./migrations/index.js";
 import { PACKAGE_VERSION } from "./package-version.js";
 import { parse as parseEnv } from "dotenv";
@@ -133,17 +133,20 @@ interface ConnectionPrompt {
 }
 
 async function promptConnection(current: Partial<KernConfig>, env: Record<string, string>): Promise<ConnectionPrompt> {
-  const provider = await select({ message: "Provider", choices: PROVIDERS.map(p => ({ name: p.name, value: p.value })), default: current.provider || "openrouter" });
-  const same = provider === current.provider;
-  const custom = provider === "ollama" || provider === "openai-compatible" || (same && !!current.baseURL);
-  const baseURL = custom ? await input({ message: "API root URL (include /v1)", default: same && current.baseURL ? current.baseURL : provider === "ollama" ? "http://localhost:11434/v1" : "http://localhost:1234/v1", required: true }) : undefined;
-  const defaultEnvVar = same && current.apiKeyEnv ? current.apiKeyEnv : API_KEY_ENV[provider];
-  const authenticate = custom ? await select({ message: "Authentication", choices: [{ name: "None", value: false }, { name: "API key", value: true }], default: same ? !!current.apiKeyEnv && current.auth !== "none" : false }) : true;
+  const previous = configureConnection(connectionSettings(current), {});
+  const provider = await select({ message: "Provider", choices: PROVIDERS.map(p => ({ name: p.name, value: p.value })), default: previous.provider });
+  const same = provider === previous.provider;
+  const custom = provider === "ollama" || provider === "openai-compatible" || (same && !!previous.baseURL);
+  const baseURL = custom ? await input({ message: "API root URL (include /v1)", default: same && previous.baseURL ? previous.baseURL : provider === "ollama" ? "http://localhost:11434/v1" : "http://localhost:1234/v1", required: true }) : undefined;
+  const connection = configureConnection(previous, { provider, baseURL });
+  const resolved = resolveModel({ ...configDefaults, ...connection, model: "setup" });
+  const defaultEnvVar = resolved.apiKeyEnv || API_KEY_ENV[provider];
+  const authenticate = custom ? await select({ message: "Authentication", choices: [{ name: "None", value: false }, { name: "API key", value: true }], default: !!resolved.apiKeyEnv && resolved.auth !== "none" }) : true;
   const envVar = authenticate ? await input({ message: "API key environment variable", default: defaultEnvVar, required: true }) : defaultEnvVar;
   const currentKey = env[envVar] || "";
   const supplied = authenticate ? await password({ message: currentKey ? "API key (Enter to keep existing)" : "API key", mask: "*" }) : "";
   const apiKey = supplied || (authenticate ? currentKey : "");
-  return { connection: configureConnection({}, { provider, baseURL, apiKeyEnv: authenticate ? envVar : undefined, auth: authenticate ? undefined : "none", api: same ? current.api : undefined }), apiKey, envVar };
+  return { connection: configureConnection(connection, { apiKeyEnv: authenticate ? envVar : undefined, auth: authenticate ? undefined : "none" }), apiKey, envVar };
 }
 
 async function promptEmbedding(config: KernConfig, env: Record<string, string>): Promise<{ ref: ModelRef | false; updates: Record<string, string> }> {
@@ -283,10 +286,10 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
 
     await migrateAgentFiles(dir);
     const configPath = join(dir, ".kern", "config.json");
-    const previous: Partial<KernConfig> = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+    const previous = configureConnection<Partial<KernConfig>>(existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {}, {});
     const envPath = join(dir, ".kern", ".env");
     const env = { ...process.env, ...(existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {}) };
-    const provider = flags.provider || previous.provider || "openrouter";
+    const provider = flags.provider || previous.provider;
     const apiKey = flags["api-key"] || "";
     const envVar = flags["api-key-env"] || (provider === previous.provider ? previous.apiKeyEnv : undefined) || API_KEY_ENV[provider];
     const connection = configureConnection(previous, {
