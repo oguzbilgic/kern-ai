@@ -4,8 +4,8 @@ import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
 import { isAgentDir, readLivePid } from "./agent-dir.js";
 import { startAgent, stopAgent } from "./daemon.js";
-import { configDefaults, validateModelConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
-import { resolveModel, resolveEmbeddingModel } from "./model.js";
+import { configDefaults, resolveConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
+import { resolveModel, configureConnection } from "./model.js";
 import { migrateAgentFiles } from "./migrations/index.js";
 import { PACKAGE_VERSION } from "./package-version.js";
 import { parse as parseEnv } from "dotenv";
@@ -143,7 +143,7 @@ async function promptConnection(current: Partial<KernConfig>, env: Record<string
   const currentKey = env[envVar] || "";
   const supplied = authenticate ? await password({ message: currentKey ? "API key (Enter to keep existing)" : "API key", mask: "*" }) : "";
   const apiKey = supplied || (authenticate ? currentKey : "");
-  return { connection: { provider, baseURL, apiKeyEnv: authenticate ? envVar : undefined, auth: authenticate ? undefined : "none", api: same ? current.api : undefined }, apiKey, envVar };
+  return { connection: configureConnection({}, { provider, baseURL, apiKeyEnv: authenticate ? envVar : undefined, auth: authenticate ? undefined : "none", api: same ? current.api : undefined }), apiKey, envVar };
 }
 
 async function promptEmbedding(config: KernConfig, env: Record<string, string>): Promise<{ ref: ModelRef | false; updates: Record<string, string> }> {
@@ -198,7 +198,7 @@ async function runConfig(dir: string): Promise<void> {
   const currentEnv = existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {};
   const { connection, apiKey, envVar } = await promptConnection(currentConfig, currentEnv);
   const model = await chooseModel(connection, apiKey, currentConfig.model || "");
-  const pendingConfig = { ...configDefaults, ...currentConfig, ...connection, model };
+  const pendingConfig = { ...configDefaults, ...configureConnection(currentConfig, connection), model };
   const embedding = await promptEmbedding(pendingConfig, { ...currentEnv, [envVar]: apiKey });
 
   // Telegram
@@ -231,20 +231,19 @@ async function runConfig(dir: string): Promise<void> {
   }
 
   // Build new config (keep the sticky port and any other fields as they are)
-  const config: Partial<KernConfig> = {
+  const config = configureConnection({
     ...currentConfig,
     name,
     model,
-    ...connection,
     embeddingModel: embedding.ref,
     toolScope: currentConfig.toolScope || "full",
-  };
-  validateModelConfig({ ...configDefaults, ...config });
+  }, connection);
   const updates: Record<string, string> = { ...embedding.updates };
   if (apiKey) updates[envVar] = apiKey;
   if (telegramToken) updates.TELEGRAM_BOT_TOKEN = telegramToken;
   if (slackBotToken) updates.SLACK_BOT_TOKEN = slackBotToken;
   if (slackAppToken) updates.SLACK_APP_TOKEN = slackAppToken;
+  resolveConfig(config, { ...process.env, ...currentEnv, ...updates });
   await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
   await saveEnvUpdates(dir, updates);
   print("");
@@ -282,16 +281,26 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   if (flags && Object.keys(flags).length) {
     const name = basename(dir);
 
-    const provider = flags.provider || "openrouter";
+    await migrateAgentFiles(dir);
+    const configPath = join(dir, ".kern", "config.json");
+    const previous: Partial<KernConfig> = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+    const envPath = join(dir, ".kern", ".env");
+    const env = { ...process.env, ...(existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {}) };
+    const provider = flags.provider || previous.provider || "openrouter";
     const apiKey = flags["api-key"] || "";
-    const connection: ModelConnection = { provider, ...(flags["base-url"] ? { baseURL: flags["base-url"] } : {}), ...(flags.api ? { api: flags.api as "chat" | "responses" } : {}), ...(apiKey ? { apiKeyEnv: flags["api-key-env"] || API_KEY_ENV[provider] } : (flags["base-url"] || provider === "openai-compatible" || provider === "ollama") ? { auth: "none" } : {}) };
-    let model: string | undefined = flags.model;
+    const envVar = flags["api-key-env"] || (provider === previous.provider ? previous.apiKeyEnv : undefined) || API_KEY_ENV[provider];
+    const connection = configureConnection(previous, {
+      provider,
+      baseURL: flags["base-url"],
+      api: flags.api as "chat" | "responses" | undefined,
+      ...(apiKey || flags["api-key-env"] ? { apiKeyEnv: envVar } : {}),
+    });
+    let model = flags.model || (provider === previous.provider ? previous.model : undefined);
     if (!model) {
-      const choices = await getModelChoices(connection, apiKey);
+      const choices = await getModelChoices(connection, apiKey || env[envVar] || "");
       model = choices[0]?.value || (!connection.baseURL ? DEFAULT_PROVIDER_MODELS[provider] : undefined);
       if (!model) throw new Error("This connection requires --model with a model ID hosted by the server");
     }
-    const envVar = connection.apiKeyEnv || API_KEY_ENV[provider];
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
@@ -404,17 +413,15 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   // state, so two agents scaffolded while nothing runs don't both get 4100
   const configPath = join(dir, ".kern", "config.json");
   const previous = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
-  for (const key of ["baseURL", "apiKeyEnv", "auth", "api"]) delete previous[key];
-  const config: Partial<KernConfig> = {
+  const config = configureConnection({
     ...previous, version: previous.version ?? PACKAGE_VERSION,
-    name, model, provider, toolScope: previous.toolScope || "full", ...opts.connection,
+    name, model, toolScope: previous.toolScope || "full",
     ...(opts.embeddingModel !== undefined ? { embeddingModel: opts.embeddingModel } : {}),
     ...(opts.summaryModel !== undefined ? { summaryModel: opts.summaryModel } : {}),
-  };
-  validateModelConfig({ ...configDefaults, ...config });
-  // Fail early on an invalid endpoint/model route, without contacting the server.
-  resolveModel({ ...configDefaults, ...config });
-  resolveEmbeddingModel({ ...configDefaults, ...config });
+  }, { provider, ...opts.connection, ...(apiKey ? { apiKeyEnv: opts.connection?.apiKeyEnv ?? envVar } : {}) });
+  const envPath = join(dir, ".kern", ".env");
+  const env = { ...process.env, ...(existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {}), ...opts.extraEnv, ...(apiKey ? { [envVar]: apiKey } : {}) };
+  resolveConfig(config, env);
   // .kern/.env
   const envLines: string[] = [];
   if (apiKey) {

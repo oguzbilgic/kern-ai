@@ -97,7 +97,7 @@ export class SubAgentRegistry {
     const promise = this.runner({
       id,
       prompt,
-      config: { ...this.config, ...effectiveModel, auth: effectiveModel.auth, apiKeyEnv: effectiveModel.apiKeyEnv },
+      config: { ...this.config, ...effectiveModel, api: effectiveModel.api, auth: effectiveModel.auth, apiKeyEnv: effectiveModel.apiKeyEnv },
       agentDir: this.agentDir,
       maxSteps: Math.min(opts.maxSteps ?? 20, 50),
       signal: controller.signal,

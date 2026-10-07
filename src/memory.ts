@@ -134,8 +134,8 @@ export class MemoryDB {
       // Unidentified legacy vectors are rebuilt once, after successful validation.
       if (existing && previous?.fingerprint !== fingerprint) {
         log.warn("memory", "Embedding identity changed — rebuilding vectors, preserving messages and summary tree");
-        this.db.exec("DROP TABLE IF EXISTS vec_chunks; DROP TABLE IF EXISTS vec_segments; DELETE FROM index_state;");
-        // Never reset segment_state: that would re-segment covered history.
+        this.db.exec("DROP TABLE IF EXISTS vec_chunks; DROP TABLE IF EXISTS vec_segments;");
+        // Keep both cursors: backfill restores vectors, tail indexing handles new history.
       }
       if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'vec_chunks'").get()) {
         this.db.exec(`CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding FLOAT[${dimensions}])`);

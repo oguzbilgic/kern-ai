@@ -62,6 +62,7 @@ The top-level `provider`, `model`, `baseURL`, `apiKeyEnv`, `auth`, and `api` des
 - **Object**: `{ "model": "id", "provider": "...", "baseURL": "...", "apiKeyEnv": "..." }`. Only `model` is required. Without `provider` or a new URL, omitted connection settings inherit from the main connection.
 - **Explicit provider**: starts from that provider's defaults, even if it has the same provider name as the parent; it does not inherit the parent's custom URL or credentials.
 - **New URL**: uses that provider's defaults plus the new URL, and clears inherited credentials. Supply `apiKeyEnv` if authentication is required. Use the complete API root; Kern never guesses whether to append `/v1`.
+- **Explicit provider with a custom URL**: defaults to no authentication even if the URL matches the parent. Supply `apiKeyEnv` explicitly to authenticate that connection.
 - **`embeddingModel: false`** or **`recall: false`**: disable embeddings, recall, and semantic segmentation. Other model fields do not accept `false`.
 
 Provider presets:
@@ -75,6 +76,8 @@ Provider presets:
 | `openai-compatible` | explicitly configured | none by default | Chat Completions |
 
 For authenticated local servers or gateways, use `apiKeyEnv` pointing at a distinct secret variable. Do not combine it with `auth: "none"`.
+
+When updating an existing agent with `kern init` flags, omitted settings on the same connection are preserved, including the provider, model, API root, credential variable, and API selection. Changing the provider or endpoint clears the old connection settings. `--api-key-env LOCAL_MODEL_API_KEY` selects an existing environment credential without requiring `--api-key` or copying its value into `.env`. Setup validates the effective configuration, including `KERN_*` overrides, before saving changes or stopping a running agent.
 
 **Hosted chat, local embeddings:**
 
@@ -134,7 +137,7 @@ For embeddings, an object may also include `dimensions`, a positive integer requ
 
 Startup logs resolved model routes and probes the embedding endpoint with one real request (10-second timeout, no automatic retries). Failed probes preserve existing vectors and metadata, disable embedding work for that process, and log the actual failure. Fix the endpoint and restart to resume.
 
-The vector index records the endpoint, provider, model, requested dimensions, and actual output dimensions as a fingerprint. A successful probe for a changed fingerprint rebuilds vectors, including existing chunks from inactive sessions, while preserving messages, chunk text, segment boundaries, summaries, and the segment cursor. Credential rotation alone does not rebuild memory. Legacy databases without a fingerprint rebuild once after their first successful probe. No database deletion is needed when changing models.
+The vector index records the endpoint, provider, model, requested dimensions, and actual output dimensions as a fingerprint. A successful probe for a changed fingerprint rebuilds vectors, including existing chunks from inactive sessions, while preserving messages, chunk text, segment boundaries, summaries, and recall/segment cursors. Backfill restores existing vectors; subsequent indexing embeds only new history. Credential rotation alone does not rebuild memory. Legacy databases without a fingerprint rebuild once after their first successful probe. No database deletion is needed when changing models.
 
 ### Migrating from earlier configuration
 

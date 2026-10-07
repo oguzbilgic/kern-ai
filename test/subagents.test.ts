@@ -105,3 +105,19 @@ test("subagents: a configured cross-provider reference uses its own connection",
   assert.equal(seen!.config.auth, "none");
   assert.equal(seen!.config.apiKeyEnv, undefined);
 });
+
+test("subagents: native Anthropic children do not inherit the parent's Responses API", async t => {
+  const { configDefaults } = await import("../src/config.js");
+  const { resolveModel } = await import("../src/model.js");
+  const { rm } = await import("node:fs/promises");
+  const dir = mkdtempSync(join(tmpdir(), "kern-child-api-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const registry = new SubAgentRegistry(dir, { ...configDefaults, provider: "openai", model: "parent", api: "responses", subAgentModel: { provider: "anthropic", model: "claude" } }, async opts => {
+    const child = resolveModel(opts.config);
+    assert.equal(child.provider, "anthropic");
+    assert.equal(child.api, undefined);
+    assert.equal(child.apiKeyEnv, "ANTHROPIC_API_KEY");
+    return "ok";
+  });
+  assert.equal(await registry.spawn("task", { origin: null }).promise, "ok");
+});

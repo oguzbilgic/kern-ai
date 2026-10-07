@@ -4,7 +4,10 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "dotenv";
-import { fetchModels, mergeEnvText, scaffoldAgent } from "../src/init.js";
+import { fetchModels, mergeEnvText, scaffoldAgent, runInit } from "../src/init.js";
+import { configDefaults } from "../src/config.js";
+import { createModel, resolveModel } from "../src/model.js";
+import { generateText } from "ai";
 import { modelServer } from "./helpers/model-server.js";
 import { PACKAGE_VERSION } from "../src/package-version.js";
 import { migrateAgentFiles } from "../src/migrations/index.js";
@@ -57,4 +60,77 @@ test("fresh setup stamps the package version and ignores backups without running
   await migrateAgentFiles(dir);
   assert.deepEqual(await readFile(path), before);
   await assert.rejects(stat(join(dir, ".kern", "backups")), { code: "ENOENT" });
+});
+
+async function setupDirectory(t: import("node:test").TestContext, config?: object) {
+  const dir = await mkdtemp(join(tmpdir(), "kern-setup-review-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(join(dir, ".kern"));
+  await mkdir(join(dir, ".git"));
+  // The CLI's startAgent returns immediately for this PID; tests launch no daemon.
+  await writeFile(join(dir, ".kern", "agent.pid"), String(process.pid));
+  if (config) await writeFile(join(dir, ".kern", "config.json"), JSON.stringify({ version: PACKAGE_VERSION, ...config }));
+  return dir;
+}
+
+test("CLI honors an existing credential variable without a command-line secret", async t => {
+  const server = await modelServer(t);
+  const dir = await setupDirectory(t);
+  process.env.KERN_SETUP_TEST_KEY = "local-test-secret";
+  t.after(() => { delete process.env.KERN_SETUP_TEST_KEY; });
+  await runInit(dir, { provider: "openai-compatible", "base-url": server.baseURL, model: "chat", "embedding-model": "off", "api-key-env": "KERN_SETUP_TEST_KEY" });
+  const config = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
+  assert.equal(config.apiKeyEnv, "KERN_SETUP_TEST_KEY");
+  assert.equal(config.auth, undefined);
+  assert.ok(!(await readFile(join(dir, ".kern", ".env"), "utf-8")).includes("local-test-secret"));
+  await generateText({ model: createModel({ ...configDefaults, ...config }), prompt: "hi" });
+  assert.equal(server.requests[0].authorization, "Bearer local-test-secret");
+});
+
+test("CLI key rotation preserves omitted provider, model, endpoint, and API settings", async t => {
+  const dir = await setupDirectory(t, { provider: "openai", model: "local-chat", baseURL: "http://local.test/v1", api: "chat", auth: "none", embeddingModel: false, port: 4123 });
+  await runInit(dir, { "api-key": "new-test-key" });
+  const config = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
+  assert.equal(config.provider, "openai");
+  assert.equal(config.model, "local-chat");
+  assert.equal(config.baseURL, "http://local.test/v1");
+  assert.equal(config.api, "chat");
+  assert.equal(config.apiKeyEnv, "OPENAI_API_KEY");
+  assert.equal(config.auth, undefined);
+  assert.equal(config.port, 4123);
+  assert.equal(parse(await readFile(join(dir, ".kern", ".env"), "utf-8")).OPENAI_API_KEY, "new-test-key");
+});
+
+test("replacing a connection clears credentials and API settings from the previous route", async t => {
+  for (const connection of [{ provider: "anthropic" }, { provider: "openai", baseURL: "http://another.test/v1" }]) {
+    const dir = await setupDirectory(t, { provider: "openai", model: "chat", baseURL: "http://local.test/v1", apiKeyEnv: "LOCAL_KEY", api: "responses", embeddingModel: false });
+    await scaffoldAgent({ name: "replacement", dir, provider: connection.provider, connection, model: "chat", apiKey: "", envVar: "NEW_KEY", telegramToken: "", slackBotToken: "", slackAppToken: "", skipStart: true });
+    const config = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
+    assert.equal(config.apiKeyEnv, undefined);
+    assert.equal(config.api, undefined);
+    const resolved = resolveModel({ ...configDefaults, ...config });
+    if (connection.provider === "anthropic") {
+      assert.equal(resolved.baseURL, "https://api.anthropic.com/v1");
+      assert.equal(resolved.apiKeyEnv, "ANTHROPIC_API_KEY");
+    } else {
+      assert.equal(resolved.baseURL, "http://another.test/v1");
+      assert.equal(resolved.auth, "none");
+      assert.equal(resolved.apiKeyEnv, undefined);
+    }
+  }
+});
+
+test("hosted embedding references from prompt output validate before JSON serialization", async t => {
+  const dir = await setupDirectory(t);
+  await scaffoldAgent({ name: "hosted", dir, provider: "anthropic", model: "claude", apiKey: "", envVar: "ANTHROPIC_API_KEY", embeddingModel: { provider: "openai", model: "embed", baseURL: undefined, auth: undefined, api: undefined, apiKeyEnv: "OPENAI_API_KEY" }, telegramToken: "", slackBotToken: "", slackAppToken: "", skipStart: true });
+  assert.equal(JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8")).embeddingModel.provider, "openai");
+});
+
+test("unsupported embedding routes leave saved configuration and the live PID unchanged", async t => {
+  const dir = await setupDirectory(t, { provider: "openai", model: "chat", embeddingModel: "embed" });
+  const configPath = join(dir, ".kern", "config.json");
+  const before = await readFile(configPath);
+  await assert.rejects(scaffoldAgent({ name: "invalid", dir, provider: "anthropic", model: "claude", apiKey: "", envVar: "ANTHROPIC_API_KEY", telegramToken: "", slackBotToken: "", slackAppToken: "", skipStart: true }), /Anthropic has no embeddings API/);
+  assert.deepEqual(await readFile(configPath), before);
+  assert.equal(await readFile(join(dir, ".kern", "agent.pid"), "utf-8"), String(process.pid));
 });

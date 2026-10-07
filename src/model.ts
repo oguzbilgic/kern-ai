@@ -4,7 +4,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { wrapEmbeddingModel, type embed, type LanguageModel } from "ai";
 import { createHash } from "crypto";
-import { PROVIDER_IDS, type KernConfig, type ModelConnection, type ModelRef, type ModelSpec } from "./config.js";
+import type { KernConfig, ModelConnection, ModelRef, ModelSpec } from "./config.js";
 import { log } from "./log.js";
 
 const OPENROUTER_HEADERS = {
@@ -28,15 +28,37 @@ export interface ResolvedModel extends ModelConnection {
   dimensions?: number;
 }
 
+const CONNECTION_FIELDS = ["provider", "baseURL", "apiKeyEnv", "auth", "api"] as const;
+
+function connectionSettings(input: Partial<ModelConnection>): Partial<ModelConnection> {
+  return Object.fromEntries(CONNECTION_FIELDS.filter(key => input[key] !== undefined).map(key => [key, input[key]]));
+}
+
+/** Setup updates preserve omitted settings on the same connection. */
+export function configureConnection<T extends Partial<ModelConnection>>(current: T, updates: Partial<ModelConnection>): T & ModelConnection {
+  const input = connectionSettings(updates);
+  const provider = input.provider ?? current.provider ?? "openrouter";
+  const replacing = provider !== current.provider || (input.baseURL !== undefined && normalizeURL(input.baseURL) !== normalizeURL(current.baseURL ?? ""));
+  const settings = replacing ? {} : connectionSettings(current);
+  if (input.apiKeyEnv !== undefined) delete settings.auth;
+  if (input.auth !== undefined) delete settings.apiKeyEnv;
+  const rest = { ...current };
+  for (const key of CONNECTION_FIELDS) delete rest[key];
+  return { ...rest, ...settings, ...input, provider };
+}
+
 /** Explicit provider or URL changes never carry credentials from another connection. */
 function resolveConnection(input: Partial<ModelConnection>, parent?: ModelConnection): ModelConnection {
+  input = connectionSettings(input);
   const provider = input.provider ?? parent?.provider ?? "openrouter";
-  if (!PROVIDER_IDS.includes(provider as typeof PROVIDER_IDS[number])) throw new Error(`Unknown provider: ${provider}`);
+  if (!Object.hasOwn(CONNECTION_DEFAULTS, provider)) throw new Error(`Unknown provider: ${provider}`);
   const changesURL = input.baseURL !== undefined && normalizeURL(input.baseURL) !== parent?.baseURL;
-  const base = input.provider !== undefined || changesURL || !parent ? CONNECTION_DEFAULTS[provider] : parent;
+  const resetsConnection = input.provider !== undefined || changesURL || !parent;
+  const base = resetsConnection ? CONNECTION_DEFAULTS[provider] : parent;
   const connection = { ...base, ...input, provider };
   // A custom API root defaults to no authentication, never a hosted-provider key.
-  if (changesURL && input.apiKeyEnv === undefined && input.auth === undefined) {
+  const customURL = input.baseURL !== undefined && normalizeURL(input.baseURL) !== CONNECTION_DEFAULTS[provider].baseURL;
+  if ((changesURL || (resetsConnection && customURL)) && input.apiKeyEnv === undefined && input.auth === undefined) {
     delete connection.apiKeyEnv;
     connection.auth = "none";
   }
@@ -57,8 +79,7 @@ function normalizeURL(url: string): string {
 
 /** Model IDs are opaque. Slashes and the presence of unrelated keys never affect routing. */
 export function resolveModel(config: KernConfig, ref: ModelRef = config.model): ResolvedModel {
-  const { provider, baseURL, apiKeyEnv, auth, api } = config;
-  const main = resolveConnection({ provider, ...(baseURL !== undefined ? { baseURL } : {}), ...(apiKeyEnv !== undefined ? { apiKeyEnv } : {}), ...(auth !== undefined ? { auth } : {}), ...(api !== undefined ? { api } : {}) });
+  const main = resolveConnection(config);
   const spec: ModelSpec = typeof ref === "string" ? { model: ref } : ref;
   const { model, dimensions, ...overrides } = spec;
   if (!model.trim()) throw new Error("A non-empty model ID is required");
@@ -90,6 +111,16 @@ export function resolveEmbeddingModel(config: KernConfig): ResolvedModel | null 
     return null;
   }
   return { ...main, model: defaults[main.provider] };
+}
+
+/** Validate all model routes without contacting providers or reading secrets. */
+export function validateModelRoutes(config: KernConfig): void {
+  resolveModel(config);
+  resolveSummaryModel(config);
+  resolveEmbeddingModel(config);
+  for (const key of ["subAgentModel", "mediaModel", "audioModel"] as const) {
+    if (config[key]) resolveModel(config, config[key]);
+  }
 }
 
 function apiKey(ref: ResolvedModel): string | undefined {

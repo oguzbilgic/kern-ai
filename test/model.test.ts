@@ -52,6 +52,32 @@ test("same-connection string and object overrides inherit authentication", () =>
   for (const ref of ["embed", { model: "embed" }]) assert.equal(resolveModel(config, ref).apiKeyEnv, "LOCAL_KEY");
 });
 
+test("undefined secondary connection fields retain hosted provider defaults", () => {
+  for (const provider of ["openai", "openrouter"]) {
+    const ref = resolveModel(cfg({}), { provider, model: "embed", baseURL: undefined, apiKeyEnv: undefined, auth: undefined, api: undefined });
+    assert.ok(ref.baseURL.startsWith("https://"));
+    assert.equal(ref.apiKeyEnv, provider === "openai" ? "OPENAI_API_KEY" : "OPENROUTER_API_KEY");
+    assert.equal(ref.api, provider === "openai" ? "responses" : "chat");
+  }
+});
+
+test("explicit provider on the same custom URL never restores a hosted credential", async t => {
+  const server = await modelServer(t);
+  const saved = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "hosted-key-must-stay-hosted";
+  t.after(() => { if (saved === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = saved; });
+  for (const provider of ["openai", "openrouter", "anthropic"]) {
+    const main = cfg({ provider, baseURL: server.baseURL, auth: "none", model: "chat" });
+    const ref = resolveModel(main, { provider, baseURL: server.baseURL + "/", model: "secondary" });
+    assert.equal(ref.auth, "none");
+    assert.equal(ref.apiKeyEnv, undefined);
+    assert.equal(resolveModel(main, { provider, baseURL: server.baseURL, apiKeyEnv: "LOCAL_KEY", model: "secondary" }).apiKeyEnv, "LOCAL_KEY");
+  }
+  const config = cfg({ provider: "openai", baseURL: server.baseURL, auth: "none", model: "chat", embeddingModel: { provider: "openai", baseURL: server.baseURL, model: "embed" } });
+  await embed({ model: createEmbeddingModel(config)!, value: "local memory" });
+  assert.equal(server.requests[0].authorization, undefined);
+});
+
 test("authenticated local model uses exactly its configured secret", async t => {
   const server = await modelServer(t);
   process.env.KERN_TEST_LOCAL_KEY = "test-local-key";

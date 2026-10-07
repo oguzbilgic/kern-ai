@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, configDefaults, validateModelConfig } from "../src/config.js";
+import { loadConfig, resolveConfig, configDefaults, validateModelConfig } from "../src/config.js";
 
 test("accepts independent model references and validates nested settings", () => {
   validateModelConfig({ ...configDefaults, embeddingModel: { provider: "openai-compatible", baseURL: "http://localhost:1234/v1", auth: "none", model: "local", dimensions: 4 }, summaryModel: { provider: "anthropic", model: "haiku" } });
@@ -30,4 +30,14 @@ test("environment overrides apply even without a config file and never mutate de
   t.after(() => { if (saved === undefined) delete process.env.KERN_MODEL; else process.env.KERN_MODEL = saved; });
   assert.equal((await loadConfig(dir)).model, "env-model");
   assert.equal(configDefaults.model, "google/gemini-3.8-flash");
+});
+
+test("effective validation applies environment overrides without mutating stored settings", () => {
+  const raw = { provider: "anthropic", model: "chat", embeddingModel: "embed", baseURL: "http://local.test/v1", auth: "none" };
+  const env = { KERN_PROVIDER: "openai" };
+  assert.throws(() => resolveConfig(raw, {}), /Anthropic has no embeddings API/);
+  assert.equal(resolveConfig(raw, env).provider, "openai");
+  assert.equal(raw.provider, "anthropic");
+  assert.deepEqual(env, { KERN_PROVIDER: "openai" });
+  assert.throws(() => resolveConfig({ provider: "ollama", model: "chat", summaryModel: { provider: "anthropic", model: "haiku", api: "responses" } }, {}), /does not support api/);
 });

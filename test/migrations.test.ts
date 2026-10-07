@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, resolveConfig } from "../src/config.js";
 import { migrateAgentFiles, MIGRATIONS, type Migration } from "../src/migrations/index.js";
 
 const release = MIGRATIONS[0].targetVersion;
@@ -72,6 +72,21 @@ test("legacy endpoint migration respects the provider supplied by Docker environ
   const dir = await agent(t, { provider: "openrouter", model: "chat" }, "KERN_PROVIDER=openai\nOPENAI_BASE_URL=http://local:1234/v1\n");
   await migrateAgentFiles(dir);
   assert.equal((await configAt(dir)).baseURL, "http://local:1234/v1");
+});
+
+test("migration validates the effective provider with agent env taking precedence", async t => {
+  for (const provider of ["openai", "ollama"]) {
+    const env = `KERN_PROVIDER=${provider}\nOPENAI_BASE_URL=http://local.test/v1\nOLLAMA_BASE_URL=http://local.test\n`;
+    const dir = await agent(t, { provider: "anthropic", model: "chat" }, env);
+    process.env.KERN_PROVIDER = "anthropic";
+    await migrateAgentFiles(dir);
+    const stored = await configAt(dir);
+    assert.equal(stored.provider, "anthropic");
+    assert.equal(stored.version, release);
+    assert.equal(resolveConfig(stored, { KERN_PROVIDER: provider }).provider, provider);
+    assert.equal(await fs.readFile(join(dir, ".kern", ".env"), "utf-8"), env);
+    delete process.env.KERN_PROVIDER;
+  }
 });
 
 test("legacy cross-provider summary and embedding routes become explicit once", async t => {

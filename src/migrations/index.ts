@@ -2,8 +2,8 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { compare, gt, lte, valid } from "semver";
-import { parseConfig } from "../config.js";
-import { resolveModel, resolveSummaryModel, resolveEmbeddingModel } from "../model.js";
+import { resolveConfig } from "../config.js";
+import { parse } from "dotenv";
 import { readLivePid } from "../agent-dir.js";
 import { PACKAGE_VERSION } from "../package-version.js";
 import { log } from "../log.js";
@@ -76,16 +76,8 @@ export async function migrateAgentFiles(
     result = migration.migrate(result);
     result.config = { ...result.config, version: migration.targetVersion };
   }
-  const validated = parseConfig(result.config);
-  // Resolve without network calls or credential checks, including unsupported
-  // APIs and incomplete endpoints that structural validation cannot detect.
-  resolveModel(validated);
-  resolveSummaryModel(validated);
-  resolveEmbeddingModel(validated);
-  for (const key of ["subAgentModel", "mediaModel", "audioModel"] as const) {
-    if (validated[key]) resolveModel(validated, validated[key]);
-  }
   if (result.env !== null && typeof result.env !== "string") throw new Error("Migration .env must be text or null");
+  resolveConfig(result.config, { ...process.env, ...parse(result.env ?? "") });
 
   // Config commits last: its stamp is the completion marker for the whole run.
   const changes: FileChange[] = [

@@ -3,6 +3,7 @@ import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { config as loadDotenv } from "dotenv";
 import { log } from "./log.js";
+import { validateModelRoutes } from "./model.js";
 
 export type ToolScope = "full" | "write" | "read";
 
@@ -266,8 +267,14 @@ export async function loadConfig(agentDir: string): Promise<KernConfig> {
   if (existsSync(envPath)) loadDotenv({ path: envPath, override: true, quiet: true });
   const configPath = join(agentDir, ".kern", "config.json");
   const userConfig = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
-  const config = applyEnvOverrides(parseConfig(userConfig));
+  return resolveConfig(userConfig);
+}
+
+/** Shared by startup, setup, and migrations; does not mutate raw config or env. */
+export function resolveConfig(userConfig: unknown, env: NodeJS.ProcessEnv = process.env): KernConfig {
+  const config = applyEnvOverrides(parseConfig(userConfig), env);
   validateModelConfig(config);
+  validateModelRoutes(config);
   return config;
 }
 
@@ -285,9 +292,9 @@ const ENV_CONFIG_MAP: Record<string, { key: keyof KernConfig; type: "string" | "
   KERN_SUMMARY_MODEL: { key: "summaryModel", type: "string" },
 };
 
-function applyEnvOverrides(config: KernConfig): KernConfig {
+function applyEnvOverrides(config: KernConfig, env: NodeJS.ProcessEnv): KernConfig {
   for (const [envKey, { key, type }] of Object.entries(ENV_CONFIG_MAP)) {
-    const val = process.env[envKey];
+    const val = env[envKey];
     if (val === undefined) continue;
 
     if (type === "number") {
