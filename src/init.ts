@@ -6,6 +6,8 @@ import { isAgentDir, readLivePid } from "./agent-dir.js";
 import { startAgent, stopAgent } from "./daemon.js";
 import { configDefaults, validateModelConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
 import { resolveModel, resolveEmbeddingModel } from "./model.js";
+import { migrateAgentFiles } from "./migrations/index.js";
+import { PACKAGE_VERSION } from "./package-version.js";
 import { parse as parseEnv } from "dotenv";
 import { log } from "./log.js";
 
@@ -179,6 +181,7 @@ function print(text: string) {
 }
 
 async function runConfig(dir: string): Promise<void> {
+  await migrateAgentFiles(dir);
   // Load existing config and env
   let currentConfig: Partial<KernConfig> = {};
   try {
@@ -380,6 +383,7 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   } = opts;
 
   const dirExists = existsSync(dir);
+  await migrateAgentFiles(dir);
   print("");
   print(dirExists ? `  Adding kern to ${dir}/...` : `  Creating ${dir}/...`);
 
@@ -402,7 +406,8 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   const previous = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
   for (const key of ["baseURL", "apiKeyEnv", "auth", "api"]) delete previous[key];
   const config: Partial<KernConfig> = {
-    ...previous, name, model, provider, toolScope: previous.toolScope || "full", ...opts.connection,
+    ...previous, version: previous.version ?? PACKAGE_VERSION,
+    name, model, provider, toolScope: previous.toolScope || "full", ...opts.connection,
     ...(opts.embeddingModel !== undefined ? { embeddingModel: opts.embeddingModel } : {}),
     ...(opts.summaryModel !== undefined ? { summaryModel: opts.summaryModel } : {}),
   };
@@ -460,6 +465,7 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
 .kern/sessions/
 .kern/media/
 .kern/logs/
+.kern/backups/
 .kern/*.db
 node_modules/
 `;
@@ -537,4 +543,3 @@ node_modules/
     print("");
   }
 }
-

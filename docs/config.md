@@ -16,6 +16,7 @@ The main config file. Committed to git. Unknown top-level fields are warned on s
 
 | Field | Default | Description |
 |-------|---------|-------------|
+| `version` | package version at creation | Package version of the last successful file migration. Updated only when a migration runs; ordinary package upgrades leave it unchanged. Managed by Kern. |
 | `name` | directory name | Agent name. Auto-set to directory basename on first startup if missing. Exposed in `/status` response. |
 | `model` | `google/gemini-3.8-flash` | Model ID. Format depends on provider. |
 | `provider` | `openrouter` | Main connection: `openrouter`, `anthropic`, `openai`, `ollama`, `openai-compatible`. |
@@ -137,13 +138,21 @@ The vector index records the endpoint, provider, model, requested dimensions, an
 
 ### Migrating from earlier configuration
 
-This is a deliberate routing change; no compatibility heuristics are retained:
+Kern runs one-time file migrations before startup and before reconfiguring an existing agent. A missing `version` means legacy configuration. Migration versions are package release versions; the stamp advances only after a migration succeeds. An agent stamped by a newer package cannot be opened by an older package.
 
-1. Move `OPENAI_BASE_URL` or `OLLAMA_BASE_URL` from `.env` to `baseURL` in JSON. Include `/v1` for compatible endpoints. These old URL variables no longer affect routing.
-2. Replace a namespaced local `summaryModel` intended for OpenRouter with an explicit object containing `provider: "openrouter"`.
-3. Anthropic summaries now use the native Anthropic API. Use bare Anthropic IDs, or explicitly choose OpenRouter if that is intended. Anthropic embeddings also require an explicit external connection.
-4. Configure `audioModel` explicitly for cross-provider audio. An OpenRouter key no longer adds a cloud fallback automatically.
-5. Set `embeddingModel` to the model hosted by a custom server; Kern does not assume that server provides OpenAI's embedding model.
+The first migration (`0.43.0-next`) moves legacy `OPENAI_BASE_URL` and `OLLAMA_BASE_URL` settings into JSON `baseURL`, preserving their endpoint, authentication, and old embedding choices. It makes previously inferred OpenRouter summary routes explicit, including Anthropic background routes. Explicit new connection settings win, valid string references stay strings, and unrelated JSON fields and `.env` entries are retained. Legacy endpoint environment variables are consulted only during this one-time migration; subsequent routing uses JSON or the supported `KERN_*` overrides.
+
+Each run creates a verified snapshot in `.kern/backups/<old-version-or-legacy>-<timestamp>-<suffix>/` before replacing any target file. Snapshots contain the exact original bytes of every changed existing file and a `manifest.json` recording which files existed. They have restricted permissions and are gitignored, including for agents created before the new template. Files are staged and validated before replacement; `config.json` is replaced last so its version marks completion. On a write failure, Kern restores files already replaced and aborts startup. If restoration also fails, the error names the backup and files to restore. Migrations must accept partially migrated files so retrying after process interruption is safe.
+
+The existing live-PID check runs before migration. If the agent is already running under another process, stop it before upgrading or reconfiguring. This reuses Kern's existing guard and does not add a separate lock. `loadConfig()` remains read-only. Database and embedding-index migrations retain their own lifecycle.
+
+After automatic conversion, review these intentional behavior changes:
+
+1. Set `embeddingModel` to the model actually hosted by a custom server. The migration preserves the old hardcoded choice rather than guessing which model is installed.
+2. Configure `audioModel` explicitly for cross-provider audio. An OpenRouter key no longer adds a cloud fallback automatically.
+3. Fresh Anthropic agents use native Anthropic summaries and require an explicit external embedding connection. Migrated agents keep their explicit old OpenRouter routes; change them if you prefer native summaries.
+
+To restore manually, stop Kern, copy each backed-up file listed as `existed: true` in `manifest.json` into `.kern/`, and remove any target listed as `existed: false`. Use a package compatible with the restored configuration, or fix the migration error before restarting. Keep the entire snapshot together, especially when both config and `.env` changed. See [adding migrations](migrations.md) for contributor guidance.
 
 `kern init` offers connection, embedding model, and manual model-ID selection. Reconfiguration preserves other JSON fields and existing `.env` variables/comments. You can edit JSON directly for advanced overrides.
 

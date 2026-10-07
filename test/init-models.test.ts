@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "dotenv";
 import { fetchModels, mergeEnvText, scaffoldAgent } from "../src/init.js";
 import { modelServer } from "./helpers/model-server.js";
+import { PACKAGE_VERSION } from "../src/package-version.js";
+import { migrateAgentFiles } from "../src/migrations/index.js";
 
 test("discovers arbitrary local IDs from the configured endpoint without authentication", async t => {
   const server = await modelServer(t);
@@ -36,8 +38,23 @@ test("scaffolding an existing agent preserves other config and credentials", asy
   assert.equal(config.port, 4123);
   assert.equal(config.autoRecall, true);
   assert.equal(config.embeddingModel, "local-embed");
+  assert.equal(config.version, PACKAGE_VERSION);
   const env = await readFile(join(dir, ".kern", ".env"), "utf8");
   assert.ok(env.startsWith("# keep\n"));
   assert.equal(parse(env).KERN_AUTH_TOKEN, "token");
   assert.equal(parse(env).OPENROUTER_API_KEY, "other");
+});
+
+test("fresh setup stamps the package version and ignores backups without running legacy migrations", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "kern-fresh-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await scaffoldAgent({ name: "fresh", dir, provider: "anthropic", model: "claude", apiKey: "", envVar: "ANTHROPIC_API_KEY", telegramToken: "", slackBotToken: "", slackAppToken: "", skipStart: true });
+  const path = join(dir, ".kern", "config.json");
+  const before = await readFile(path);
+  assert.equal(JSON.parse(before.toString()).version, PACKAGE_VERSION);
+  assert.equal(JSON.parse(before.toString()).summaryModel, undefined);
+  assert.ok((await readFile(join(dir, ".gitignore"), "utf-8")).includes(".kern/backups/"));
+  await migrateAgentFiles(dir);
+  assert.deepEqual(await readFile(path), before);
+  await assert.rejects(stat(join(dir, ".kern", "backups")), { code: "ENOENT" });
 });

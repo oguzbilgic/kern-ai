@@ -28,6 +28,8 @@ export interface ModelSpec extends Partial<ModelConnection> {
 export type ModelRef = string | ModelSpec;
 
 export interface KernConfig extends ModelConnection {
+  /** Package version of the last successful file migration. */
+  version?: string;
   // Core
   name: string;
   model: string;
@@ -130,6 +132,7 @@ export const configDefaults: KernConfig = {
 };
 
 const FIELD_TYPES: Record<string, string> = {
+  version: "string",
   name: "string",
   model: "string",
   provider: "string",
@@ -241,12 +244,8 @@ export function validateModelConfig(config: KernConfig): void {
   }
 }
 
-export async function loadConfig(agentDir: string): Promise<KernConfig> {
-  const envPath = join(agentDir, ".kern", ".env");
-  if (existsSync(envPath)) loadDotenv({ path: envPath, override: true, quiet: true });
-
-  const configPath = join(agentDir, ".kern", "config.json");
-  const userConfig = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+/** Parse stored configuration without loading environment overrides or writing files. */
+export function parseConfig(userConfig: unknown): KernConfig {
   if (!isPlainObject(userConfig)) throw new Error("config.json must contain an object");
   validateConfig(userConfig);
   const cleaned: Record<string, unknown> = {};
@@ -257,7 +256,17 @@ export async function loadConfig(agentDir: string): Promise<KernConfig> {
       throw new Error(`${key}: invalid model configuration`);
     }
   }
-  const config = applyEnvOverrides({ ...configDefaults, ...cleaned });
+  const config = { ...configDefaults, ...cleaned };
+  validateModelConfig(config);
+  return config;
+}
+
+export async function loadConfig(agentDir: string): Promise<KernConfig> {
+  const envPath = join(agentDir, ".kern", ".env");
+  if (existsSync(envPath)) loadDotenv({ path: envPath, override: true, quiet: true });
+  const configPath = join(agentDir, ".kern", "config.json");
+  const userConfig = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+  const config = applyEnvOverrides(parseConfig(userConfig));
   validateModelConfig(config);
   return config;
 }
