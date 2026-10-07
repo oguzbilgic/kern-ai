@@ -94,9 +94,9 @@ test("CLI key rotation preserves omitted provider, model, endpoint, and API sett
   assert.equal(config.provider, "openai");
   assert.equal(config.model, "local-chat");
   assert.equal(config.baseURL, "http://local.test/v1");
-  assert.equal(config.api, "chat");
   assert.equal(config.apiKeyEnv, "OPENAI_API_KEY");
   assert.equal(config.auth, undefined);
+  assert.equal(resolveModel(config).api, "chat");
   assert.equal(config.port, 4123);
   assert.equal(parse(await readFile(join(dir, ".kern", ".env"), "utf-8")).OPENAI_API_KEY, "new-test-key");
 });
@@ -109,7 +109,7 @@ test("CLI updates preserve the default provider's saved connection when provider
   assert.equal(config.model, "local-chat");
   assert.equal(config.baseURL, "http://gateway.test/v1");
   assert.equal(config.apiKeyEnv, "GATEWAY_KEY");
-  assert.equal(config.api, "chat");
+  assert.equal(resolveModel(config).api, "chat");
   assert.equal(parse(await readFile(join(dir, ".kern", ".env"), "utf-8")).GATEWAY_KEY, "rotated-key");
 });
 

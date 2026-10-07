@@ -50,7 +50,22 @@ export function configureConnection<T extends Partial<ModelConnection>>(current:
   if (input.auth !== undefined) delete settings.apiKeyEnv;
   const rest = { ...current };
   for (const key of CONNECTION_FIELDS) delete rest[key];
-  return { ...rest, ...settings, ...input, provider };
+  return pruneConnection({ ...rest, ...settings, ...input, provider });
+}
+
+function sameConnection(a: Partial<ModelConnection>, b: Partial<ModelConnection>): boolean {
+  try { return JSON.stringify(connectionSettings(resolveConnection(a))) === JSON.stringify(connectionSettings(resolveConnection(b))); }
+  catch { return false; }
+}
+
+/** Store only what the resolver cannot infer, so converted and freshly configured agents look alike. */
+export function pruneConnection<T extends object>(config: T): T {
+  const result = { ...config } as T & Partial<ModelConnection>;
+  for (const key of ["api", "auth", "apiKeyEnv", "baseURL"] as const) {
+    const { [key]: _, ...without } = result;
+    if (key in result && sameConnection(without, result)) delete result[key];
+  }
+  return result;
 }
 
 /** Explicit provider or URL changes never carry credentials from another connection. */

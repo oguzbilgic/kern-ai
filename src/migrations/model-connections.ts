@@ -1,4 +1,5 @@
 import { parse } from "dotenv";
+import { pruneConnection } from "../model.js";
 import type { Migration } from "./index.js";
 
 /** One-time conversion; legacy environment variables are never read by routing. */
@@ -17,11 +18,8 @@ export const modelConnections: Migration = {
     // interrupted run can derive the same result on retry.
     if (next.baseURL === undefined && provider === "openai" && secrets.OPENAI_BASE_URL?.trim()) {
       next.baseURL = secrets.OPENAI_BASE_URL.trim().replace(/\/+$/, "");
-      next.api ??= "chat";
-      if (next.apiKeyEnv === undefined && next.auth === undefined) {
-        if (secrets.OPENAI_API_KEY) next.apiKeyEnv = "OPENAI_API_KEY";
-        else next.auth = "none";
-      }
+      // A custom URL defaults to no authentication; keep the key the agent was using.
+      if (next.apiKeyEnv === undefined && next.auth === undefined && secrets.OPENAI_API_KEY) next.apiKeyEnv = "OPENAI_API_KEY";
       // The old hosted defaults (text-embedding-3-small, gpt-6-luna) rarely exist on a
       // custom server. Left unset, summaries reuse the chat model and embeddings stay
       // off until an embeddingModel is configured.
@@ -44,6 +42,6 @@ export const modelConnections: Migration = {
       !next.summaryModel.startsWith("hf.co/") && !next.summaryModel.startsWith("huggingface.co/")) {
       next.summaryModel = openRouter(next.summaryModel);
     }
-    return { config: next, env };
+    return { config: pruneConnection(next), env };
   },
 };

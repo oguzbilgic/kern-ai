@@ -4,7 +4,8 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { loadConfig, resolveConfig } from "../src/config.js";
+import { configDefaults, loadConfig, resolveConfig } from "../src/config.js";
+import { resolveModel } from "../src/model.js";
 import { migrateAgentFiles, MIGRATIONS, type Migration } from "../src/migrations/index.js";
 
 const release = MIGRATIONS[0].targetVersion;
@@ -40,7 +41,7 @@ test("legacy endpoints migrate with exact backups, no secret copying, and unknow
   const env = '# keep this\nOPENAI_BASE_URL="http://localhost:1234/v1/"\nOPENAI_API_KEY=secret\nOTHER=keep\n';
   const dir = await agent(t, input, env);
   await migrateAgentFiles(dir);
-  assert.deepEqual(await configAt(dir), { ...input, baseURL: "http://localhost:1234/v1", api: "chat", apiKeyEnv: "OPENAI_API_KEY", version: release });
+  assert.deepEqual(await configAt(dir), { ...input, baseURL: "http://localhost:1234/v1", apiKeyEnv: "OPENAI_API_KEY", version: release });
   assert.equal(await fs.readFile(join(dir, ".kern", ".env"), "utf-8"), env);
   const backup = await backupAt(dir);
   assert.equal(await fs.readFile(join(backup, "config.json"), "utf-8"), JSON.stringify(input));
@@ -55,7 +56,8 @@ test("custom OpenAI endpoints get no hosted model defaults; Ollama keeps nomic-e
   const dir = await agent(t, { provider: "openai", model: "chat" }, "OPENAI_BASE_URL=http://localhost:1234/v1\n");
   await migrateAgentFiles(dir);
   const local = await configAt(dir);
-  assert.equal(local.auth, "none");
+  assert.equal("auth" in local, false);
+  assert.equal(resolveModel({ ...configDefaults, ...local }).auth, "none");
   assert.equal("embeddingModel" in local, false);
   assert.equal("summaryModel" in local, false);
   const ollama = await agent(t, { provider: "ollama", model: "chat" }, "OLLAMA_BASE_URL=http://server:11434/\n");
@@ -64,11 +66,11 @@ test("custom OpenAI endpoints get no hosted model defaults; Ollama keeps nomic-e
   assert.equal((await configAt(ollama)).embeddingModel, "nomic-embed-text");
 });
 
-test("explicit settings and valid model shorthand survive the migration", async t => {
-  const input = { provider: "openai", model: "chat", baseURL: "http://new:1234/v1", auth: "none", summaryModel: "hf.co/my/model", embeddingModel: false, somethingUnknown: 123 };
-  const dir = await agent(t, input, "OPENAI_BASE_URL=http://old/v1\nOPENROUTER_API_KEY=secret\n");
+test("explicit settings and valid model shorthand survive the migration; inferable defaults are dropped", async t => {
+  const { auth, ...kept } = { provider: "openai", model: "chat", baseURL: "http://new:1234/v1", auth: "none", summaryModel: "hf.co/my/model", embeddingModel: false, somethingUnknown: 123 };
+  const dir = await agent(t, { ...kept, auth }, "OPENAI_BASE_URL=http://old/v1\nOPENROUTER_API_KEY=secret\n");
   await migrateAgentFiles(dir);
-  assert.deepEqual(await configAt(dir), { ...input, version: release });
+  assert.deepEqual(await configAt(dir), { ...kept, version: release });
 });
 
 test("legacy endpoint migration respects the provider supplied by Docker environment", async t => {
