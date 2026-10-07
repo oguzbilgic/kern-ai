@@ -105,7 +105,7 @@ test("disabled embeddings never probe or invent vector dimensions", async t => {
   assert.equal(memory.db.prepare("SELECT name FROM sqlite_master WHERE name='vec_chunks'").get(), undefined);
 });
 
-test("legacy vectors are preserved while offline and rebuilt once when validated", async t => {
+test("legacy vectors are kept while offline, adopted at equal dimensions, and rebuilt only when dimensions differ", async t => {
   const dir = await directory(t);
   const legacy = new MemoryDB(dir);
   legacy.db.exec("CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding FLOAT[4])");
@@ -114,10 +114,12 @@ test("legacy vectors are preserved while offline and rebuilt once when validated
   const offline = new MemoryDB(dir);
   assert.equal((offline.db.prepare("SELECT count(*) as n FROM vec_chunks").get() as any).n, 1);
   offline.close();
-  const upgraded = new MemoryDB(dir, { dimensions: 4, fingerprint: "validated-model" });
-  assert.equal((upgraded.db.prepare("SELECT count(*) as n FROM vec_chunks").get() as any).n, 0);
-  upgraded.close();
-  const reopened = new MemoryDB(dir, { dimensions: 4, fingerprint: "validated-model" });
-  t.after(() => reopened.close());
-  assert.equal((reopened.db.prepare("SELECT summary FROM semantic_segments").get() as any).summary, "preserved summary");
+  const adopted = new MemoryDB(dir, { dimensions: 4, fingerprint: "validated-model" });
+  assert.equal((adopted.db.prepare("SELECT count(*) as n FROM vec_chunks").get() as any).n, 1);
+  assert.equal((adopted.db.prepare("SELECT fingerprint FROM embedding_metadata").get() as any).fingerprint, "validated-model");
+  adopted.close();
+  const resized = new MemoryDB(dir, { dimensions: 8, fingerprint: "other-model" });
+  t.after(() => resized.close());
+  assert.equal((resized.db.prepare("SELECT count(*) as n FROM vec_chunks").get() as any).n, 0);
+  assert.equal((resized.db.prepare("SELECT summary FROM semantic_segments").get() as any).summary, "preserved summary");
 });

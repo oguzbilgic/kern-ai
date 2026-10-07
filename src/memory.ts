@@ -129,10 +129,11 @@ export class MemoryDB {
     const { dimensions, fingerprint } = this.embeddingProfile;
     if (!Number.isSafeInteger(dimensions) || dimensions <= 0) throw new Error("Invalid embedding dimensions");
     const previous = this.db.prepare("SELECT fingerprint FROM embedding_metadata WHERE id = 1").get() as { fingerprint: string } | undefined;
-    const existing = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'vec_chunks'").get();
+    const existing = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_chunks'").get() as { sql: string } | undefined;
+    // A pre-fingerprint index is identified by its dimensions, as it always was; it adopts the fingerprint without a rebuild.
+    const sameModel = previous ? previous.fingerprint === fingerprint : existing?.sql.includes(`FLOAT[${dimensions}]`);
     this.db.transaction(() => {
-      // Unidentified legacy vectors are rebuilt once, after successful validation.
-      if (existing && previous?.fingerprint !== fingerprint) {
+      if (existing && !sameModel) {
         log.warn("memory", "Embedding identity changed — rebuilding vectors, preserving messages and summary tree");
         this.db.exec("DROP TABLE IF EXISTS vec_chunks; DROP TABLE IF EXISTS vec_segments;");
         // Keep both cursors: backfill restores vectors, tail indexing handles new history.
