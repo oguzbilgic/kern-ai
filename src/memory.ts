@@ -152,7 +152,7 @@ export class MemoryDB {
     if (!ref) return null;
     try {
       const model = createEmbeddingModel(config)!;
-      const result = await embed({ model, value: "dimension probe", maxRetries: 0, abortSignal: AbortSignal.timeout(10_000) });
+      const result = await embed({ model, value: "dimension probe", maxRetries: 0, abortSignal: AbortSignal.timeout(60_000) });
       const dimensions = result.embedding.length;
       if (!dimensions || !result.embedding.every(Number.isFinite)) throw new Error("Embedding endpoint returned an invalid vector");
       if (ref.dimensions !== undefined && ref.dimensions !== dimensions) throw new Error(`Requested ${ref.dimensions} dimensions, received ${dimensions}`);

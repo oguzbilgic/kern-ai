@@ -2,7 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { wrapEmbeddingModel, type embed, type LanguageModel } from "ai";
+import { APICallError, wrapEmbeddingModel, type embed, type LanguageModel } from "ai";
 import { createHash } from "crypto";
 import type { KernConfig, ModelConnection, ModelRef, ModelSpec } from "./config.js";
 import { log } from "./log.js";
@@ -189,9 +189,9 @@ export function createEmbeddingModel(config: KernConfig): Parameters<typeof embe
   });
 }
 
-/** Keys/auth do not define a vector space. Endpoint, model, and dimensions do. */
+/** Model and dimensions define a vector space; moving the same model to another host or key does not. */
 export function embeddingFingerprint(ref: ResolvedModel, dimensions: number): string {
-  return createHash("sha256").update(JSON.stringify({ provider: ref.provider, baseURL: ref.baseURL, model: ref.model, dimensions, requestedDimensions: ref.dimensions ?? null })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ model: ref.model, dimensions, requestedDimensions: ref.dimensions ?? null })).digest("hex");
 }
 
 /** Same-provider fallbacks only; an explicit override is authoritative. */
@@ -218,7 +218,7 @@ export function logModelRoutes(config: KernConfig): void {
   }
 }
 
+/** Servers word length rejections differently; a 4xx rejection of the request body is the reliable signal. Auth, routing, rate-limit, and transport errors are not. */
 export function isEmbeddingInputTooLong(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return /maximum context length|context[_ ]length[_ ]exceeded|input.{0,30}(too long|length exceeded)|too many tokens|exceeds?.{0,30}(token|context|input).{0,15}(limit|length)|token limit/i.test(message);
+  return APICallError.isInstance(err) && [400, 413, 422].includes(err.statusCode ?? 0);
 }

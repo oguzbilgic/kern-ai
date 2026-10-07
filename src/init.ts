@@ -51,8 +51,21 @@ const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
 
 // Models to exclude from OpenRouter (embeddings, moderation, old versions, etc.)
 const OPENROUTER_EXCLUDE = /embed|moderat|whisper|tts|dall-e|vision-preview/i;
+const OPENROUTER_PREFERRED = /^(anthropic|openai|google|deepseek|meta-llama)\//;
 
-/** Model discovery uses the same connection as inference. Custom IDs are never filtered. */
+interface HostedModel { id: string; display_name?: string; name?: string; created?: number; created_at?: string; context_length?: number }
+
+/** Hosted catalogs are large and unordered; show the newest or most capable models first. Custom endpoints are never filtered. */
+function shapeHostedCatalog(provider: string, models: HostedModel[]): HostedModel[] {
+  switch (provider) {
+    case "anthropic": return models.sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
+    case "openai": return models.filter(m => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search|embed/i.test(m.id)).sort((a, b) => (b.created ?? 0) - (a.created ?? 0)).slice(0, 15);
+    case "openrouter": return models.filter(m => OPENROUTER_PREFERRED.test(m.id) && !OPENROUTER_EXCLUDE.test(m.id)).sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0)).slice(0, 20);
+    default: return models;
+  }
+}
+
+/** Model discovery uses the same connection as inference. */
 export async function fetchModels(connection: ModelConnection, key?: string, embedding = false): Promise<{ name: string; value: string }[] | null> {
   const resolved = resolveModel({ ...configDefaults, ...connection, model: "discovery" });
   const headers: Record<string, string> = {};
@@ -64,11 +77,9 @@ export async function fetchModels(connection: ModelConnection, key?: string, emb
   try {
     const res = await fetch(`${resolved.baseURL}/models`, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
-    const json = await res.json() as { data?: { id: string; display_name?: string; name?: string }[] };
+    const json = await res.json() as { data?: HostedModel[] };
     let models = (json.data ?? []).filter(m => typeof m.id === "string");
-    const hosted = !connection.baseURL;
-    if (hosted && !embedding && connection.provider === "openai") models = models.filter(m => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search|embed/i.test(m.id));
-    if (hosted && !embedding && connection.provider === "openrouter") models = models.filter(m => !OPENROUTER_EXCLUDE.test(m.id));
+    if (!connection.baseURL && !embedding) models = shapeHostedCatalog(connection.provider, models);
     return models.map(m => ({ name: m.display_name || m.name || m.id, value: m.id }));
   } catch { return null; }
 }
@@ -120,9 +131,9 @@ function encodeEnvValue(value: string): string {
   throw new Error("Secret contains all quote styles; set it directly in .kern/.env");
 }
 
-async function saveEnvUpdates(dir: string, updates: Record<string, string>): Promise<void> {
+async function saveEnvUpdates(dir: string, updates: Record<string, string>, template = ""): Promise<void> {
   const path = join(dir, ".kern", ".env");
-  const text = existsSync(path) ? await readFile(path, "utf-8") : "";
+  const text = existsSync(path) ? await readFile(path, "utf-8") : template;
   await writeFile(path, mergeEnvText(text, updates));
 }
 
@@ -418,56 +429,21 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   const previous = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
   const config = configureConnection({
     ...previous, version: previous.version ?? PACKAGE_VERSION,
-    name, model, toolScope: previous.toolScope || "full",
+    name: previous.name ?? name, model, toolScope: previous.toolScope || "full",
     ...(opts.embeddingModel !== undefined ? { embeddingModel: opts.embeddingModel } : {}),
     ...(opts.summaryModel !== undefined ? { summaryModel: opts.summaryModel } : {}),
   }, { provider, ...opts.connection, ...(apiKey ? { apiKeyEnv: opts.connection?.apiKeyEnv ?? envVar } : {}) });
   const envPath = join(dir, ".kern", ".env");
   const env = { ...process.env, ...(existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {}), ...opts.extraEnv, ...(apiKey ? { [envVar]: apiKey } : {}) };
   resolveConfig(config, env);
-  // .kern/.env
-  const envLines: string[] = [];
-  if (apiKey) {
-    envLines.push(`${envVar}=${encodeEnvValue(apiKey)}`);
-  } else {
-    envLines.push(`# ${envVar}=`);
-  }
-  if (telegramToken) {
-    envLines.push(`TELEGRAM_BOT_TOKEN=${telegramToken}`);
-  } else {
-    envLines.push(`# TELEGRAM_BOT_TOKEN=`);
-  }
-  if (slackBotToken) {
-    envLines.push(`SLACK_BOT_TOKEN=${slackBotToken}`);
-  } else {
-    envLines.push(`# SLACK_BOT_TOKEN=`);
-  }
-  if (slackAppToken) {
-    envLines.push(`SLACK_APP_TOKEN=${slackAppToken}`);
-  } else {
-    envLines.push(`# SLACK_APP_TOKEN=`);
-  }
-  if (matrixHomeserver) {
-    envLines.push(`MATRIX_HOMESERVER=${matrixHomeserver}`);
-  }
-  if (matrixUserId) {
-    envLines.push(`MATRIX_USER_ID=${matrixUserId}`);
-  }
-  if (matrixAccessToken) {
-    envLines.push(`MATRIX_ACCESS_TOKEN=${matrixAccessToken}`);
-  }
-  if (discordToken) {
-    envLines.push(`DISCORD_TOKEN=${discordToken}`);
-  }
-  if (nostrNsec) {
-    envLines.push(`NOSTR_NSEC=${nostrNsec}`);
-  }
-  if (nostrRelays) {
-    envLines.push(`NOSTR_RELAYS=${nostrRelays}`);
-  }
-  if (ircUrl) {
-    envLines.push(`IRC_URL=${ircUrl}`);
-  }
+  // .kern/.env — a fresh file lists the common secrets as commented placeholders
+  const tokens: Record<string, string | undefined> = {
+    [envVar]: apiKey, TELEGRAM_BOT_TOKEN: telegramToken, SLACK_BOT_TOKEN: slackBotToken, SLACK_APP_TOKEN: slackAppToken,
+    MATRIX_HOMESERVER: matrixHomeserver, MATRIX_USER_ID: matrixUserId, MATRIX_ACCESS_TOKEN: matrixAccessToken,
+    DISCORD_TOKEN: discordToken, NOSTR_NSEC: nostrNsec, NOSTR_RELAYS: nostrRelays, IRC_URL: ircUrl, ...opts.extraEnv,
+  };
+  const envUpdates = Object.fromEntries(Object.entries(tokens).filter((entry): entry is [string, string] => !!entry[1]));
+  const envTemplate = [envVar, "TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"].filter(key => !envUpdates[key]).map(key => `# ${key}=\n`).join("");
 
   // .gitignore
   const gitignore = `.kern/.env
@@ -513,7 +489,7 @@ node_modules/
   await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
   print("  + .kern/config.json");
 
-  await saveEnvUpdates(dir, { ...parseEnv(envLines.join("\n")), ...opts.extraEnv });
+  await saveEnvUpdates(dir, envUpdates, envTemplate);
   print("  + .kern/.env");
 
   if (!existsSync(join(dir, ".gitignore"))) {

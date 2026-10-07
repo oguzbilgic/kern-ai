@@ -213,8 +213,8 @@ export function validateModelConfig(config: KernConfig): void {
       }
     }
     if (value.baseURL !== undefined) {
-      const url = new URL(value.baseURL as string);
-      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      const url = URL.parse(value.baseURL as string);
+      if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
         throw new Error(`${label}.baseURL: use an HTTP(S) API root without credentials, query, or fragment`);
       }
     }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { embed, generateText } from "ai";
+import { APICallError, embed, generateText } from "ai";
 import { configureConnection, resolveModel, resolveSummaryModel, resolveEmbeddingModel, createModel, createEmbeddingModel, createSummaryModel, embeddingFingerprint, isEmbeddingInputTooLong } from "../src/model.js";
 import { configDefaults, type KernConfig } from "../src/config.js";
 import { modelServer } from "./helpers/model-server.js";
@@ -157,10 +157,10 @@ test("dimensions are passed to the embedding endpoint", async t => {
   assert.equal(server.requests[0].body.dimensions, 4);
 });
 
-test("fingerprint detects same-dimension model changes but ignores secrets", () => {
+test("fingerprint detects same-dimension model changes but ignores hosts and secrets", () => {
   const a = resolveModel(cfg({}), { provider: "openai", model: "embed-a" });
   assert.notEqual(embeddingFingerprint(a, 4), embeddingFingerprint({ ...a, model: "embed-b" }, 4));
-  assert.notEqual(embeddingFingerprint(a, 4), embeddingFingerprint({ ...a, baseURL: "https://another.example/v1" }, 4));
+  assert.equal(embeddingFingerprint(a, 4), embeddingFingerprint({ ...a, baseURL: "https://another.example/v1" }, 4));
   assert.equal(embeddingFingerprint(a, 4), embeddingFingerprint({ ...a, apiKeyEnv: "ROTATED_KEY" }, 4));
 });
 
@@ -171,9 +171,12 @@ test("legacy URL env vars no longer change routing", t => {
   assert.equal(resolveModel(cfg({ provider: "openai" })).baseURL, "https://api.openai.com/v1");
 });
 
-test("only input-length errors trigger truncation", () => {
-  assert.equal(isEmbeddingInputTooLong(new Error("maximum context length is 8192 tokens")), true);
-  for (const message of ["Invalid API key", "Model not found", "fetch failed", "Rate limit exceeded"]) assert.equal(isEmbeddingInputTooLong(new Error(message)), false);
+test("any 4xx body rejection triggers truncation; auth, routing, and transport errors do not", () => {
+  const rejection = (statusCode: number, message: string) => new APICallError({ message, url: "http://local.test/v1/embeddings", requestBodyValues: {}, statusCode });
+  assert.equal(isEmbeddingInputTooLong(rejection(400, "input is too large to process")), true);
+  assert.equal(isEmbeddingInputTooLong(rejection(413, "Payload Too Large")), true);
+  for (const [status, message] of [[401, "Invalid API key"], [404, "Model not found"], [429, "Rate limit exceeded"], [500, "Internal error"]] as const) assert.equal(isEmbeddingInputTooLong(rejection(status, message)), false);
+  assert.equal(isEmbeddingInputTooLong(new Error("fetch failed")), false);
 });
 
 test("Anthropic summary references call the native Messages API", async t => {

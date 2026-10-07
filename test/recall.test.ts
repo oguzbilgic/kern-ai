@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { RecallIndex } from "../src/plugins/recall/recall.js";
 import { EMBED_MAX_CHARS } from "../src/util.js";
-import type { ModelMessage } from "ai";
+import { APICallError, type ModelMessage } from "ai";
 
 // Fake embedding model that limits per-value length to simulate API 8192 token limit
 const fakeModel = (limit: number = 8000, seen: string[] = []) => ({
@@ -16,7 +16,7 @@ const fakeModel = (limit: number = 8000, seen: string[] = []) => ({
   async doEmbed({ values }: { values: string[] }) {
     for (const v of values) {
       seen.push(v);
-      if (v.length > limit) throw new Error("maximum context length is 8192 tokens");
+      if (v.length > limit) throw new APICallError({ message: "input is too large to process", url: "http://local.test/v1/embeddings", requestBodyValues: {}, statusCode: 400 });
     }
     return { embeddings: values.map(() => [0.1, 0.2, 0.3, 0.4]), usage: { tokens: 1 }, warnings: [] };
   },

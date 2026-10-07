@@ -36,7 +36,7 @@ export const modelConnections: Migration = {
     // the inference from the runtime. String shorthand stays valid elsewhere.
     if (provider === "anthropic") {
       if (typeof next.summaryModel === "string" && next.summaryModel) next.summaryModel = openRouter(next.summaryModel);
-      else if (next.summaryModel === undefined || next.summaryModel === "") next.summaryModel = openRouter("anthropic/claude-haiku-5");
+      else if (!next.summaryModel && openRouterKey) next.summaryModel = openRouter("anthropic/claude-haiku-5");
       if (next.embeddingModel === undefined && openRouterKey) next.embeddingModel = openRouter("openai/text-embedding-3-small");
     } else if ((provider === "openai" || provider === "ollama") && secrets.OPENROUTER_API_KEY &&
       typeof next.summaryModel === "string" && next.summaryModel.includes("/") &&

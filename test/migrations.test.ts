@@ -98,6 +98,9 @@ test("legacy cross-provider summary and embedding routes become explicit once", 
   const local = await agent(t, { provider: "ollama", model: "local", summaryModel: "google/summary" }, "OPENROUTER_API_KEY=key\n");
   await migrateAgentFiles(local);
   assert.deepEqual((await configAt(local)).summaryModel, { provider: "openrouter", model: "google/summary" });
+  const keyless = await agent(t, { provider: "anthropic", model: "claude" }, "ANTHROPIC_API_KEY=only\n");
+  await migrateAgentFiles(keyless);
+  assert.equal((await configAt(keyless)).summaryModel, undefined);
 });
 
 test("ordinary upgrades leave the migration stamp and files untouched", async t => {
