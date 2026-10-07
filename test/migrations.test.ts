@@ -40,7 +40,7 @@ test("legacy endpoints migrate with exact backups, no secret copying, and unknow
   const env = '# keep this\nOPENAI_BASE_URL="http://localhost:1234/v1/"\nOPENAI_API_KEY=secret\nOTHER=keep\n';
   const dir = await agent(t, input, env);
   await migrateAgentFiles(dir);
-  assert.deepEqual(await configAt(dir), { ...input, baseURL: "http://localhost:1234/v1", api: "chat", apiKeyEnv: "OPENAI_API_KEY", embeddingModel: "text-embedding-3-small", summaryModel: "gpt-6-luna", version: release });
+  assert.deepEqual(await configAt(dir), { ...input, baseURL: "http://localhost:1234/v1", api: "chat", apiKeyEnv: "OPENAI_API_KEY", version: release });
   assert.equal(await fs.readFile(join(dir, ".kern", ".env"), "utf-8"), env);
   const backup = await backupAt(dir);
   assert.equal(await fs.readFile(join(backup, "config.json"), "utf-8"), JSON.stringify(input));
@@ -51,10 +51,13 @@ test("legacy endpoints migrate with exact backups, no secret copying, and unknow
   assert.equal(execFileSync("git", ["check-ignore", ".kern/backups/" + backup.split("/").at(-1) + "/config.json"], { cwd: dir, encoding: "utf-8" }).trim().endsWith("/config.json"), true);
 });
 
-test("local no-auth and Ollama endpoints preserve the old complete routes", async t => {
+test("custom OpenAI endpoints get no hosted model defaults; Ollama keeps nomic-embed-text", async t => {
   const dir = await agent(t, { provider: "openai", model: "chat" }, "OPENAI_BASE_URL=http://localhost:1234/v1\n");
   await migrateAgentFiles(dir);
-  assert.equal((await configAt(dir)).auth, "none");
+  const local = await configAt(dir);
+  assert.equal(local.auth, "none");
+  assert.equal("embeddingModel" in local, false);
+  assert.equal("summaryModel" in local, false);
   const ollama = await agent(t, { provider: "ollama", model: "chat" }, "OLLAMA_BASE_URL=http://server:11434/\n");
   await migrateAgentFiles(ollama);
   assert.equal((await configAt(ollama)).baseURL, "http://server:11434/v1");

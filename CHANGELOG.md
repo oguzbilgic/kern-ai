@@ -7,14 +7,14 @@
 - **`OPENAI_BASE_URL` and `OLLAMA_BASE_URL` are no longer read at runtime** — they are converted into `baseURL` once (see upgrade notes below). Model IDs are opaque: a slash in `summaryModel` no longer routes it through OpenRouter. Use `{ "provider": "openrouter", "model": "..." }` for that.
 - **Fresh Anthropic agents** summarize with native Anthropic (`claude-haiku-5`) and need an explicit `embeddingModel` on another provider for recall. Existing agents keep their old OpenRouter routes through the conversion.
 - **No implicit cloud audio fallback** — an OpenRouter key alone no longer routes voice notes to Gemini for other providers. Set `audioModel` explicitly.
-- **Custom servers need an explicit `embeddingModel`** — nothing is guessed about which models a local server hosts. Converted agents keep the IDs they used before.
+- **Custom servers need an explicit `embeddingModel`** — nothing is guessed about which models a local server hosts. An agent that used `OPENAI_BASE_URL` previously sent `text-embedding-3-small` and `gpt-6-luna` to that server; after conversion it summarizes with its chat model and runs without recall until you set `embeddingModel`. Ollama agents keep `nomic-embed-text`.
 - **Invalid model configuration stops startup** instead of silently falling back to defaults: malformed JSON, unknown providers, wrong model-reference types, unknown fields inside model objects, or a route that cannot work (for example embeddings on Anthropic).
 - **`kern init --provider ollama --api-key <URL>`** is replaced by `--base-url <URL>/v1`; `--api-key` always means a secret now.
 
 ### Upgrading existing agents
 - **On the first start** Kern converts `.kern/config.json` and, if needed, `.kern/.env`. If the agent is already running under another process, stop it first; the conversion refuses to touch a live agent.
 - **A backup** of the original files is written to `.kern/backups/<version>-<timestamp>-*/` (gitignored, owner-only). To roll back, stop Kern and copy the files back; see [docs/config.md](docs/config.md#migrating-from-earlier-configuration).
-- **What the conversion does**: moves `OPENAI_BASE_URL` / `OLLAMA_BASE_URL` into `baseURL`, records the matching `apiKeyEnv` or `auth: "none"`, keeps the embedding and summary models you were effectively using, and turns previously inferred OpenRouter summary routes into explicit objects. Unknown fields, comments, and other `.env` entries are preserved.
+- **What the conversion does**: moves `OPENAI_BASE_URL` / `OLLAMA_BASE_URL` into `baseURL`, records the matching `apiKeyEnv` or `auth: "none"`, and turns previously inferred OpenRouter summary routes into explicit objects. It does not write hosted OpenAI model IDs into a custom endpoint's config. Unknown fields, comments, and other `.env` entries are preserved.
 - **`config.json` gets a `version`** stamp. An older Kern refuses to open a config stamped by a newer one. Ordinary upgrades without a pending conversion change nothing.
 - **Memory is not re-embedded.** Existing vectors are kept and tagged with the current embedding model. Only changing the embedding model (or its dimensions) rebuilds vectors, and that rebuild re-embeds stored chunks across all sessions while keeping messages, summaries, segment boundaries, and indexing cursors.
 

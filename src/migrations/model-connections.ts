@@ -22,8 +22,9 @@ export const modelConnections: Migration = {
         if (secrets.OPENAI_API_KEY) next.apiKeyEnv = "OPENAI_API_KEY";
         else next.auth = "none";
       }
-      next.embeddingModel ??= "text-embedding-3-small";
-      next.summaryModel ||= "gpt-6-luna";
+      // The old hosted defaults (text-embedding-3-small, gpt-6-luna) rarely exist on a
+      // custom server. Left unset, summaries reuse the chat model and embeddings stay
+      // off until an embeddingModel is configured.
     }
     if (provider === "ollama") {
       if (next.baseURL === undefined && secrets.OLLAMA_BASE_URL?.trim()) {

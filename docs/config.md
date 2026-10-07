@@ -143,7 +143,7 @@ The vector index records the model, requested dimensions, and actual output dime
 
 Kern runs one-time file migrations before startup and before reconfiguring an existing agent. A missing `version` means legacy configuration. Migration versions are package release versions; the stamp advances only after a migration succeeds. An agent stamped by a newer package cannot be opened by an older package.
 
-The first migration (`0.43.0-next`) moves legacy `OPENAI_BASE_URL` and `OLLAMA_BASE_URL` settings into JSON `baseURL`, preserving their endpoint, authentication, and old embedding choices. It makes previously inferred OpenRouter summary routes explicit, including Anthropic background routes. Explicit new connection settings win, valid string references stay strings, and unrelated JSON fields and `.env` entries are retained. Legacy endpoint environment variables are consulted only during this one-time migration; subsequent routing uses JSON or the supported `KERN_*` overrides.
+The first migration (`0.43.0-next`) moves legacy `OPENAI_BASE_URL` and `OLLAMA_BASE_URL` settings into JSON `baseURL`, preserving their endpoint and authentication. A custom OpenAI endpoint gets no `embeddingModel` or `summaryModel`: summaries use the chat model and recall stays off until an embedding model is configured. Ollama endpoints keep `nomic-embed-text`. It makes previously inferred OpenRouter summary routes explicit, including Anthropic background routes. Explicit new connection settings win, valid string references stay strings, and unrelated JSON fields and `.env` entries are retained. Legacy endpoint environment variables are consulted only during this one-time migration; subsequent routing uses JSON or the supported `KERN_*` overrides.
 
 Each run creates a verified snapshot in `.kern/backups/<old-version-or-legacy>-<timestamp>-<suffix>/` before replacing any target file. Snapshots contain the exact original bytes of every changed existing file and a `manifest.json` recording which files existed. They have restricted permissions and are gitignored, including for agents created before the new template. Files are staged and validated before replacement; `config.json` is replaced last so its version marks completion. On a write failure, Kern restores files already replaced and aborts startup. If restoration also fails, the error names the backup and files to restore. Migrations must accept partially migrated files so retrying after process interruption is safe.
 
@@ -151,7 +151,7 @@ The existing live-PID check runs before migration. If the agent is already runni
 
 After automatic conversion, review these intentional behavior changes:
 
-1. Set `embeddingModel` to the model actually hosted by a custom server. The migration preserves the old hardcoded choice rather than guessing which model is installed.
+1. Set `embeddingModel` to the model actually hosted by a custom server, or to `false` to silence the startup warning. The migration does not guess which model is installed.
 2. Configure `audioModel` explicitly for cross-provider audio. An OpenRouter key no longer adds a cloud fallback automatically.
 3. Fresh Anthropic agents use native Anthropic summaries and require an explicit external embedding connection. Migrated agents keep their explicit old OpenRouter routes; change them if you prefer native summaries.
 
