@@ -4,7 +4,9 @@ import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
 import { isAgentDir, readLivePid } from "./agent-dir.js";
 import { startAgent, stopAgent } from "./daemon.js";
-import type { KernConfig } from "./config.js";
+import { configDefaults, validateModelConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
+import { resolveModel, resolveEmbeddingModel } from "./model.js";
+import { parse as parseEnv } from "dotenv";
 import { log } from "./log.js";
 
 // Default models per provider
@@ -48,112 +50,128 @@ const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
 // Models to exclude from OpenRouter (embeddings, moderation, old versions, etc.)
 const OPENROUTER_EXCLUDE = /embed|moderat|whisper|tts|dall-e|vision-preview/i;
 
-async function fetchModels(
-  provider: string,
-  apiKey: string,
-): Promise<{ name: string; value: string }[] | null> {
-  try {
-    let url: string;
-    const headers: Record<string, string> = {};
-
-    switch (provider) {
-      case "anthropic":
-        url = "https://api.anthropic.com/v1/models";
-        headers["x-api-key"] = apiKey;
-        headers["anthropic-version"] = "2023-06-01";
-        break;
-      case "openrouter":
-        url = "https://openrouter.ai/api/v1/models";
-        // OpenRouter doesn't require auth for model listing
-        break;
-      case "openai":
-        url = "https://api.openai.com/v1/models";
-        headers["Authorization"] = `Bearer ${apiKey}`;
-        break;
-      case "ollama":
-        url = `${apiKey || "http://localhost:11434"}/api/tags`;
-        break;
-      default:
-        return null;
-    }
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-
-    const json: any = await res.json();
-    const models: any[] = json.data || [];
-
-    if (provider === "anthropic") {
-      // Anthropic returns { id, display_name, created_at }
-      // Sort by created_at descending (newest first)
-      return models
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .map((m) => ({ name: m.display_name || m.id, value: m.id }));
-    }
-
-    if (provider === "openrouter") {
-      // OpenRouter returns thousands of models — filter to well-known providers
-      // and sort by context length (proxy for capability)
-      const preferred = ["anthropic/", "openai/", "google/", "deepseek/", "meta-llama/"];
-      return models
-        .filter((m) => preferred.some((p) => m.id.startsWith(p)) && !OPENROUTER_EXCLUDE.test(m.id))
-        .sort((a, b) => (b.context_length || 0) - (a.context_length || 0))
-        .slice(0, 20)
-        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
-        .map((m) => ({ name: m.name || m.id, value: m.id }));
-    }
-
-    if (provider === "openai") {
-      // OpenAI returns all models including fine-tunes, embeddings, etc.
-      // Filter to chat-capable models
-      const chatModels = models
-        .filter((m) => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search/i.test(m.id))
-        .sort((a, b) => (b.created || 0) - (a.created || 0))
-        .slice(0, 15);
-      return chatModels.map((m) => ({ name: m.id, value: m.id }));
-    }
-
-    if (provider === "ollama") {
-      // Ollama /api/tags returns { models: [{ name, size, ... }] }
-      const ollamaModels: any[] = json.models || [];
-      if (ollamaModels.length === 0) return null;
-      return ollamaModels
-        .sort((a, b) => (b.size || 0) - (a.size || 0))
-        .map((m) => ({ name: m.name, value: m.name }));
-    }
-
-    return null;
-  } catch {
-    return null;
+/** Model discovery uses the same connection as inference. Custom IDs are never filtered. */
+export async function fetchModels(connection: ModelConnection, key?: string, embedding = false): Promise<{ name: string; value: string }[] | null> {
+  const resolved = resolveModel({ ...configDefaults, ...connection, model: "discovery" });
+  const headers: Record<string, string> = {};
+  if (key && resolved.auth !== "none") {
+    if (resolved.provider === "anthropic") headers["x-api-key"] = key;
+    else headers.Authorization = `Bearer ${key}`;
   }
+  if (resolved.provider === "anthropic") headers["anthropic-version"] = "2023-06-01";
+  try {
+    const res = await fetch(`${resolved.baseURL}/models`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = await res.json() as { data?: { id: string; display_name?: string; name?: string }[] };
+    let models = (json.data ?? []).filter(m => typeof m.id === "string");
+    const hosted = !connection.baseURL;
+    if (hosted && !embedding && connection.provider === "openai") models = models.filter(m => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search|embed/i.test(m.id));
+    if (hosted && !embedding && connection.provider === "openrouter") models = models.filter(m => !OPENROUTER_EXCLUDE.test(m.id));
+    return models.map(m => ({ name: m.display_name || m.name || m.id, value: m.id }));
+  } catch { return null; }
 }
 
-async function getModelChoices(
-  provider: string,
-  apiKey: string,
-): Promise<{ name: string; value: string }[]> {
-  // Ollama always tries to fetch (URL is the key), others need an API key
-  if (apiKey || provider === "ollama") {
-    print("  Fetching models...");
-    const live = await fetchModels(provider, apiKey);
-    if (live && live.length > 0) return live;
-    print("  Could not fetch models, using defaults");
+async function getModelChoices(connection: ModelConnection, key = "", embedding = false): Promise<{ name: string; value: string }[]> {
+  print("  Fetching models...");
+  const live = await fetchModels(connection, key, embedding);
+  if (live?.length) return live;
+  print("  Could not fetch models; you can enter a model ID manually");
+  // Never suggest hosted IDs for a custom endpoint.
+  return connection.baseURL || connection.provider === "openai-compatible" || embedding ? [] : FALLBACK_MODELS[connection.provider] || [];
+}
+
+async function chooseModel(connection: ModelConnection, key: string, current = "", embedding = false): Promise<string> {
+  const choices = await getModelChoices(connection, key, embedding);
+  if (current && !choices.some(c => c.value === current)) choices.unshift({ name: current, value: current });
+  const manual = "__kern_manual__";
+  const chosen = choices.length ? await select({ message: embedding ? "Embedding model" : "Model", choices: [...choices, { name: "Enter model ID manually", value: manual }], default: current || choices[0].value }) : manual;
+  return chosen === manual ? input({ message: "Model ID", default: current, required: true }) : chosen;
+}
+
+/** Preserve unrelated variables, comments, and formatting, and quote new secrets correctly. */
+export function mergeEnvText(text: string, updates: Record<string, string>): string {
+  const pending = new Map(Object.entries(updates));
+  const output: string[] = [];
+  // dotenv permits quoted multiline values; preserve their entire source spans.
+  const assignment = /(^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:"(?:\\.|[^"\\])*"|'[^']*'|`[^`]*`|[^\r\n]*)(?:[^\r\n]*))/gm;
+  let cursor = 0;
+  for (const match of text.matchAll(assignment)) {
+    output.push(text.slice(cursor, match.index));
+    const key = match[2];
+    if (key in updates) {
+      if (pending.has(key)) output.push(`${key}=${encodeEnvValue(updates[key])}`);
+      pending.delete(key);
+    } else output.push(match[0]);
+    cursor = match.index! + match[0].length;
   }
-  return FALLBACK_MODELS[provider] || FALLBACK_MODELS.openrouter;
+  output.push(text.slice(cursor));
+  let result = output.join("").replace(/\n*$/, "\n");
+  for (const [key, value] of pending) result += `${key}=${encodeEnvValue(value)}\n`;
+  return result;
+}
+
+function encodeEnvValue(value: string): string {
+  if (!/[\s#'"`\\]/.test(value)) return value;
+  if (!value.includes("'")) return `'${value}'`;
+  if (!value.includes('"')) return `"${value.replace(/\n/g, "\\n").replace(/\r/g, "\\r")}"`;
+  if (!value.includes("`")) return `\`${value}\``;
+  throw new Error("Secret contains all quote styles; set it directly in .kern/.env");
+}
+
+async function saveEnvUpdates(dir: string, updates: Record<string, string>): Promise<void> {
+  const path = join(dir, ".kern", ".env");
+  const text = existsSync(path) ? await readFile(path, "utf-8") : "";
+  await writeFile(path, mergeEnvText(text, updates));
+}
+
+interface ConnectionPrompt {
+  connection: ModelConnection;
+  apiKey: string;
+  envVar: string;
+}
+
+async function promptConnection(current: Partial<KernConfig>, env: Record<string, string>): Promise<ConnectionPrompt> {
+  const provider = await select({ message: "Provider", choices: PROVIDERS.map(p => ({ name: p.name, value: p.value })), default: current.provider || "openrouter" });
+  const same = provider === current.provider;
+  const custom = provider === "ollama" || provider === "openai-compatible" || (same && !!current.baseURL);
+  const baseURL = custom ? await input({ message: "API root URL (include /v1)", default: same && current.baseURL ? current.baseURL : provider === "ollama" ? "http://localhost:11434/v1" : "http://localhost:1234/v1", required: true }) : undefined;
+  const defaultEnvVar = same && current.apiKeyEnv ? current.apiKeyEnv : API_KEY_ENV[provider];
+  const authenticate = custom ? await select({ message: "Authentication", choices: [{ name: "None", value: false }, { name: "API key", value: true }], default: same ? !!current.apiKeyEnv && current.auth !== "none" : false }) : true;
+  const envVar = authenticate ? await input({ message: "API key environment variable", default: defaultEnvVar, required: true }) : defaultEnvVar;
+  const currentKey = env[envVar] || "";
+  const supplied = authenticate ? await password({ message: currentKey ? "API key (Enter to keep existing)" : "API key", mask: "*" }) : "";
+  const apiKey = supplied || (authenticate ? currentKey : "");
+  return { connection: { provider, baseURL, apiKeyEnv: authenticate ? envVar : undefined, auth: authenticate ? undefined : "none", api: same ? current.api : undefined }, apiKey, envVar };
+}
+
+async function promptEmbedding(config: KernConfig, env: Record<string, string>): Promise<{ ref: ModelRef | false; updates: Record<string, string> }> {
+  const selection = await select({ message: "Embeddings for memory", choices: [{ name: "Keep current / provider default", value: "keep" }, { name: "Choose model on this connection", value: "same" }, { name: "Use another connection", value: "other" }, { name: "Disable", value: "off" }] });
+  if (selection === "keep") return { ref: config.embeddingModel, updates: {} };
+  if (selection === "off") return { ref: false, updates: {} };
+  if (selection === "same") {
+    const connection = resolveModel(config);
+    const ref = await chooseModel(connection, connection.apiKeyEnv ? env[connection.apiKeyEnv] || "" : "", typeof config.embeddingModel === "string" ? config.embeddingModel : "", true);
+    return { ref, updates: {} };
+  }
+  const prompt = await promptConnection({}, env);
+  const model = await chooseModel(prompt.connection, prompt.apiKey, "", true);
+  return { ref: { ...prompt.connection, model }, updates: prompt.apiKey ? { [prompt.envVar]: prompt.apiKey } : {} };
 }
 
 const PROVIDERS = [
   { name: "OpenRouter", value: "openrouter", keyLabel: "OpenRouter API key" },
   { name: "Anthropic", value: "anthropic", keyLabel: "Anthropic API key" },
   { name: "OpenAI", value: "openai", keyLabel: "OpenAI API key" },
-  { name: "Ollama (local)", value: "ollama", keyLabel: "Ollama server URL" },
+  { name: "Ollama (local)", value: "ollama", keyLabel: "Ollama API key" },
+  { name: "OpenAI-compatible server (local / gateway)", value: "openai-compatible", keyLabel: "Server API key" },
 ];
 
 export const API_KEY_ENV: Record<string, string> = {
   openrouter: "OPENROUTER_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
-  ollama: "OLLAMA_BASE_URL",
+  ollama: "OLLAMA_API_KEY",
+  "openai-compatible": "LOCAL_MODEL_API_KEY",
 };
 
 function print(text: string) {
@@ -173,56 +191,12 @@ async function runConfig(dir: string): Promise<void> {
   print(`  ${dir}`);
   print("");
 
-  let currentEnv: Record<string, string> = {};
-  try {
-    const envContent = await readFile(join(dir, ".kern", ".env"), "utf-8");
-    for (const line of envContent.split("\n")) {
-      if (line.trim() && !line.startsWith("#")) {
-        const eq = line.indexOf("=");
-        if (eq > 0) {
-          currentEnv[line.slice(0, eq)] = line.slice(eq + 1);
-        }
-      }
-    }
-  } catch {}
-
-  // Provider
-  const provider = await select({
-    message: "Provider",
-    choices: PROVIDERS.map((p) => ({ name: p.name, value: p.value })),
-    default: currentConfig.provider || "openrouter",
-  });
-
-  // API key or URL
-  const providerInfo = PROVIDERS.find((p) => p.value === provider)!;
-  const envVar = API_KEY_ENV[provider];
-  const currentKey = currentEnv[envVar];
-  const maskedKey = currentKey ? `****${currentKey.slice(-4)}` : "";
-
-  let apiKey: string;
-  if (provider === "ollama") {
-    // Ollama needs a server URL, not an API key
-    apiKey = await input({
-      message: "Ollama server URL",
-      default: currentKey || "http://localhost:11434",
-    });
-  } else {
-    const apiKeyMsg = maskedKey ? `${providerInfo.keyLabel} (${maskedKey}, enter to keep)` : providerInfo.keyLabel;
-    apiKey = await password({
-      message: apiKeyMsg,
-      mask: "*",
-    });
-  }
-
-  // Model — fetch live from provider, fall back to defaults
-  const keyForFetch = !apiKey ? currentKey : apiKey;
-  const modelChoices = await getModelChoices(provider, keyForFetch || "");
-  const currentModel = currentConfig.model || modelChoices[0].value;
-  const model = await select({
-    message: "Model",
-    choices: modelChoices,
-    default: currentModel,
-  });
+  const envPath = join(dir, ".kern", ".env");
+  const currentEnv = existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {};
+  const { connection, apiKey, envVar } = await promptConnection(currentConfig, currentEnv);
+  const model = await chooseModel(connection, apiKey, currentConfig.model || "");
+  const pendingConfig = { ...configDefaults, ...currentConfig, ...connection, model };
+  const embedding = await promptEmbedding(pendingConfig, { ...currentEnv, [envVar]: apiKey });
 
   // Telegram
   const currentTgToken = currentEnv["TELEGRAM_BOT_TOKEN"];
@@ -258,39 +232,18 @@ async function runConfig(dir: string): Promise<void> {
     ...currentConfig,
     name,
     model,
-    provider,
+    ...connection,
+    embeddingModel: embedding.ref,
     toolScope: currentConfig.toolScope || "full",
   };
-  // Build new env
-  const envLines: string[] = [];
-  const actualKey = !apiKey ? currentKey : apiKey;
-  if (actualKey) {
-    envLines.push(`${envVar}=${actualKey}`);
-  } else {
-    envLines.push(`# ${envVar}=`);
-  }
-  const actualTg = !telegramToken ? currentTgToken : telegramToken;
-  if (actualTg) {
-    envLines.push(`TELEGRAM_BOT_TOKEN=${actualTg}`);
-  } else {
-    envLines.push(`# TELEGRAM_BOT_TOKEN=`);
-  }
-  const actualSlackBot = !slackBotToken ? currentSlackBot : slackBotToken;
-  if (actualSlackBot) {
-    envLines.push(`SLACK_BOT_TOKEN=${actualSlackBot}`);
-  } else {
-    envLines.push(`# SLACK_BOT_TOKEN=`);
-  }
-  const actualSlackApp = !slackAppToken ? currentSlackApp : slackAppToken;
-  if (actualSlackApp) {
-    envLines.push(`SLACK_APP_TOKEN=${actualSlackApp}`);
-  } else {
-    envLines.push(`# SLACK_APP_TOKEN=`);
-  }
-
-  // Write
+  validateModelConfig({ ...configDefaults, ...config });
+  const updates: Record<string, string> = { ...embedding.updates };
+  if (apiKey) updates[envVar] = apiKey;
+  if (telegramToken) updates.TELEGRAM_BOT_TOKEN = telegramToken;
+  if (slackBotToken) updates.SLACK_BOT_TOKEN = slackBotToken;
+  if (slackAppToken) updates.SLACK_APP_TOKEN = slackAppToken;
   await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
-  await writeFile(join(dir, ".kern", ".env"), envLines.join("\n") + "\n");
+  await saveEnvUpdates(dir, updates);
   print("");
   print("  ✓ Config updated");
 
@@ -323,23 +276,27 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   }
 
   // Non-interactive mode
-  if (flags && flags["api-key"]) {
+  if (flags && Object.keys(flags).length) {
     const name = basename(dir);
 
     const provider = flags.provider || "openrouter";
-    const apiKey = flags["api-key"];
-    let model = flags.model;
+    const apiKey = flags["api-key"] || "";
+    const connection: ModelConnection = { provider, ...(flags["base-url"] ? { baseURL: flags["base-url"] } : {}), ...(flags.api ? { api: flags.api as "chat" | "responses" } : {}), ...(apiKey ? { apiKeyEnv: flags["api-key-env"] || API_KEY_ENV[provider] } : (flags["base-url"] || provider === "openai-compatible" || provider === "ollama") ? { auth: "none" } : {}) };
+    let model: string | undefined = flags.model;
     if (!model) {
-      const choices = await getModelChoices(provider, apiKey);
-      model = choices[0]?.value || DEFAULT_PROVIDER_MODELS[provider] || "google/gemini-3.8-flash";
+      const choices = await getModelChoices(connection, apiKey);
+      model = choices[0]?.value || (!connection.baseURL ? DEFAULT_PROVIDER_MODELS[provider] : undefined);
+      if (!model) throw new Error("This connection requires --model with a model ID hosted by the server");
     }
-    const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
+    const envVar = connection.apiKeyEnv || API_KEY_ENV[provider];
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
 
     await scaffoldAgent({
-      name, dir, provider, model, apiKey, envVar,
+      name, dir, provider, model, apiKey, envVar, connection,
+      embeddingModel: flags["embedding-model"] === "off" ? false : flags["embedding-model"],
+      summaryModel: flags["summary-model"],
       telegramToken, slackBotToken, slackAppToken,
     });
     return;
@@ -357,28 +314,10 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
     required: true,
   });
 
-  // Provider
-  const provider = await select({
-    message: "Provider",
-    choices: PROVIDERS.map((p) => ({ name: p.name, value: p.value })),
-    default: "openrouter",
-  });
-
-  // API key
-  const providerInfo = PROVIDERS.find((p) => p.value === provider)!;
-  const envVar = API_KEY_ENV[provider];
-  const apiKey = await password({
-    message: providerInfo.keyLabel,
-    mask: "*",
-  });
-
-  // Model — fetch live from provider, fall back to defaults
-  const modelChoices = await getModelChoices(provider, apiKey);
-  const model = await select({
-    message: "Model",
-    choices: modelChoices,
-    default: modelChoices[0].value,
-  });
+  const { connection, apiKey, envVar } = await promptConnection({}, {});
+  const provider = connection.provider;
+  const model = await chooseModel(connection, apiKey);
+  const embedding = await promptEmbedding({ ...configDefaults, ...connection, model }, { [envVar]: apiKey });
 
   // Telegram bot token (optional)
   const telegramToken = await password({
@@ -401,12 +340,17 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   }
 
   await scaffoldAgent({
-    name, dir, provider, model, apiKey, envVar,
+    name, dir, provider, model, apiKey, envVar, connection, embeddingModel: embedding.ref,
+    extraEnv: embedding.updates,
     telegramToken, slackBotToken, slackAppToken,
   });
 }
 
 export interface ScaffoldOpts {
+  connection?: Partial<ModelConnection>;
+  embeddingModel?: ModelRef | false;
+  summaryModel?: ModelRef;
+  extraEnv?: Record<string, string>;
   name: string;
   dir: string;
   provider: string;
@@ -454,16 +398,22 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
 
   // .kern/config.json — no port yet: the first start assigns one from live
   // state, so two agents scaffolded while nothing runs don't both get 4100
+  const configPath = join(dir, ".kern", "config.json");
+  const previous = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+  for (const key of ["baseURL", "apiKeyEnv", "auth", "api"]) delete previous[key];
   const config: Partial<KernConfig> = {
-    name,
-    model,
-    provider,
-    toolScope: "full",
+    ...previous, name, model, provider, toolScope: previous.toolScope || "full", ...opts.connection,
+    ...(opts.embeddingModel !== undefined ? { embeddingModel: opts.embeddingModel } : {}),
+    ...(opts.summaryModel !== undefined ? { summaryModel: opts.summaryModel } : {}),
   };
+  validateModelConfig({ ...configDefaults, ...config });
+  // Fail early on an invalid endpoint/model route, without contacting the server.
+  resolveModel({ ...configDefaults, ...config });
+  resolveEmbeddingModel({ ...configDefaults, ...config });
   // .kern/.env
   const envLines: string[] = [];
   if (apiKey) {
-    envLines.push(`${envVar}=${apiKey}`);
+    envLines.push(`${envVar}=${encodeEnvValue(apiKey)}`);
   } else {
     envLines.push(`# ${envVar}=`);
   }
@@ -547,7 +497,7 @@ node_modules/
   await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
   print("  + .kern/config.json");
 
-  await writeFile(join(dir, ".kern", ".env"), envLines.join("\n") + "\n");
+  await saveEnvUpdates(dir, { ...parseEnv(envLines.join("\n")), ...opts.extraEnv });
   print("  + .kern/.env");
 
   if (!existsSync(join(dir, ".gitignore"))) {

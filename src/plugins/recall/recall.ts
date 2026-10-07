@@ -4,7 +4,7 @@ import { readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { log } from "../../log.js";
 import { extractText, capForEmbedding, EMBED_MAX_CHARS } from "../../util.js";
-import { createEmbeddingModel } from "../../model.js";
+import { createEmbeddingModel, isEmbeddingInputTooLong } from "../../model.js";
 import type { ModelMessage } from "ai";
 import type { MemoryDB } from "../../memory.js";
 import type { KernConfig } from "../../config.js";
@@ -45,6 +45,23 @@ export class RecallIndex {
       throw new Error("No embedding model available (need OPENROUTER_API_KEY, OPENAI_API_KEY, or Ollama provider)");
     }
     this.embeddingModel = model;
+  }
+
+  /** Restore missing vectors from stored text without changing chunk or segment boundaries. */
+  async backfillVectors(): Promise<void> {
+    const rows = this.db.prepare("SELECT c.id, c.text FROM chunks c LEFT JOIN vec_chunks v ON v.rowid = c.id WHERE v.rowid IS NULL ORDER BY c.id").all() as { id: number; text: string }[];
+    const insert = this.db.prepare("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)");
+    for (let offset = 0; offset < rows.length; offset += EMBED_BATCH_SIZE) {
+      const batch = rows.slice(offset, offset + EMBED_BATCH_SIZE);
+      const vectors = await this.embedTexts(batch.map(row => row.text));
+      this.db.transaction(() => {
+        for (let i = 0; i < batch.length; i++) {
+          // Another tail index may have filled this chunk while the request was running.
+          if (!this.db.prepare("SELECT rowid FROM vec_chunks WHERE rowid = ?").get(BigInt(batch[i].id))) insert.run(BigInt(batch[i].id), new Float32Array(vectors[i]));
+        }
+      })();
+    }
+    if (rows.length) log("recall", `restored ${rows.length} stored chunk vectors`);
   }
 
   /**
@@ -215,6 +232,7 @@ export class RecallIndex {
         const result = await embedMany({ model: this.embeddingModel, values: batch });
         embeddings.push(...result.embeddings);
       } catch (err: any) {
+        if (!isEmbeddingInputTooLong(err)) throw err;
         log.warn("recall", `embed batch failed (${err.message}) — retrying values individually`);
         for (const value of batch) {
           embeddings.push(await this.embedOne(value));
@@ -240,7 +258,7 @@ export class RecallIndex {
         });
         return embedding;
       } catch (err: any) {
-        if (chars <= EMBED_MIN_CHARS) throw err;
+        if (!isEmbeddingInputTooLong(err) || chars <= EMBED_MIN_CHARS) throw err;
         chars = Math.max(EMBED_MIN_CHARS, Math.floor(chars / 2));
         log.warn("recall", `embed value rejected — retrying at ${chars} chars`);
       }

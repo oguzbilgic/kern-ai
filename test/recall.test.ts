@@ -200,3 +200,13 @@ test("indexSession serializes concurrent calls for the same session (#404)", asy
   assert.equal(instance.activeSessions.size, 0, "activeSessions map cleaned up");
 });
 
+
+test("authentication and missing-model errors never trigger input truncation", async () => {
+  for (const message of ["Invalid API key", "Model not found"]) {
+    let calls = 0;
+    const instance = Object.create(RecallIndex.prototype);
+    Object.assign(instance, { embeddingModel: { ...fakeModel(), async doEmbed() { calls++; throw new Error(message); } } });
+    await assert.rejects(instance.embedTexts(["a".repeat(4000)]), new RegExp(message));
+    assert.equal(calls, 1);
+  }
+});

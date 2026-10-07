@@ -20,6 +20,7 @@ import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
 import { setIrcInterface } from "./plugins/irc/tools.js";
 import { SegmentIndex } from "./segments.js";
+import { logModelRoutes } from "./model.js";
 import { MemoryDB } from "./memory.js";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { getStatusData as getStatusDataFn, setQueueStatusFn, setInterfaceStatusFn, setSegmentStatsFn, setPluginStatusFn, type InterfaceStatus } from "./tools/kern.js";
@@ -160,10 +161,11 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   _config = config;
 
   // Probe embedding model dimensions before creating DB
-  const embeddingDims = await MemoryDB.detectEmbeddingDimensions(config);
+  logModelRoutes(config);
+  const embeddingProfile = await MemoryDB.probeEmbeddingModel(config);
 
   // Initialize memory DB before runtime.init() so media sidecar can backfill
-  const memoryDB = new MemoryDB(agentDir, embeddingDims);
+  const memoryDB = new MemoryDB(agentDir, embeddingProfile);
   runtime.setMemoryDB(memoryDB);
 
   await runtime.init();
@@ -171,7 +173,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   // Initialize semantic segments (uses embeddings for context summarization)
   let segmentIndex: SegmentIndex | null = null;
   let segmentRunning = false;
-  if (embeddingDims > 0) {
+  if (memoryDB.embeddingsReady) {
     try {
       segmentIndex = new SegmentIndex(memoryDB, config);
       runtime.setSegmentIndex(segmentIndex);

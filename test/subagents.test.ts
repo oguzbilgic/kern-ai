@@ -92,3 +92,16 @@ test("subagents: spawn resolves the model and caps maxSteps; null origin is kept
   assert.equal(h.record.model, "child-model");
   assert.equal(announced[0].record.origin, null);
 });
+
+test("subagents: a configured cross-provider reference uses its own connection", async () => {
+  let seen: RunOptions | null = null;
+  const agentDir = mkdtempSync(join(tmpdir(), "kern-subagents-"));
+  const { configDefaults } = await import("../src/config.js");
+  const registry = new SubAgentRegistry(agentDir, { ...configDefaults, subAgentModel: { provider: "openai-compatible", baseURL: "http://localhost:1234/v1", auth: "none", model: "local-child" } }, async opts => { seen = opts; return "ok"; });
+  await registry.spawn("task", { origin: null }).promise;
+  assert.equal(seen!.config.model, "local-child");
+  assert.equal(seen!.config.provider, "openai-compatible");
+  assert.equal(seen!.config.baseURL, "http://localhost:1234/v1");
+  assert.equal(seen!.config.auth, "none");
+  assert.equal(seen!.config.apiKeyEnv, undefined);
+});

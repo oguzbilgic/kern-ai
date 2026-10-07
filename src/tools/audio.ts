@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readFile } from "fs/promises";
 import { join, extname } from "path";
 import { existsSync, statSync } from "fs";
-import { createAudioModel, type AudioModelRef } from "../model.js";
+import { createAudioModel, modelChain, type ResolvedModel } from "../model.js";
 import { loadConfig } from "../config.js";
 import type { KernConfig } from "../config.js";
 
@@ -22,7 +22,7 @@ export const AUDIO_EXT_TO_MIME: Record<string, string> = {
  *
  * Note: the openai entry only works for wav/mp3 — the generic OpenAI shim
  * doesn't map ogg/opus file parts. Telegram voice notes on an openai agent
- * rely on the cross-provider OpenRouter fallback below.
+ * require an explicitly configured audioModel supporting that format.
  */
 export const AUDIO_FALLBACKS: Record<string, string> = {
   openrouter: "google/gemini-3.8-flash",
@@ -32,34 +32,9 @@ export const AUDIO_FALLBACKS: Record<string, string> = {
 /** Max audio file size we'll send to a model (base64 inflates ~33%). */
 export const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // 20 MB
 
-/**
- * Build the model fallback chain for audio.
- * Order: audioModel (if set) → agent model → provider fallback →
- * cross-provider OpenRouter fallback (when OPENROUTER_API_KEY is set).
- *
- * The cross-provider entry is what gives anthropic/ollama/openai agents a
- * working audio path: their own providers either have no audio-capable
- * models (Anthropic) or reject ogg/opus (generic OpenAI shim), so the last
- * resort is Gemini routed through the OpenRouter-native provider.
- * Deduplicates while preserving order.
- */
-export function getAudioModelChain(config: KernConfig): AudioModelRef[] {
-  const isOpenRouter = config.provider === "openrouter";
-  const chain: AudioModelRef[] = [];
-  if (config.audioModel) chain.push({ modelId: config.audioModel, viaOpenRouter: isOpenRouter });
-  chain.push({ modelId: config.model, viaOpenRouter: isOpenRouter });
-  const fallback = AUDIO_FALLBACKS[config.provider];
-  if (fallback) chain.push({ modelId: fallback, viaOpenRouter: isOpenRouter });
-  if (!isOpenRouter && process.env.OPENROUTER_API_KEY) {
-    chain.push({ modelId: AUDIO_FALLBACKS.openrouter, viaOpenRouter: true });
-  }
-  const seen = new Set<string>();
-  return chain.filter((ref) => {
-    const key = `${ref.viaOpenRouter}:${ref.modelId}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+/** Explicit override, otherwise same-connection chat and provider default. Never falls back to cloud implicitly. */
+export function getAudioModelChain(config: KernConfig): ResolvedModel[] {
+  return modelChain(config, config.audioModel, AUDIO_FALLBACKS);
 }
 
 export const audioTool = tool({
@@ -104,7 +79,7 @@ export const audioTool = tool({
       let lastError = "";
       for (const ref of chain) {
         try {
-          const model = createAudioModel(config, ref);
+          const model = createAudioModel(ref);
           const result = await generateText({
             model,
             messages: [
@@ -120,9 +95,9 @@ export const audioTool = tool({
           });
           const text = result.text.trim();
           if (text) return text;
-          lastError = `empty response from ${ref.modelId}`;
+          lastError = `empty response from ${ref.model}`;
         } catch (e: any) {
-          lastError = `${ref.modelId}: ${e.message}`;
+          lastError = `${ref.model}: ${e.message}`;
         }
       }
       return `Error: all audio models failed — ${lastError}`;

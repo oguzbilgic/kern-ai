@@ -46,7 +46,7 @@ export const spawnTool = tool({
     model: z.string().optional().describe(
       "Model override for this child. Runs on the parent's provider, so the " +
       "ID must be valid there — same format as the main model config. " +
-      "Defaults to the subAgentModel config field, or the parent's model."
+      "Defaults to the subAgentModel config field (which can select another connection), or the parent's model."
     ),
   }),
   execute: async ({ prompt, maxSteps, model }) => {

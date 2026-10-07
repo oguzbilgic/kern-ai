@@ -64,7 +64,7 @@ For other providers, pass the matching API key:
 -e KERN_PROVIDER=openai -e OPENAI_API_KEY=sk-...
 
 # Ollama
--e KERN_PROVIDER=ollama -e OLLAMA_BASE_URL=http://host:11434
+-e KERN_PROVIDER=ollama -e KERN_BASE_URL=http://host:11434/v1 -e KERN_EMBEDDING_MODEL=nomic-embed-text
 ```
 
 ## Volumes

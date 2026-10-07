@@ -1,15 +1,11 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type { embed, LanguageModel } from "ai";
-import type { KernConfig } from "./config.js";
+import { wrapEmbeddingModel, type embed, type LanguageModel } from "ai";
+import { createHash } from "crypto";
+import { PROVIDER_IDS, type KernConfig, type ModelConnection, type ModelRef, type ModelSpec } from "./config.js";
 import { log } from "./log.js";
-
-/** Normalized OPENAI_BASE_URL — trimmed, trailing slashes stripped, undefined if unset/empty. */
-function openaiBaseURL(): string | undefined {
-  const raw = process.env.OPENAI_BASE_URL?.trim().replace(/\/+$/, "");
-  return raw || undefined;
-}
 
 const OPENROUTER_HEADERS = {
   "HTTP-Referer": "https://github.com/oguzbilgic/kern-ai",
@@ -18,225 +14,172 @@ const OPENROUTER_HEADERS = {
   "X-OpenRouter-Categories": "cli-agent,personal-agent",
 };
 
-/**
- * Create an OpenAI-compatible client for a given provider.
- * Used by embedding and summary model factories.
- */
-function createOpenAIClient(provider: string) {
-  switch (provider) {
-    case "openai":
-      return createOpenAI({ baseURL: openaiBaseURL() });
-    case "ollama": {
-      const base = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/+$/, "");
-      return createOpenAI({
-        baseURL: `${base}/v1`,
-        apiKey: "ollama",
-      });
-    }
-    default: {
-      // openrouter, anthropic, or anything else — fall back to OpenRouter
-      const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
-      if (!apiKey) return null;
-      return createOpenAI({
-        baseURL: "https://openrouter.ai/api/v1",
-        apiKey,
-        headers: OPENROUTER_HEADERS,
-      });
-    }
-  }
+const CONNECTION_DEFAULTS: Record<string, ModelConnection> = {
+  openrouter: { provider: "openrouter", baseURL: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_API_KEY", api: "chat" },
+  anthropic: { provider: "anthropic", baseURL: "https://api.anthropic.com/v1", apiKeyEnv: "ANTHROPIC_API_KEY" },
+  openai: { provider: "openai", baseURL: "https://api.openai.com/v1", apiKeyEnv: "OPENAI_API_KEY", api: "responses" },
+  ollama: { provider: "ollama", baseURL: "http://localhost:11434/v1", auth: "none", api: "chat" },
+  "openai-compatible": { provider: "openai-compatible", auth: "none", api: "chat" },
+};
+
+export interface ResolvedModel extends ModelConnection {
+  model: string;
+  baseURL: string;
+  dimensions?: number;
 }
 
-/**
- * Create an embedding model for recall and segments.
- * Returns null if no suitable provider/key is available.
- *
- * Defaults by provider:
- * - openai: text-embedding-3-small
- * - anthropic: openai/text-embedding-3-small (Anthropic has no embeddings API; routed via OpenRouter)
- * - openrouter: openai/text-embedding-3-small
- * - ollama: nomic-embed-text (local, no API key)
- */
+/** Explicit provider or URL changes never carry credentials from another connection. */
+function resolveConnection(input: Partial<ModelConnection>, parent?: ModelConnection): ModelConnection {
+  const provider = input.provider ?? parent?.provider ?? "openrouter";
+  if (!PROVIDER_IDS.includes(provider as typeof PROVIDER_IDS[number])) throw new Error(`Unknown provider: ${provider}`);
+  const changesURL = input.baseURL !== undefined && normalizeURL(input.baseURL) !== parent?.baseURL;
+  const base = input.provider !== undefined || changesURL || !parent ? CONNECTION_DEFAULTS[provider] : parent;
+  const connection = { ...base, ...input, provider };
+  // A custom API root defaults to no authentication, never a hosted-provider key.
+  if (changesURL && input.apiKeyEnv === undefined && input.auth === undefined) {
+    delete connection.apiKeyEnv;
+    connection.auth = "none";
+  }
+  if (input.apiKeyEnv !== undefined) delete connection.auth;
+  if (input.auth === "none") delete connection.apiKeyEnv;
+  if (!connection.baseURL) throw new Error(`${provider} requires baseURL (the complete API root, including /v1)`);
+  connection.baseURL = normalizeURL(connection.baseURL);
+  if (input.baseURL !== undefined && input.api === undefined && provider === "openai") connection.api = "chat";
+  if (connection.api === "responses" && provider !== "openai" && provider !== "openai-compatible") {
+    throw new Error(`${provider} does not support api: responses`);
+  }
+  return connection;
+}
+
+function normalizeURL(url: string): string {
+  return url.trim().replace(/\/+$/, "");
+}
+
+/** Model IDs are opaque. Slashes and the presence of unrelated keys never affect routing. */
+export function resolveModel(config: KernConfig, ref: ModelRef = config.model): ResolvedModel {
+  const { provider, baseURL, apiKeyEnv, auth, api } = config;
+  const main = resolveConnection({ provider, ...(baseURL !== undefined ? { baseURL } : {}), ...(apiKeyEnv !== undefined ? { apiKeyEnv } : {}), ...(auth !== undefined ? { auth } : {}), ...(api !== undefined ? { api } : {}) });
+  const spec: ModelSpec = typeof ref === "string" ? { model: ref } : ref;
+  const { model, dimensions, ...overrides } = spec;
+  if (!model.trim()) throw new Error("A non-empty model ID is required");
+  return { ...resolveConnection(overrides, main), model, ...(dimensions !== undefined ? { dimensions } : {}) } as ResolvedModel;
+}
+
+export function resolveSummaryModel(config: KernConfig): ResolvedModel {
+  if (config.summaryModel) return resolveModel(config, config.summaryModel);
+  const main = resolveModel(config);
+  const defaults: Record<string, string> = {
+    openai: "gpt-6-luna", anthropic: "claude-haiku-5", openrouter: "google/gemini-3.5-flash-lite",
+  };
+  // A custom endpoint may not host any preset model; reuse its chat model.
+  const preset = main.baseURL === CONNECTION_DEFAULTS[main.provider].baseURL;
+  return { ...main, model: preset ? defaults[main.provider] ?? main.model : main.model };
+}
+
+export function resolveEmbeddingModel(config: KernConfig): ResolvedModel | null {
+  if (!config.recall || config.embeddingModel === false) return null;
+  if (config.embeddingModel) {
+    const ref = resolveModel(config, config.embeddingModel);
+    if (ref.provider === "anthropic") throw new Error("Anthropic has no embeddings API; configure embeddingModel with another provider");
+    return ref;
+  }
+  const main = resolveModel(config);
+  const defaults: Record<string, string> = { openai: "text-embedding-3-small", openrouter: "openai/text-embedding-3-small", ollama: "nomic-embed-text" };
+  if (!defaults[main.provider] || main.baseURL !== CONNECTION_DEFAULTS[main.provider].baseURL) {
+    log.warn("model", "No embeddingModel configured for this connection — recall and semantic segments disabled");
+    return null;
+  }
+  return { ...main, model: defaults[main.provider] };
+}
+
+function apiKey(ref: ResolvedModel): string | undefined {
+  if (ref.auth === "none") return undefined;
+  const key = ref.apiKeyEnv && process.env[ref.apiKeyEnv];
+  if (!key) throw new Error(`${ref.provider}: ${ref.apiKeyEnv ?? "apiKeyEnv"} is not set`);
+  return key;
+}
+
+function compatibleClient(ref: ResolvedModel) {
+  return createOpenAICompatible({ name: "openai", baseURL: ref.baseURL, apiKey: apiKey(ref), headers: ref.provider === "openrouter" ? OPENROUTER_HEADERS : undefined });
+}
+
+export function createResolvedModel(ref: ResolvedModel, audio = false): LanguageModel {
+  const key = apiKey(ref);
+  if (ref.provider === "anthropic") {
+    if (!key) throw new Error("Anthropic requires authentication");
+    return createAnthropic({ baseURL: ref.baseURL, apiKey: key })(ref.model);
+  }
+  if (ref.provider === "openrouter" && (audio || ref.model.startsWith("anthropic/"))) {
+    if (!key) throw new Error("OpenRouter requires authentication");
+    return createOpenRouter({ baseURL: ref.baseURL, apiKey: key, headers: OPENROUTER_HEADERS }).chat(ref.model);
+  }
+  if (ref.api === "responses") {
+    // Native OpenAI Responses supports unauthenticated compatible endpoints too.
+    const fetchWithoutAuth: typeof fetch = async (input, init) => {
+      const headers = new Headers(init?.headers);
+      headers.delete("authorization");
+      return fetch(input, { ...init, headers });
+    };
+    return createOpenAI({ baseURL: ref.baseURL, apiKey: key ?? "unused", ...(ref.auth === "none" ? { fetch: fetchWithoutAuth } : {}) }).responses(ref.model);
+  }
+  if (ref.provider === "openai" && ref.baseURL === CONNECTION_DEFAULTS.openai.baseURL && key) {
+    return createOpenAI({ baseURL: ref.baseURL, apiKey: key }).chat(ref.model);
+  }
+  return compatibleClient(ref).chatModel(ref.model);
+}
+
+export function createModel(config: KernConfig, ref: ModelRef = config.model): LanguageModel {
+  return createResolvedModel(resolveModel(config, ref));
+}
+
+export function createSummaryModel(config: KernConfig): LanguageModel {
+  return createResolvedModel(resolveSummaryModel(config));
+}
+
 export function createEmbeddingModel(config: KernConfig): Parameters<typeof embed>[0]["model"] | null {
-  const client = createOpenAIClient(config.provider);
-  if (!client) return null;
+  const ref = resolveEmbeddingModel(config);
+  if (!ref) return null;
+  const model = compatibleClient(ref).embeddingModel(ref.model);
+  if (ref.dimensions === undefined) return model;
+  return wrapEmbeddingModel({
+    model,
+    middleware: {
+      specificationVersion: "v3",
+      transformParams: async ({ params }) => ({ ...params, providerOptions: { ...params.providerOptions, openai: { ...params.providerOptions?.openai, dimensions: ref.dimensions! } } }),
+    },
+  });
+}
 
-  switch (config.provider) {
-    case "openai":
-      return client.embeddingModel("text-embedding-3-small");
-    case "anthropic":
-      return client.embeddingModel("openai/text-embedding-3-small");
-    case "openrouter":
-      return client.embeddingModel("openai/text-embedding-3-small");
-    case "ollama":
-      return client.embeddingModel("nomic-embed-text");
-    default:
-      return client.embeddingModel("openai/text-embedding-3-small");
+/** Keys/auth do not define a vector space. Endpoint, model, and dimensions do. */
+export function embeddingFingerprint(ref: ResolvedModel, dimensions: number): string {
+  return createHash("sha256").update(JSON.stringify({ provider: ref.provider, baseURL: ref.baseURL, model: ref.model, dimensions, requestedDimensions: ref.dimensions ?? null })).digest("hex");
+}
+
+/** Same-provider fallbacks only; an explicit override is authoritative. */
+export function modelChain(config: KernConfig, override: ModelRef, defaults: Record<string, string>): ResolvedModel[] {
+  if (override) return [resolveModel(config, override)];
+  const main = resolveModel(config);
+  const fallback = main.baseURL === CONNECTION_DEFAULTS[main.provider].baseURL ? defaults[main.provider] : undefined;
+  return fallback && fallback !== main.model ? [main, { ...main, model: fallback }] : [main];
+}
+
+export function createAudioModel(ref: ResolvedModel): LanguageModel {
+  // OpenAI audio input uses Chat Completions, even when text chat uses Responses.
+  return createResolvedModel(ref.provider === "openai" ? { ...ref, api: "chat" } : ref, true);
+}
+
+export function logModelRoutes(config: KernConfig): void {
+  const routes: [string, ResolvedModel | null][] = [
+    ["chat", resolveModel(config)], ["summary", resolveSummaryModel(config)], ["embedding", resolveEmbeddingModel(config)],
+    ["subagent", resolveModel(config, config.subAgentModel || config.model)],
+    ["vision", resolveModel(config, config.mediaModel || config.model)], ["audio", resolveModel(config, config.audioModel || config.model)],
+  ];
+  for (const [role, ref] of routes) {
+    log("model", ref ? `${role}: ${ref.provider} / ${ref.model} @ ${ref.baseURL} (auth: ${ref.auth === "none" ? "none" : ref.apiKeyEnv}, api: ${ref.api ?? "native"})` : `${role}: disabled`);
   }
 }
 
-/**
- * Create a cheap chat model for segment summarization.
- * Returns null if no suitable provider/key is available.
- *
- * Summary calls always go through an OpenAI-compatible client. Routing:
- * - openai → OpenAI
- * - ollama → local Ollama (OpenAI-compat endpoint)
- * - anthropic / openrouter / anything else → OpenRouter
- *
- * That means for `provider: "anthropic"` the summary route is OpenRouter,
- * not the native Anthropic SDK — so `summaryModel` on Anthropic agents
- * needs an OpenRouter-style ID (e.g. `anthropic/claude-haiku-4.5`).
- *
- * Model selection:
- * - If `config.summaryModel` is set, use it. For ollama/openai agents, a
- *   namespaced ID (contains `/`, e.g. `openai/gpt-6-luna`) is routed via
- *   OpenRouter when OPENROUTER_API_KEY is set — the agent's own provider
- *   can't serve those IDs. Ollama `hf.co/...` IDs stay local.
- * - Otherwise, use a provider-specific default:
- *   - openai: gpt-6-luna
- *   - anthropic: anthropic/claude-haiku-5 (via OpenRouter)
- *   - openrouter: google/gemini-3.5-flash-lite
- *   - ollama: reuses the agent's chat model (avoids forcing users to pull
- *     a separate model just for summaries)
- *
- * Useful for separating a thinking chat model from a non-thinking summary
- * model — thinking models burn the output budget on reasoning tokens and
- * return empty summaries.
- */
-/**
- * True when an explicit `summaryModel` should be routed through OpenRouter
- * instead of the agent's own provider client. Applies to ollama/openai
- * agents whose provider can't serve an OpenRouter-style namespaced ID
- * (e.g. `openai/gpt-4.1-mini`). Requires OPENROUTER_API_KEY. Ollama's own
- * namespaced IDs (`hf.co/...`) are excluded and stay local.
- */
-export function summaryViaOpenRouter(config: KernConfig): boolean {
-  if (!config.summaryModel) return false;
-  if (config.provider !== "ollama" && config.provider !== "openai") return false;
-  if (!process.env.OPENROUTER_API_KEY) return false;
-  const id = config.summaryModel;
-  if (id.startsWith("hf.co/") || id.startsWith("huggingface.co/")) return false;
-  return id.includes("/");
-}
-
-export function createSummaryModel(config: KernConfig): LanguageModel | null {
-  if (summaryViaOpenRouter(config)) {
-    const orClient = createOpenAIClient("openrouter");
-    if (orClient) return orClient.chat(config.summaryModel);
-  }
-
-  const client = createOpenAIClient(config.provider);
-  if (!client) return null;
-
-  if (config.summaryModel) {
-    // Namespaced ID on ollama/openai without an OpenRouter key: the agent's
-    // own provider can't serve it — warn instead of failing silently in the
-    // background summarization loop.
-    if (
-      (config.provider === "ollama" || config.provider === "openai") &&
-      config.summaryModel.includes("/") &&
-      !config.summaryModel.startsWith("hf.co/") &&
-      !config.summaryModel.startsWith("huggingface.co/") &&
-      !process.env.OPENROUTER_API_KEY
-    ) {
-      log.warn(
-        "model",
-        `summaryModel "${config.summaryModel}" looks like an OpenRouter ID but OPENROUTER_API_KEY is not set — routing to ${config.provider}, which will likely fail`
-      );
-    }
-    return client.chat(config.summaryModel);
-  }
-
-  switch (config.provider) {
-    case "openai":
-      return client.chat("gpt-6-luna");
-    case "anthropic":
-      return client.chat("anthropic/claude-haiku-5");
-    case "openrouter":
-      return client.chat("google/gemini-3.5-flash-lite");
-    case "ollama":
-      return client.chat(config.model);
-    default:
-      return client.chat("google/gemini-3.5-flash-lite");
-  }
-}
-
-/**
- * A single entry in the audio model fallback chain.
- * `viaOpenRouter` routes the call through the OpenRouter-native provider
- * regardless of the agent's own provider — used both for openrouter agents
- * (the generic OpenAI-compatible shim only maps `audio/wav` and `audio/mpeg`
- * file parts to `input_audio` and rejects ogg/opus, the Telegram voice
- * format) and as a cross-provider fallback for agents whose provider has no
- * audio-capable models at all (anthropic, ollama).
- */
-export interface AudioModelRef {
-  modelId: string;
-  viaOpenRouter: boolean;
-}
-
-/**
- * Create a model instance for audio input (transcription / analysis).
- * See {@link AudioModelRef} for why routing is explicit per entry.
- */
-export function createAudioModel(config: KernConfig, ref: AudioModelRef): LanguageModel {
-  if (ref.viaOpenRouter) {
-    const openrouter = createOpenRouter({
-      apiKey: process.env.OPENROUTER_API_KEY,
-      headers: OPENROUTER_HEADERS,
-    });
-    return openrouter.chat(ref.modelId);
-  }
-  return createModel({ ...config, model: ref.modelId });
-}
-
-/**
- * Create an AI SDK model instance from kern config.
- * Shared across runtime (chat) and notes (summary generation).
- */
-export function createModel(config: KernConfig): LanguageModel {
-  switch (config.provider) {
-    case "anthropic": {
-      const anthropic = createAnthropic();
-      return anthropic(config.model);
-    }
-    case "openrouter": {
-      // Use OpenRouter-native provider for Anthropic models (prompt caching support),
-      // generic OpenAI-compatible provider for everything else (more reliable streaming)
-      if (config.model.startsWith("anthropic/")) {
-        const openrouter = createOpenRouter({
-          apiKey: process.env.OPENROUTER_API_KEY,
-          headers: OPENROUTER_HEADERS,
-        });
-        return openrouter.chat(config.model);
-      }
-      const openai = createOpenAI({
-        baseURL: "https://openrouter.ai/api/v1",
-        apiKey: process.env.OPENROUTER_API_KEY,
-        headers: OPENROUTER_HEADERS,
-      });
-      // Force chat completions API — default openai() uses Responses API
-      // for newer models (gpt-5.x, o3, etc.) which OpenRouter doesn't support
-      return openai.chat(config.model);
-    }
-    case "openai": {
-      const baseURL = openaiBaseURL();
-      const openai = createOpenAI({ baseURL });
-      // Custom OpenAI-compatible endpoints (Azure, LiteLLM, local proxies)
-      // typically only support the Chat Completions API, not the Responses API
-      // that the default openai() factory picks for newer models
-      if (baseURL) return openai.chat(config.model);
-      return openai(config.model);
-    }
-    case "ollama": {
-      const base = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/+$/, "");
-      const ollama = createOpenAI({
-        baseURL: `${base}/v1`,
-        apiKey: "ollama", // required by SDK but ignored by Ollama
-      });
-      return ollama.chat(config.model);
-    }
-    default:
-      throw new Error(`Unknown provider: ${config.provider}`);
-  }
+export function isEmbeddingInputTooLong(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /maximum context length|context[_ ]length[_ ]exceeded|input.{0,30}(too long|length exceeded)|too many tokens|exceeds?.{0,30}(token|context|input).{0,15}(limit|length)|token limit/i.test(message);
 }

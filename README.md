@@ -214,10 +214,11 @@ Plugins add their own tools on top: recall, spawn and subagents, render, MCP ser
 |----------|-------------|
 | **openrouter** | Any model via OpenRouter (default) |
 | **anthropic** | Direct Anthropic API |
-| **openai** | OpenAI, Azure, or any OpenAI-compatible endpoint via `OPENAI_BASE_URL` |
+| **openai** | Native OpenAI; optional explicit `baseURL` / API selection |
+| **openai-compatible** | Local servers or gateways with explicit `baseURL` and optional authentication |
 | **ollama** | Local models via [Ollama](https://ollama.com) |
 
-Set `model` for chat. `summaryModel`, `subAgentModel`, and `mediaModel` can point cheaper models at background work. See [docs/config.md](docs/config.md).
+Set `model` for chat. `embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, and `audioModel` accept a model ID on the main connection or an object with its own provider, endpoint, and credential variable. See [docs/config.md](docs/config.md).
 
 ## Documentation
 

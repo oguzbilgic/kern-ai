@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { log } from "../../log.js";
 import { runSubAgent, writeRecord, loadRecord, type RunOptions } from "./worker.js";
+import { resolveModel } from "../../model.js";
 import type { KernConfig } from "../../config.js";
 import type { TurnOrigin } from "../types.js";
 
@@ -78,11 +79,11 @@ export class SubAgentRegistry {
   spawn(prompt: string, opts: SpawnOptions): SubAgentHandle {
     const id = "sa_" + randomUUID().slice(0, 8);
     // Model resolution: per-spawn override > subAgentModel config > parent model
-    const effectiveModel = opts.model || this.config.subAgentModel || this.config.model;
+    const effectiveModel = resolveModel(this.config, opts.model || this.config.subAgentModel || this.config.model);
     const record: SubAgentRecord = {
       id,
       prompt,
-      model: effectiveModel,
+      model: effectiveModel.model,
       status: "running",
       startedAt: new Date().toISOString(),
       toolCalls: 0,
@@ -96,7 +97,7 @@ export class SubAgentRegistry {
     const promise = this.runner({
       id,
       prompt,
-      config: { ...this.config, model: effectiveModel },
+      config: { ...this.config, ...effectiveModel, auth: effectiveModel.auth, apiKeyEnv: effectiveModel.apiKeyEnv },
       agentDir: this.agentDir,
       maxSteps: Math.min(opts.maxSteps ?? 20, 50),
       signal: controller.signal,

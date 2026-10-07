@@ -24,17 +24,18 @@ Create a new agent or reconfigure an existing one.
 - **New agent**: interactive wizard asks for name, provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, and starts the agent.
 - **Existing agent**: if the directory already has `.kern/`, shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
-- **Non-interactive mode**: pass `--api-key` to skip prompts. For automation and CI. The agent name is the directory's basename.
+- **Non-interactive mode**: pass configuration flags to skip prompts. For automation and CI. The agent name is the directory's basename.
 
 ```bash
 kern init my-agent/ --api-key sk-or-...
 kern init my-agent/ --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
 kern init my-agent/ --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
-kern init my-agent/ --provider ollama --api-key http://localhost:11434 --model gemma4:31b
+kern init my-agent/ --provider ollama --base-url http://localhost:11434/v1 --model gemma4:31b --embedding-model nomic-embed-text
+kern init local/ --provider openai-compatible --base-url http://localhost:1234/v1 --model org/chat --embedding-model org/embed
 kern init . --api-key sk-or-...          # adopt the current directory
 ```
 
-Defaults to `openrouter` + `google/gemini-3.8-flash` when flags are used. For Ollama, `--api-key` is the server URL.
+Defaults to `openrouter` + `google/gemini-3.8-flash` when flags are used. `--base-url` is the full API root, including `/v1`. `--api-key` is an optional authentication secret, including for local servers; `--api-key-env` chooses the variable holding it. `--embedding-model`, `--summary-model`, and `--api chat|responses` configure secondary IDs and the chat API. `--embedding-model off` disables embeddings. Cross-provider secondary overrides are configured as objects in JSON.
 
 ---
 
@@ -98,7 +99,7 @@ Environment variables used during scaffold:
 - `KERN_NAME` — agent name (default: directory basename)
 - `KERN_MODEL` — model identifier (default: `google/gemini-3.8-flash`)
 - `KERN_PROVIDER` — provider name (default: `openrouter`)
-- `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_BASE_URL` — written to `.kern/.env`
+- `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_API_KEY` / `LOCAL_MODEL_API_KEY` — written to `.kern/.env`
 - `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` — written to `.kern/.env` if set
 
 ### Ports

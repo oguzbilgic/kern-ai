@@ -193,7 +193,7 @@ audio({ file: "meeting.mp3", prompt: "Summarize the key decisions" })
 - `file` — path to audio file, or filename from `.kern/media/`
 - `prompt` — question about the audio (default: transcribe verbatim)
 
-Most chat models can't hear audio, so the tool uses a fallback chain: `audioModel` config → agent model → provider default (`google/gemini-3.8-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.8-flash` routed via OpenRouter for any provider when `OPENROUTER_API_KEY` is set. Gemini models accept ogg/opus natively, so Telegram voice notes need no transcoding. The OpenAI default only handles wav/mp3 — ogg voice notes on non-OpenRouter providers use the cross-provider OpenRouter fallback. Set `audioModel` explicitly to skip the doomed attempt on a text-only chat model. Files over 20 MB are rejected.
+Most chat models cannot hear audio. An explicit `audioModel` string or object is authoritative; otherwise Kern tries the main model and a same-provider default. Cross-provider audio requires an object such as `{ "provider": "openrouter", "model": "google/gemini-3.8-flash" }`. An available key never enables fallback to another provider. Gemini accepts ogg/opus natively; hosted OpenAI defaults handle wav/mp3. Files over 20 MB are rejected.
 
 ## spawn
 

@@ -46,7 +46,7 @@ export const imageTool = tool({
 
       const agentDir = process.cwd();
       const config = await loadConfig(agentDir);
-      const model = createModel(config);
+      const model = createModel(config, config.mediaModel || config.model);
 
       const result = await generateText({
         model,
