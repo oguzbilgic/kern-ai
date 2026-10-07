@@ -135,7 +135,7 @@ Put `OPENROUTER_API_KEY` in `.kern/.env`. Its presence alone never enables cloud
 
 For embeddings, an object may also include `dimensions`, a positive integer requested from models that support it. Kern validates the actual output size. Models that do not support this option should omit it.
 
-Startup logs resolved model routes and probes the embedding endpoint with one real request (10-second timeout, no automatic retries). Failed probes preserve existing vectors and metadata, disable embedding work for that process, and log the actual failure. Fix the endpoint and restart to resume.
+Startup logs resolved model routes and probes the embedding endpoint with one real request (60-second timeout, no automatic retries). Failed probes preserve existing vectors and metadata, disable embedding work for that process, and log the actual failure. Fix the endpoint and restart to resume.
 
 The vector index records the model, requested dimensions, and actual output dimensions as a fingerprint; moving the same model to another endpoint keeps existing vectors. A successful probe for a changed fingerprint rebuilds vectors, including existing chunks from inactive sessions, while preserving messages, chunk text, segment boundaries, summaries, and recall/segment cursors. Backfill restores existing vectors; subsequent indexing embeds only new history. Credential rotation or an endpoint change alone does not rebuild memory. Legacy databases without a fingerprint adopt it when their dimensions match the probed model; upgrading alone never re-embeds. No database deletion is needed when changing models.
 

@@ -22,7 +22,7 @@ Create a new agent or reconfigure an existing one.
 
 - **Target**: `path` defaults to the current directory. A bare name such as `kern init my-agent/` scaffolds into `./my-agent/`; the trailing slash is optional but makes it clear it is a folder.
 - **New agent**: interactive wizard asks for name, provider, API key, model, Telegram/Slack tokens. Scaffolds agent-kernel files (`AGENTS.md`, `IDENTITY.md`, `KNOWLEDGE.md`, `USERS.md`), creates `.kern/` config, initializes git, and starts the agent.
-- **Existing agent**: if the directory already has `.kern/`, shows current config with masked secrets. Update any field — press enter to keep current value. Restarts automatically after changes.
+- **Existing agent**: if the directory already has `.kern/`, runs a pending file migration first (the agent must be stopped for that), then walks through provider, endpoint, API key, model, embeddings, and tokens with the current values as defaults. Press enter to keep an existing secret. Other config fields and `.env` entries are preserved. Restarts automatically after changes.
 - **Adopting an existing repo**: if the directory exists but has no `.kern/`, creates only `.kern/` config without overwriting existing `AGENTS.md`, `IDENTITY.md`, etc.
 - **Non-interactive mode**: pass configuration flags to skip prompts. For automation and CI. The agent name is the directory's basename.
 

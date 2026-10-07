@@ -290,7 +290,7 @@ Returns raw messages for a specific range — use after search to get full conte
 
 On startup, kern indexes the current session's messages into a local sqlite-vec database (`.kern/recall.db`). Indexing runs in the background — the agent is available immediately while the index builds. Raw messages are stored in sqlite alongside embedded chunks, so retrieval doesn't need to read session files.
 
-Messages are chunked by turn (user→assistant pairs), embedded via `text-embedding-3-small`, and stored as vectors. After each turn, new messages are incrementally indexed — only new lines are parsed.
+Messages are chunked by turn (user→assistant pairs), embedded with the configured `embeddingModel` (see [Configuration](config.md#connections-and-model-references)), and stored as vectors. After each turn, new messages are incrementally indexed — only new lines are parsed.
 
 Search uses cosine similarity (KNN) to find the most relevant past conversation chunks.
 
@@ -298,7 +298,7 @@ Check indexing status via `kern({ action: "status" })` — the `recall` field sh
 
 ### Requirements
 
-Requires an API key for the configured provider (used for embeddings). Uses `text-embedding-3-small` (1536 dimensions).
+Requires a working embedding connection: the provider default (`text-embedding-3-small` on OpenAI and OpenRouter, `nomic-embed-text` on a local Ollama) or an explicit `embeddingModel`. Anthropic and custom endpoints have no default. Startup probes the model once; if the probe fails, recall is disabled for that run and existing vectors are kept. Set `embeddingModel: false` to turn recall off without a warning.
 
 ### Auto-recall
 
