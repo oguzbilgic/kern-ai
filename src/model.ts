@@ -138,6 +138,15 @@ function apiKey(ref: ResolvedModel): string | undefined {
   return key;
 }
 
+/** The official client infers capabilities from model IDs and validates provider options against OpenAI's schema, so it serves api.openai.com only. */
+function isHostedOpenAI(ref: ResolvedModel): boolean {
+  return ref.provider === "openai" && ref.baseURL === CONNECTION_DEFAULTS.openai.baseURL;
+}
+
+function officialClient(ref: ResolvedModel) {
+  return createOpenAI({ baseURL: ref.baseURL, apiKey: apiKey(ref) });
+}
+
 function compatibleClient(ref: ResolvedModel) {
   return createOpenAICompatible({ name: "openai", baseURL: ref.baseURL, apiKey: apiKey(ref), headers: ref.provider === "openrouter" ? OPENROUTER_HEADERS : undefined });
 }
@@ -153,7 +162,7 @@ export function createResolvedModel(ref: ResolvedModel, audio = false): Language
     return createOpenRouter({ baseURL: ref.baseURL, apiKey: key, headers: OPENROUTER_HEADERS }).chat(ref.model);
   }
   if (ref.api === "responses") {
-    // Native OpenAI Responses supports unauthenticated compatible endpoints too.
+    // The compatible client has no Responses API; the official one serves it for any endpoint.
     const fetchWithoutAuth: typeof fetch = async (input, init) => {
       const headers = new Headers(init?.headers);
       headers.delete("authorization");
@@ -161,9 +170,7 @@ export function createResolvedModel(ref: ResolvedModel, audio = false): Language
     };
     return createOpenAI({ baseURL: ref.baseURL, apiKey: key ?? "unused", ...(ref.auth === "none" ? { fetch: fetchWithoutAuth } : {}) }).responses(ref.model);
   }
-  if (ref.provider === "openai" && ref.baseURL === CONNECTION_DEFAULTS.openai.baseURL && key) {
-    return createOpenAI({ baseURL: ref.baseURL, apiKey: key }).chat(ref.model);
-  }
+  if (isHostedOpenAI(ref)) return officialClient(ref).chat(ref.model);
   return compatibleClient(ref).chatModel(ref.model);
 }
 
@@ -178,7 +185,7 @@ export function createSummaryModel(config: KernConfig): LanguageModel {
 export function createEmbeddingModel(config: KernConfig): Parameters<typeof embed>[0]["model"] | null {
   const ref = resolveEmbeddingModel(config);
   if (!ref) return null;
-  const model = compatibleClient(ref).embeddingModel(ref.model);
+  const model = (isHostedOpenAI(ref) ? officialClient(ref) : compatibleClient(ref)).embeddingModel(ref.model);
   if (ref.dimensions === undefined) return model;
   return wrapEmbeddingModel({
     model,
