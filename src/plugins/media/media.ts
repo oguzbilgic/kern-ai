@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, sta
 import { join, extname } from "path";
 import { generateText, type ModelMessage, type UserContent } from "ai";
 import { log } from "../../log.js";
-import { createModel, createAudioModel, type AudioModelRef } from "../../model.js";
+import { createResolvedModel, createAudioModel, modelChain, type ResolvedModel } from "../../model.js";
 import type { KernConfig } from "../../config.js";
 import type { MemoryDB } from "../../memory.js";
 import { getAudioModelChain, MAX_AUDIO_BYTES } from "../../tools/audio.js";
@@ -226,19 +226,8 @@ const VISION_FALLBACKS: Record<string, string> = {
   openrouter: "google/gemini-3.8-flash",
 };
 
-/**
- * Build the model fallback chain for media digest.
- * Order: mediaModel (if set) → agent model → hardcoded provider fallback.
- * Deduplicates entries.
- */
-function getDigestModelChain(config: KernConfig): string[] {
-  const chain: string[] = [];
-  if (config.mediaModel) chain.push(config.mediaModel);
-  chain.push(config.model);
-  const fallback = VISION_FALLBACKS[config.provider];
-  if (fallback) chain.push(fallback);
-  // Deduplicate while preserving order
-  return [...new Set(chain)];
+function getDigestModelChain(config: KernConfig): ResolvedModel[] {
+  return modelChain(config, config.mediaModel, VISION_FALLBACKS);
 }
 
 /**
@@ -286,9 +275,8 @@ export async function digestMediaAtIngest(
     log.warn("media", `cannot read ${file} for digest: ${err}`);
     return null;
   }
-  // Audio chain entries carry explicit routing (AudioModelRef); the image
-  // chain is plain model IDs on the agent's own provider.
-  const chain: (string | AudioModelRef)[] = isAudio
+  // Both chains carry the complete resolved connection.
+  const chain: ResolvedModel[] = isAudio
     ? getAudioModelChain(config)
     : getDigestModelChain(config);
   const contentPart = isAudio
@@ -301,15 +289,12 @@ export async function digestMediaAtIngest(
 
   // Ollama thinking models blow the 300-token budget on reasoning before
   // emitting any description. Disable thinking defensively.
-  const isOllama = config.provider === "ollama";
-
   for (const entry of chain) {
-    const modelId = typeof entry === "string" ? entry : entry.modelId;
+    const modelId = entry.model;
+    const isOllama = entry.provider === "ollama";
     try {
       log("media", `digesting ${file} with ${modelId}...`);
-      const digestModel = typeof entry === "string"
-        ? createModel({ ...config, model: modelId })
-        : createAudioModel(config, entry);
+      const digestModel = isAudio ? createAudioModel(entry) : createResolvedModel(entry);
 
       const result = await generateText({
         model: digestModel,
@@ -331,7 +316,7 @@ export async function digestMediaAtIngest(
       }
     } catch (err) {
       log.warn("media", `digest failed with ${modelId}: ${err}`);
-      if (modelId !== chain[chain.length - 1]) {
+      if (entry !== chain[chain.length - 1]) {
         log("media", `falling back to next model...`);
       }
     }

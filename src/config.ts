@@ -3,14 +3,37 @@ import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { config as loadDotenv } from "dotenv";
 import { log } from "./log.js";
+import { validateModelRoutes } from "./model.js";
 
 export type ToolScope = "full" | "write" | "read";
 
-export interface KernConfig {
+export const PROVIDER_IDS = ["openrouter", "anthropic", "openai", "ollama", "openai-compatible"] as const;
+export type ProviderId = typeof PROVIDER_IDS[number];
+
+/** API root (including /v1 when required); credentials stay in .env. */
+export interface ModelConnection {
+  provider: string;
+  baseURL?: string;
+  apiKeyEnv?: string;
+  auth?: "none";
+  api?: "chat" | "responses";
+}
+
+export interface ModelSpec extends Partial<ModelConnection> {
+  model: string;
+  /** Requested output size, only valid for embeddingModel. */
+  dimensions?: number;
+}
+
+/** A bare ID inherits the main connection. An object can override it. */
+export type ModelRef = string | ModelSpec;
+
+export interface KernConfig extends ModelConnection {
+  /** Package version of the last successful file migration. */
+  version?: string;
   // Core
   name: string;
   model: string;
-  provider: string;
   toolScope: ToolScope;
   maxSteps: number;
   port: number;
@@ -19,19 +42,20 @@ export interface KernConfig {
   maxContextTokens: number;
   maxToolResultChars: number;
   summaryBudget: number;
-  summaryModel: string;
+  summaryModel: ModelRef;
 
   // Sub-agents
-  subAgentModel: string;
+  subAgentModel: ModelRef;
 
   // Memory
+  embeddingModel: ModelRef | false;
   recall: boolean;
   autoRecall: boolean;
 
   // Media
   mediaDigest: boolean;
-  mediaModel: string;
-  audioModel: string;
+  mediaModel: ModelRef;
+  audioModel: ModelRef;
   mediaContext: number;
 
   // Interface
@@ -92,6 +116,7 @@ export const configDefaults: KernConfig = {
   summaryBudget: 0.75,
   summaryModel: "",
   subAgentModel: "",
+  embeddingModel: "",
   recall: true,
   autoRecall: false,
   mediaDigest: true,
@@ -108,22 +133,28 @@ export const configDefaults: KernConfig = {
 };
 
 const FIELD_TYPES: Record<string, string> = {
+  version: "string",
   name: "string",
   model: "string",
   provider: "string",
+  baseURL: "string",
+  apiKeyEnv: "string",
+  auth: "string",
+  api: "string",
+  embeddingModel: "embedding-ref",
   toolScope: "string",
   maxSteps: "number",
   port: "number",
   maxContextTokens: "number",
   maxToolResultChars: "number",
   summaryBudget: "number",
-  summaryModel: "string",
-  subAgentModel: "string",
+  summaryModel: "model-ref",
+  subAgentModel: "model-ref",
   recall: "boolean",
   autoRecall: "boolean",
   mediaDigest: "boolean",
-  mediaModel: "string",
-  audioModel: "string",
+  mediaModel: "model-ref",
+  audioModel: "model-ref",
   mediaContext: "number",
   telegramTools: "boolean",
   discordMentionOnly: "boolean",
@@ -140,6 +171,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 function typeMatches(value: unknown, expected: string): boolean {
+  if (expected === "model-ref" || expected === "embedding-ref") {
+    return typeof value === "string" || isPlainObject(value) || (expected === "embedding-ref" && value === false);
+  }
   if (expected === "object") return isPlainObject(value);
   if (expected === "string[]") return Array.isArray(value) && value.every((v) => typeof v === "string");
   return typeof value === expected;
@@ -167,36 +201,81 @@ export function getToolsForScope(scope: ToolScope): string[] {
   return TOOL_SCOPES[scope] || TOOL_SCOPES.full;
 }
 
-export async function loadConfig(agentDir: string): Promise<KernConfig> {
-  // Load .kern/.env
-  const envPath = join(agentDir, ".kern", ".env");
-  if (existsSync(envPath)) {
-    loadDotenv({ path: envPath, override: true, quiet: true });
-  }
-
-  // Load .kern/config.json
-  const configPath = join(agentDir, ".kern", "config.json");
-  if (!existsSync(configPath)) {
-    return configDefaults;
-  }
-
-  try {
-    const raw = await readFile(configPath, "utf-8");
-    const userConfig = JSON.parse(raw);
-    validateConfig(userConfig);
-
-    // Filter out unknown and wrong-type fields
-    const cleaned: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(userConfig)) {
-      if (key in FIELD_TYPES && typeMatches(value, FIELD_TYPES[key])) {
-        cleaned[key] = value;
+/** Model configuration errors are fatal: never silently select a different route. */
+export function validateModelConfig(config: KernConfig): void {
+  const validateConnection = (value: Record<string, unknown>, label: string) => {
+    if (value.provider !== undefined && !PROVIDER_IDS.includes(value.provider as ProviderId)) {
+      throw new Error(`${label}.provider: unknown provider "${value.provider}"`);
+    }
+    for (const key of ["baseURL", "apiKeyEnv"]) {
+      if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
+        throw new Error(`${label}.${key}: expected a non-empty string`);
       }
     }
-
-    return applyEnvOverrides({ ...configDefaults, ...cleaned });
-  } catch {
-    return applyEnvOverrides(configDefaults);
+    if (value.baseURL !== undefined) {
+      const url = URL.parse(value.baseURL as string);
+      if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+        throw new Error(`${label}.baseURL: use an HTTP(S) API root without credentials, query, or fragment`);
+      }
+    }
+    if (value.apiKeyEnv !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.apiKeyEnv as string)) {
+      throw new Error(`${label}.apiKeyEnv: expected an environment variable name`);
+    }
+    if (value.auth !== undefined && value.auth !== "none") throw new Error(`${label}.auth: expected "none"`);
+    if (value.auth === "none" && value.apiKeyEnv !== undefined) throw new Error(`${label}: choose auth or apiKeyEnv, not both`);
+    if (value.api !== undefined && value.api !== "chat" && value.api !== "responses") {
+      throw new Error(`${label}.api: expected "chat" or "responses"`);
+    }
+  };
+  validateConnection(config as unknown as Record<string, unknown>, "model");
+  if (typeof config.model !== "string" || !config.model.trim()) throw new Error("model: expected a non-empty model ID");
+  for (const key of ["embeddingModel", "summaryModel", "subAgentModel", "mediaModel", "audioModel"] as const) {
+    const ref = config[key];
+    if (typeof ref === "string" || (key === "embeddingModel" && ref === false)) continue;
+    if (!isPlainObject(ref)) throw new Error(`${key}: expected a model ID or model object`);
+    const allowed = ["model", "provider", "baseURL", "apiKeyEnv", "auth", "api", ...(key === "embeddingModel" ? ["dimensions"] : [])];
+    for (const field of Object.keys(ref)) {
+      if (!allowed.includes(field)) throw new Error(`${key}.${field}: unknown field`);
+    }
+    if (typeof ref.model !== "string" || !ref.model.trim()) throw new Error(`${key}.model: expected a non-empty model ID`);
+    validateConnection(ref, key);
+    if (ref.dimensions !== undefined && (!Number.isSafeInteger(ref.dimensions) || (ref.dimensions as number) <= 0)) {
+      throw new Error(`${key}.dimensions: expected a positive integer`);
+    }
   }
+}
+
+/** Parse stored configuration without loading environment overrides or writing files. */
+export function parseConfig(userConfig: unknown): KernConfig {
+  if (!isPlainObject(userConfig)) throw new Error("config.json must contain an object");
+  validateConfig(userConfig);
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(userConfig)) {
+    if (!(key in FIELD_TYPES)) continue;
+    if (typeMatches(value, FIELD_TYPES[key])) cleaned[key] = value;
+    else if (["model", "provider", "baseURL", "apiKeyEnv", "auth", "api", "embeddingModel", "summaryModel", "subAgentModel", "mediaModel", "audioModel"].includes(key)) {
+      throw new Error(`${key}: invalid model configuration`);
+    }
+  }
+  const config = { ...configDefaults, ...cleaned };
+  validateModelConfig(config);
+  return config;
+}
+
+export async function loadConfig(agentDir: string): Promise<KernConfig> {
+  const envPath = join(agentDir, ".kern", ".env");
+  if (existsSync(envPath)) loadDotenv({ path: envPath, override: true, quiet: true });
+  const configPath = join(agentDir, ".kern", "config.json");
+  const userConfig = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+  return resolveConfig(userConfig);
+}
+
+/** Shared by startup, setup, and migrations; does not mutate raw config or env. */
+export function resolveConfig(userConfig: unknown, env: NodeJS.ProcessEnv = process.env): KernConfig {
+  const config = applyEnvOverrides(parseConfig(userConfig), env);
+  validateModelConfig(config);
+  validateModelRoutes(config);
+  return config;
 }
 
 /**
@@ -208,11 +287,14 @@ const ENV_CONFIG_MAP: Record<string, { key: keyof KernConfig; type: "string" | "
   KERN_PORT:     { key: "port",     type: "number" },
   KERN_MODEL:    { key: "model",    type: "string" },
   KERN_PROVIDER: { key: "provider", type: "string" },
+  KERN_BASE_URL: { key: "baseURL", type: "string" },
+  KERN_EMBEDDING_MODEL: { key: "embeddingModel", type: "string" },
+  KERN_SUMMARY_MODEL: { key: "summaryModel", type: "string" },
 };
 
-function applyEnvOverrides(config: KernConfig): KernConfig {
+function applyEnvOverrides(config: KernConfig, env: NodeJS.ProcessEnv): KernConfig {
   for (const [envKey, { key, type }] of Object.entries(ENV_CONFIG_MAP)) {
-    const val = process.env[envKey];
+    const val = env[envKey];
     if (val === undefined) continue;
 
     if (type === "number") {
@@ -232,6 +314,13 @@ function applyEnvOverrides(config: KernConfig): KernConfig {
 /**
  * Write a single field into agent's .kern/config.json, preserving existing fields.
  */
+/** Known fields in their documented order (version and name first), then anything else as found. */
+export function serializeConfig(config: object): string {
+  const entries = Object.entries(config);
+  const rank = (key: string) => Object.keys(FIELD_TYPES).indexOf(key) >>> 0; // unknown keys sort last, keeping their order
+  return JSON.stringify(Object.fromEntries(entries.sort(([a], [b]) => rank(a) - rank(b))), null, 2) + "\n";
+}
+
 export async function saveConfigField(agentDir: string, key: string, value: unknown): Promise<void> {
   const configPath = join(agentDir, ".kern", "config.json");
   let config: Record<string, unknown> = {};
@@ -240,5 +329,5 @@ export async function saveConfigField(agentDir: string, key: string, value: unkn
     config = JSON.parse(raw);
   } catch {}
   config[key] = value;
-  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  await writeFile(configPath, serializeConfig(config), "utf-8");
 }

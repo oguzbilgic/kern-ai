@@ -3,10 +3,13 @@ import * as sqliteVec from "sqlite-vec";
 import { join } from "path";
 import { log } from "./log.js";
 import { embed } from "ai";
-import { createEmbeddingModel } from "./model.js";
+import { createEmbeddingModel, resolveEmbeddingModel, embeddingFingerprint } from "./model.js";
 import type { KernConfig } from "./config.js";
 
-const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
+export interface EmbeddingProfile {
+  dimensions: number;
+  fingerprint: string;
+}
 
 /**
  * Central database for agent memory.
@@ -15,13 +18,15 @@ const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
  */
 export class MemoryDB {
   public db: Database.Database;
-  private embeddingDimensions: number;
+  public readonly embeddingsReady: boolean;
+  private embeddingProfile: EmbeddingProfile | null;
 
-  constructor(agentDir: string, dimensions?: number) {
+  constructor(agentDir: string, profile: EmbeddingProfile | null = null) {
     const dbPath = join(agentDir, ".kern", "recall.db");
     this.db = new Database(dbPath);
     sqliteVec.load(this.db);
-    this.embeddingDimensions = dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+    this.embeddingProfile = profile;
+    this.embeddingsReady = profile !== null;
     this.initSchema();
   }
 
@@ -117,70 +122,46 @@ export class MemoryDB {
     this.initVecTables();
   }
 
-  /**
-   * Create or migrate vector tables. Detects dimension mismatch
-   * and rebuilds vector indexes + resets indexing state when
-   * the embedding model changes (e.g. OpenAI 1536 → Ollama 768).
-   */
+  /** Only a successful probe can create or replace vectors. Failed/offline startup is read-only here. */
   private initVecTables(): void {
-    const dims = this.embeddingDimensions;
-    const existingDims = this.getVecTableDimensions();
-
-    if (existingDims !== null && existingDims !== dims) {
-      log.warn("memory", `Embedding dimension changed (${existingDims} → ${dims}), rebuilding vector indexes...`);
-      this.db.exec("DROP TABLE IF EXISTS vec_chunks");
-      this.db.exec("DROP TABLE IF EXISTS vec_segments");
-      this.db.exec("DELETE FROM index_state");
-      // segment_state is deliberately kept (#364 A6). Segments and their summaries do
-      // not depend on the embedding model; resetting the cursor here re-segmented the
-      // whole session from message 0 and laid a second, shifted tiling next to the
-      // first one on every provider switch. vec_segments is rebuilt empty and refilled
-      // by new segments only — nothing reads it today.
-      log("memory", "Vector indexes dropped, chunk indexing state reset — backfill will run automatically");
-    }
-
-    // Create vec tables (virtual tables don't support IF NOT EXISTS)
-    try {
-      this.db.exec(`CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding FLOAT[${dims}])`);
-    } catch { /* already exists */ }
-
-    try {
-      this.db.exec(`CREATE VIRTUAL TABLE vec_segments USING vec0(embedding FLOAT[${dims}])`);
-    } catch { /* already exists */ }
+    this.db.exec("CREATE TABLE IF NOT EXISTS embedding_metadata (id INTEGER PRIMARY KEY CHECK(id = 1), fingerprint TEXT NOT NULL, dimensions INTEGER NOT NULL)");
+    if (!this.embeddingProfile) return;
+    const { dimensions, fingerprint } = this.embeddingProfile;
+    if (!Number.isSafeInteger(dimensions) || dimensions <= 0) throw new Error("Invalid embedding dimensions");
+    const previous = this.db.prepare("SELECT fingerprint FROM embedding_metadata WHERE id = 1").get() as { fingerprint: string } | undefined;
+    const existing = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_chunks'").get() as { sql: string } | undefined;
+    // A pre-fingerprint index is identified by its dimensions, as it always was; it adopts the fingerprint without a rebuild.
+    const sameModel = previous ? previous.fingerprint === fingerprint : existing?.sql.includes(`FLOAT[${dimensions}]`);
+    this.db.transaction(() => {
+      if (existing && !sameModel) {
+        log.warn("memory", "Embedding identity changed — rebuilding vectors, preserving messages and summary tree");
+        this.db.exec("DROP TABLE IF EXISTS vec_chunks; DROP TABLE IF EXISTS vec_segments;");
+        // Keep both cursors: backfill restores vectors, tail indexing handles new history.
+      }
+      if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'vec_chunks'").get()) {
+        this.db.exec(`CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding FLOAT[${dimensions}])`);
+      }
+      if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'vec_segments'").get()) {
+        this.db.exec(`CREATE VIRTUAL TABLE vec_segments USING vec0(embedding FLOAT[${dimensions}])`);
+      }
+      this.db.prepare("INSERT OR REPLACE INTO embedding_metadata (id, fingerprint, dimensions) VALUES (1, ?, ?)").run(fingerprint, dimensions);
+    })();
   }
 
-  /**
-   * Get the declared dimensions of the vec_chunks table, even if empty.
-   * Uses sqlite_master to check the table DDL for the dimension value.
-   */
-  private getVecTableDimensions(): number | null {
+  static async probeEmbeddingModel(config: KernConfig): Promise<EmbeddingProfile | null> {
+    const ref = resolveEmbeddingModel(config);
+    if (!ref) return null;
     try {
-      const row = this.db.prepare(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_chunks'"
-      ).get() as { sql: string } | undefined;
-      if (!row) return null;
-      const match = row.sql.match(/FLOAT\[(\d+)\]/);
-      return match ? parseInt(match[1], 10) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Probe the actual embedding model to detect its output dimensions.
-   * Returns the dimension count, or the default if probing fails.
-   */
-  static async detectEmbeddingDimensions(config: KernConfig): Promise<number> {
-    try {
-      const model = createEmbeddingModel(config);
-      if (!model) return DEFAULT_EMBEDDING_DIMENSIONS;
-      const result = await embed({ model, value: "dimension probe" });
-      const dims = result.embedding.length;
-      log.debug("memory", `Detected embedding dimensions: ${dims}`);
-      return dims;
+      const model = createEmbeddingModel(config)!;
+      const result = await embed({ model, value: "dimension probe", maxRetries: 0, abortSignal: AbortSignal.timeout(60_000) });
+      const dimensions = result.embedding.length;
+      if (!dimensions || !result.embedding.every(Number.isFinite)) throw new Error("Embedding endpoint returned an invalid vector");
+      if (ref.dimensions !== undefined && ref.dimensions !== dimensions) throw new Error(`Requested ${ref.dimensions} dimensions, received ${dimensions}`);
+      log("memory", `Embedding validated: ${ref.model} @ ${ref.baseURL}, ${dimensions} dimensions`);
+      return { dimensions, fingerprint: embeddingFingerprint(ref, dimensions) };
     } catch (err: any) {
-      log.warn("memory", `Failed to probe embedding dimensions: ${err.message}`);
-      return DEFAULT_EMBEDDING_DIMENSIONS;
+      log.warn("memory", `Embedding unavailable: ${ref.model} @ ${ref.baseURL}: ${err.message} — existing vectors preserved; restart after fixing the connection`);
+      return null;
     }
   }
 

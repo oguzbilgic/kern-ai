@@ -283,6 +283,9 @@ async function main() {
       const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
       await scaffoldAgent({
         name, dir: agentDir, provider, envVar, skipStart: true,
+        connection: process.env.KERN_BASE_URL ? { baseURL: process.env.KERN_BASE_URL, ...(process.env[envVar] ? { apiKeyEnv: envVar } : { auth: "none" }) } : undefined,
+        embeddingModel: process.env.KERN_EMBEDDING_MODEL,
+        summaryModel: process.env.KERN_SUMMARY_MODEL,
         model: process.env.KERN_MODEL || DEFAULT_PROVIDER_MODELS[provider] || "google/gemini-3.8-flash",
         apiKey: process.env[envVar] || "",
         telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",

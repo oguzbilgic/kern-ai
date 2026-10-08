@@ -1,83 +1,52 @@
-import { test, beforeEach, afterEach } from "node:test";
-import assert from "node:assert";
+import { test } from "node:test";
+import assert from "node:assert/strict";
 import { getAudioModelChain, AUDIO_FALLBACKS, AUDIO_EXT_TO_MIME } from "../src/tools/audio.js";
 import { configDefaults, type KernConfig } from "../src/config.js";
+const cfg = (overrides: Partial<KernConfig>): KernConfig => ({ ...configDefaults, ...overrides });
 
-function cfg(overrides: Partial<KernConfig>): KernConfig {
-  return { ...configDefaults, ...overrides };
-}
-
-let savedKey: string | undefined;
-beforeEach(() => {
-  savedKey = process.env.OPENROUTER_API_KEY;
-});
-afterEach(() => {
-  if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY;
-  else process.env.OPENROUTER_API_KEY = savedKey;
+test("audio defaults remain on the main provider", () => {
+  const chain = getAudioModelChain(cfg({ model: "anthropic/chat" }));
+  assert.deepEqual(chain.map(ref => [ref.provider, ref.model]), [["openrouter", "anthropic/chat"], ["openrouter", AUDIO_FALLBACKS.openrouter]]);
 });
 
-test("openrouter provider: audioModel → model → fallback, all via openrouter", () => {
-  const chain = getAudioModelChain(
-    cfg({ provider: "openrouter", model: "anthropic/claude-opus-5", audioModel: "google/gemini-3.8-flash" }),
-  );
-  assert.deepEqual(chain, [
-    { modelId: "google/gemini-3.8-flash", viaOpenRouter: true },
-    { modelId: "anthropic/claude-opus-5", viaOpenRouter: true },
-  ]);
+test("explicit cross-provider audio override is authoritative", () => {
+  const chain = getAudioModelChain(cfg({ provider: "anthropic", model: "claude", audioModel: { provider: "openrouter", model: "google/gemini-3.8-flash" } }));
+  assert.deepEqual(chain.map(ref => [ref.provider, ref.model]), [["openrouter", "google/gemini-3.8-flash"]]);
 });
 
-test("openrouter provider without audioModel appends fallback", () => {
-  const chain = getAudioModelChain(cfg({ provider: "openrouter", model: "anthropic/claude-opus-5" }));
-  assert.deepEqual(chain, [
-    { modelId: "anthropic/claude-opus-5", viaOpenRouter: true },
-    { modelId: AUDIO_FALLBACKS.openrouter, viaOpenRouter: true },
-  ]);
+test("an unrelated key never enables cloud fallback for local audio", t => {
+  const saved = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-key";
+  t.after(() => { if (saved === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = saved; });
+  const chain = getAudioModelChain(cfg({ provider: "ollama", model: "local" }));
+  assert.deepEqual(chain.map(ref => [ref.provider, ref.model]), [["ollama", "local"]]);
 });
 
-test("anthropic provider with OPENROUTER_API_KEY gets cross-provider fallback", () => {
-  process.env.OPENROUTER_API_KEY = "sk-test";
-  const chain = getAudioModelChain(cfg({ provider: "anthropic", model: "claude-opus-4-8" }));
-  assert.deepEqual(chain, [
-    { modelId: "claude-opus-4-8", viaOpenRouter: false },
-    { modelId: AUDIO_FALLBACKS.openrouter, viaOpenRouter: true },
-  ]);
+test("custom endpoints do not receive hosted audio fallback IDs", () => {
+  assert.deepEqual(getAudioModelChain(cfg({ provider: "openai", baseURL: "http://localhost:1234/v1", model: "local" })).map(ref => ref.model), ["local"]);
 });
 
-test("anthropic provider without OPENROUTER_API_KEY has no openrouter entry", () => {
-  delete process.env.OPENROUTER_API_KEY;
-  const chain = getAudioModelChain(cfg({ provider: "anthropic", model: "claude-opus-4-8" }));
-  assert.deepEqual(chain, [{ modelId: "claude-opus-4-8", viaOpenRouter: false }]);
+test("dedupes provider fallback identical to chat model", () => {
+  assert.equal(getAudioModelChain(cfg({ model: AUDIO_FALLBACKS.openrouter })).length, 1);
 });
 
-test("openai provider: own fallback via provider, then cross-provider openrouter", () => {
-  process.env.OPENROUTER_API_KEY = "sk-test";
-  const chain = getAudioModelChain(cfg({ provider: "openai", model: "gpt-5.5" }));
-  assert.deepEqual(chain, [
-    { modelId: "gpt-5.5", viaOpenRouter: false },
-    { modelId: AUDIO_FALLBACKS.openai, viaOpenRouter: false },
-    { modelId: AUDIO_FALLBACKS.openrouter, viaOpenRouter: true },
-  ]);
-});
-
-test("ollama provider with key: model via ollama, then openrouter fallback", () => {
-  process.env.OPENROUTER_API_KEY = "sk-test";
-  const chain = getAudioModelChain(cfg({ provider: "ollama", model: "qwen3.6:latest" }));
-  assert.deepEqual(chain, [
-    { modelId: "qwen3.6:latest", viaOpenRouter: false },
-    { modelId: AUDIO_FALLBACKS.openrouter, viaOpenRouter: true },
-  ]);
-});
-
-test("dedupes audioModel identical to chat model", () => {
-  const chain = getAudioModelChain(
-    cfg({ provider: "openrouter", model: "google/gemini-3.8-flash", audioModel: "google/gemini-3.8-flash" }),
-  );
-  assert.deepEqual(chain, [{ modelId: "google/gemini-3.8-flash", viaOpenRouter: true }]);
-});
-
-test("mime map covers telegram voice and common formats, not video", () => {
+test("mime map covers Telegram voice and common audio formats", () => {
   assert.equal(AUDIO_EXT_TO_MIME[".ogg"], "audio/ogg");
   assert.equal(AUDIO_EXT_TO_MIME[".opus"], "audio/opus");
   assert.equal(AUDIO_EXT_TO_MIME[".m4a"], "audio/mp4");
   assert.equal(AUDIO_EXT_TO_MIME[".mp4"], undefined);
+});
+
+test("hosted OpenAI audio uses Chat Completions when text chat defaults to Responses", async t => {
+  const { modelServer } = await import("./helpers/model-server.js");
+  const { createAudioModel } = await import("../src/model.js");
+  const { generateText } = await import("ai");
+  const server = await modelServer(t, undefined, "https://api.openai.com/v1");
+  process.env.KERN_TEST_OPENAI_KEY = "test-key";
+  t.after(() => { delete process.env.KERN_TEST_OPENAI_KEY; });
+  const chain = getAudioModelChain(cfg({ provider: "openai", apiKeyEnv: "KERN_TEST_OPENAI_KEY", model: "text-chat" }));
+  const result = await generateText({ model: createAudioModel(chain[1]), messages: [{ role: "user", content: [{ type: "file", data: new Uint8Array([1, 2]), mediaType: "audio/wav" }] }] });
+  assert.equal(result.text, "local response");
+  assert.equal(server.requests[0].path, "/v1/chat/completions");
+  assert.equal(server.requests[0].body.messages[0].content[0].type, "input_audio");
 });

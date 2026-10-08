@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { APICallError } from "ai";
 import assert from "node:assert/strict";
 import { capForEmbedding, EMBED_MAX_CHARS } from "../src/util.js";
 import { SegmentIndex } from "../src/segments.js";
@@ -94,7 +95,7 @@ const fakeModel = (limit: number, seen: string[] = []) => ({
   async doEmbed({ values }: { values: string[] }) {
     for (const v of values) {
       seen.push(v);
-      if (v.length > limit) throw new Error("maximum context length is 8192 tokens");
+      if (v.length > limit) throw new APICallError({ message: "input is too large to process", url: "http://local.test/v1/embeddings", requestBodyValues: {}, statusCode: 400 });
     }
     return { embeddings: values.map(() => [1, 0, 0]), usage: { tokens: 1 }, warnings: [] };
   },
@@ -126,5 +127,5 @@ test("embedTexts: shrinks a rejected window until the provider accepts it", asyn
 test("embedTexts: rethrows when shrinking can't be the problem", async () => {
   // A model that rejects everything: not a length issue, so failing the run
   // (and retrying later) beats advancing state past unindexed messages.
-  await assert.rejects(() => embedTexts(fakeModel(0), ["anything"]), /maximum context length/);
+  await assert.rejects(() => embedTexts(fakeModel(0), ["anything"]), /input is too large/);
 });

@@ -35,7 +35,7 @@ Outputs a 0–100 health score with itemized deductions (`lag`, `oversized_chunk
 
 ## kern scripts recall-repair
 
-Inspects and repairs recall index deficiencies (orphaned chunks lacking rows in `vec_chunks`, e.g. following an embedding dimension rebuild). Pure SQLite — zero LLM calls, zero API credentials needed. Dry-run by default. Zero-op if the index is already healthy (0 changes, 0 DB writes).
+Inspects and repairs recall index deficiencies (orphaned chunks lacking rows in `vec_chunks`, e.g. after an interrupted vector rebuild when the embedding model changed). Pure SQLite — zero LLM calls, zero API credentials needed. Dry-run by default. Zero-op if the index is already healthy (0 changes, 0 DB writes).
 
 ```bash
 kern scripts recall-repair .kern/recall.db                       # dry run: inspects chunks and vec_chunks, displays prune plan

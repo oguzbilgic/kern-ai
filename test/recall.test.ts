@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { RecallIndex } from "../src/plugins/recall/recall.js";
 import { EMBED_MAX_CHARS } from "../src/util.js";
-import type { ModelMessage } from "ai";
+import { APICallError, type ModelMessage } from "ai";
 
 // Fake embedding model that limits per-value length to simulate API 8192 token limit
 const fakeModel = (limit: number = 8000, seen: string[] = []) => ({
@@ -16,7 +16,7 @@ const fakeModel = (limit: number = 8000, seen: string[] = []) => ({
   async doEmbed({ values }: { values: string[] }) {
     for (const v of values) {
       seen.push(v);
-      if (v.length > limit) throw new Error("maximum context length is 8192 tokens");
+      if (v.length > limit) throw new APICallError({ message: "input is too large to process", url: "http://local.test/v1/embeddings", requestBodyValues: {}, statusCode: 400 });
     }
     return { embeddings: values.map(() => [0.1, 0.2, 0.3, 0.4]), usage: { tokens: 1 }, warnings: [] };
   },
@@ -200,3 +200,13 @@ test("indexSession serializes concurrent calls for the same session (#404)", asy
   assert.equal(instance.activeSessions.size, 0, "activeSessions map cleaned up");
 });
 
+
+test("authentication and missing-model errors never trigger input truncation", async () => {
+  for (const message of ["Invalid API key", "Model not found"]) {
+    let calls = 0;
+    const instance = Object.create(RecallIndex.prototype);
+    Object.assign(instance, { embeddingModel: { ...fakeModel(), async doEmbed() { calls++; throw new Error(message); } } });
+    await assert.rejects(instance.embedTexts(["a".repeat(4000)]), new RegExp(message));
+    assert.equal(calls, 1);
+  }
+});

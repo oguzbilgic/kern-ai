@@ -67,24 +67,26 @@ export const recallPlugin: KernPlugin = {
   })(),
 
   async onStartup(ctx) {
-    if (ctx.config.recall === false) return;
+    recallIndex = null;
+    building = false;
+    setRecallIndex(null);
+    if (!ctx.db.embeddingsReady) return;
 
     try {
       recallIndex = new RecallIndex(ctx.db, ctx.agentDir, ctx.config);
       setRecallIndex(recallIndex);
 
-      // Backfill in background
+      // Rebuild every stored chunk, including inactive sessions, before tail backfill.
       const sessionId = ctx.sessionId();
-      if (sessionId) {
-        building = true;
-        recallIndex.indexSession(sessionId).then((indexed) => {
-          building = false;
-          if (indexed > 0) log("recall", `backfilled ${indexed} chunks`);
-        }).catch((err) => {
-          building = false;
-          log.error("recall", `backfill failed: ${err.message}`);
-        });
-      }
+      building = true;
+      const index = recallIndex;
+      index.backfillVectors().then(() => sessionId ? index.indexSession(sessionId) : 0).then((indexed) => {
+        building = false;
+        if (indexed > 0) log("recall", `backfilled ${indexed} chunks`);
+      }).catch((err) => {
+        building = false;
+        log.error("recall", `backfill failed: ${err.message}`);
+      });
     } catch (err: any) {
       log.error("recall", `init failed: ${err.message} — recall disabled`);
       recallIndex = null;

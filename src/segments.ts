@@ -1,7 +1,7 @@
 import { embed, embedMany, generateText } from "ai";
 import { log } from "./log.js";
 import { extractText, capForEmbedding, EMBED_MAX_CHARS } from "./util.js";
-import { createEmbeddingModel, createSummaryModel, summaryViaOpenRouter } from "./model.js";
+import { createEmbeddingModel, createSummaryModel, resolveSummaryModel, isEmbeddingInputTooLong } from "./model.js";
 import type { KernConfig } from "./config.js";
 import type { MemoryDB } from "./memory.js";
 import type Database from "better-sqlite3";
@@ -346,7 +346,7 @@ export class SegmentIndex {
     this.summaryModel = sumModel;
 
     this.summaryProviderOptions =
-      config.provider === "ollama" && !summaryViaOpenRouter(config)
+      resolveSummaryModel(config).provider === "ollama"
         ? { openai: { think: false } }
         : undefined;
   }
@@ -929,6 +929,7 @@ export class SegmentIndex {
         const result = await embedMany({ model: this.embeddingModel, values: batch });
         embeddings.push(...result.embeddings);
       } catch (err) {
+        if (!isEmbeddingInputTooLong(err)) throw err;
         // One rejected value fails the whole batch, and indexSession then
         // throws without advancing segment_state — the same messages get
         // retried forever, freezing segmentation for good. Fall back to
@@ -964,7 +965,7 @@ export class SegmentIndex {
         });
         return embedding;
       } catch (err) {
-        if (chars <= EMBED_MIN_CHARS) throw err;
+        if (!isEmbeddingInputTooLong(err) || chars <= EMBED_MIN_CHARS) throw err;
         chars = Math.max(EMBED_MIN_CHARS, Math.floor(chars / 2));
         log.warn("segments", `embed value rejected — retrying at ${chars} chars`);
       }

@@ -2,7 +2,7 @@
 
 ## Per-agent: .kern/config.json
 
-The main config file. Committed to git. Unknown fields and wrong types are warned on startup and ignored — defaults apply.
+The main config file. Committed to git. Unknown top-level fields are warned on startup and ignored. Invalid model routing, nested model fields, and malformed JSON fail startup rather than silently choosing a different model. Other wrong-type fields fall back to defaults.
 
 ```json
 {
@@ -16,9 +16,14 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 
 | Field | Default | Description |
 |-------|---------|-------------|
+| `version` | package version at creation | Package version of the last successful file migration. Updated only when a migration runs; ordinary package upgrades leave it unchanged. Managed by Kern. |
 | `name` | directory name | Agent name. Auto-set to directory basename on first startup if missing. Exposed in `/status` response. |
 | `model` | `google/gemini-3.8-flash` | Model ID. Format depends on provider. |
-| `provider` | `openrouter` | API provider: `openrouter`, `anthropic`, `openai`, `ollama` |
+| `provider` | `openrouter` | Main connection: `openrouter`, `anthropic`, `openai`, `ollama`, `openai-compatible`. |
+| `baseURL` | provider preset | Full API root, including `/v1` where required. Required for `openai-compatible`. |
+| `apiKeyEnv` | provider preset | Name of the credential variable in `.kern/.env`; never put the secret in JSON. |
+| `auth` | provider preset | `"none"` disables authentication. Mutually exclusive with `apiKeyEnv`. Custom URLs default to no authentication unless `apiKeyEnv` is supplied. |
+| `api` | provider preset | `"chat"` or `"responses"`. OpenAI's hosted preset uses Responses; custom OpenAI URLs, Ollama, OpenRouter, and compatible servers use Chat Completions. Responses is supported for `openai` and `openai-compatible` only. OpenAI audio input uses Chat Completions independently of the text-chat API. |
 | `toolScope` | `full` | Tool access level: `full`, `write`, `read` |
 | `maxSteps` | `30` | Max tool-use steps per message |
 | `port` | auto | Fixed port for the agent HTTP server. Assigned automatically from 4100-4999 on creation or first start. |
@@ -31,14 +36,15 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 | `stripAnsi` | `true` | Strip ANSI escape codes from tool outputs before saving to session history and event streams. Set `false` to preserve raw escape sequences. |
 | `heartbeatInterval` | `60` | Minutes between heartbeat prompts. Agent reviews notes, updates knowledge. 0 to disable. |
 | `timezone` | `""` | IANA timezone (e.g. `"America/Los_Angeles"`) used for the `time:` field in the envelope the model reads. Empty = autoresolve to host. Storage (logs, recall, session metadata) stays UTC regardless. |
-| `recall` | `true` | Enable recall and segments (embedding-based features). Set to `false` to disable. Requires an embedding API key. Session storage and notes summaries work regardless. |
+| `embeddingModel` | `""` | Embedding reference for recall and segment boundaries. String = model on main connection; object = independently configured connection; `false` = disabled. Custom servers require an explicit model ID. |
+| `recall` | `true` | Enable recall and semantic segments. `false` skips embedding requests. Requires a working embedding connection; messages and notes remain available regardless. |
 | `summaryBudget` | `0.75` | Fraction of `maxContextTokens` for compressed conversation summaries from segments. Cached via prompt caching, so effectively free for supported models. Set to `0` to disable. See [Context](context.md#conversation-summary). |
-| `summaryModel` | `""` | Model for segment summarization. Empty = provider default (OpenAI: `gpt-6-luna`, Anthropic: `anthropic/claude-haiku-5` via OpenRouter, OpenRouter: `google/gemini-3.5-flash-lite`, Ollama: reuses `model`). Summary calls always use an OpenAI-compatible client: `openai` and `ollama` route directly, **all other providers (including `anthropic`) route via OpenRouter** — so on an Anthropic agent `summaryModel` needs an OpenRouter-style ID like `"anthropic/claude-haiku-5"`, not a bare Anthropic model ID. Exception: on `ollama` and `openai` agents, a namespaced `summaryModel` (contains `/`, e.g. `"openai/gpt-6-luna"`) routes via OpenRouter when `OPENROUTER_API_KEY` is set — lets local-model agents offload summaries to a cheap cloud model. Ollama `hf.co/...` IDs stay local. Useful when the main `model` is a thinking model — thinking burns the summary token budget on reasoning and returns empty text. Set this to a non-thinking model (e.g. `"google/gemini-3.5-flash-lite"` on OpenRouter/Anthropic, `"qwen3:4b-instruct"` on Ollama). |
-| `subAgentModel` | `""` | Model for spawned sub-agents, on the parent's provider. The model ID must be valid for that provider — same format as `model` (e.g. `claude-sonnet-5` on `anthropic`, `anthropic/claude-sonnet-5` on `openrouter`). Empty = inherit the parent's `model`. Sub-agents are read-only and bounded, so a cheaper model usually suffices — in heavy research fan-out they can account for most of the token volume. Individual `spawn` calls can override per-child. |
+| `summaryModel` | `""` | Model reference for summaries and narration. Empty = provider default; strings inherit the main connection; objects can choose another connection. See below. |
+| `subAgentModel` | `""` | Model reference for spawned children. Empty = main model. A per-spawn string override uses the parent connection. |
 | `autoRecall` | `false` | Automatically inject relevant old context before each turn. Requires recall enabled. |
 | `mediaDigest` | `true` | Enable media pre-digest: describes images (vision model) and transcribes audio (audio model) on arrival, caches results, and replaces raw media with text in context. Set to `false` to disable the entire digest pipeline. |
-| `mediaModel` | `""` | Vision model for media descriptions. Fallback chain: `mediaModel` → agent model → hardcoded provider default. Example: `"google/gemini-3.8-flash"`. |
-| `audioModel` | `""` | Audio-capable model for the `audio` tool and voice-message transcription at ingest. Fallback chain: `audioModel` → agent model → provider default (`google/gemini-3.8-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.8-flash` via OpenRouter for anthropic/ollama/openai agents with `OPENROUTER_API_KEY` set. Setting this field skips the (usually failing) attempt on the text-only chat model. |
+| `mediaModel` | `""` | Model reference for image descriptions and the `image` tool. An explicit reference is authoritative; otherwise ingest tries the main model and same-provider vision default. |
+| `audioModel` | `""` | Model reference for audio analysis and ingest transcription. Explicit reference is authoritative; otherwise tries main model and same-provider audio default. No implicit cloud fallback. |
 | `mediaContext` | `0` | How many recent turns resolve raw media Buffers to the model. `0` = never send raw binary (text descriptions or placeholders only). Applies to all media types — useful for non-image files like PDFs on models with native support. |
 | `mcpServers` | `{}` | Model Context Protocol servers. Tools namespaced as `<server>__<tool>`. See [MCP](mcp.md). |
 
@@ -48,34 +54,110 @@ The main config file. Committed to git. Unknown fields and wrong types are warne
 - **write** — read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, audio
 - **read** — read, glob, grep, webfetch, websearch, kern, recall, pdf, image, audio
 
-### Providers
+### Connections and model references
 
-- **openrouter** — routes to cheapest provider. Model IDs like `google/gemini-3.8-flash`, `anthropic/claude-opus-5.5`. Uses OpenAI-compatible chat completions API.
-- **anthropic** — direct Anthropic API. Model IDs like `claude-opus-5-5`.
-- **openai** — OpenAI or any OpenAI-compatible endpoint. Model IDs like `gpt-6-sol`. Set `OPENAI_BASE_URL` in `.env` to route to Azure OpenAI, LiteLLM, or other compatible gateways (default: `https://api.openai.com/v1`). With a custom base URL, requests use the Chat Completions API.
-- **ollama** — local Ollama server. Model IDs match Ollama model names like `gemma4:31b`. Set `OLLAMA_BASE_URL` in `.env` for remote servers (default: `http://localhost:11434`).
+The top-level `provider`, `model`, `baseURL`, `apiKeyEnv`, `auth`, and `api` describe the main chat connection. Secondary fields (`embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, `audioModel`) accept the same reference format:
 
-### Summary model
+- **String**: a model ID on the main connection. IDs are opaque: `/` never changes routing.
+- **Object**: `{ "model": "id", "provider": "...", "baseURL": "...", "apiKeyEnv": "..." }`. Only `model` is required. Without `provider` or a new URL, omitted connection settings inherit from the main connection. Repeating the parent's URL, including with trailing slashes or surrounding whitespace, retains its authentication and API selection.
+- **Explicit provider**: starts from that provider's defaults, even if it has the same provider name as the parent; it does not inherit the parent's custom URL or credentials.
+- **New URL**: uses that provider's defaults plus the new URL, and clears inherited credentials. Supply `apiKeyEnv` if authentication is required. Use the complete API root; Kern never guesses whether to append `/v1`.
+- **Explicit provider with a custom URL**: defaults to no authentication even if the URL matches the parent. Supply `apiKeyEnv` explicitly to authenticate that connection.
+- **`embeddingModel: false`** or **`recall: false`**: disable embeddings, recall, and semantic segmentation. Other model fields do not accept `false`.
 
-Segment summarization uses a cheap chat model chosen automatically per provider:
+Provider presets:
 
-| Provider | Summary model |
-|----------|--------------|
-| `openai` | `gpt-6-luna` |
-| `anthropic` | `anthropic/claude-haiku-5` (via OpenRouter — needs `OPENROUTER_API_KEY`) |
-| `openrouter` | `google/gemini-3.5-flash-lite` |
-| `ollama` | reuses the agent's chat model (no extra model to pull) |
+| Provider | API root | Credential | Chat API |
+|----------|----------|------------|----------|
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | Chat Completions; native adapter for Anthropic caching and audio |
+| `anthropic` | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` | Native Anthropic |
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | Responses |
+| `ollama` | `http://localhost:11434/v1` | none | Chat Completions |
+| `openai-compatible` | explicitly configured | none by default | Chat Completions |
 
-### Embedding model
+Writing the main connection's exact hosted preset URL explicitly retains that provider's default authentication and API selection. Custom URLs default to no authentication. For authenticated local servers or gateways, use `apiKeyEnv` pointing at a distinct secret variable. Do not combine it with `auth: "none"`.
 
-Recall and segment boundary detection use an embedding model chosen automatically per provider:
+When updating an existing agent with `kern init` flags, omitted settings on the same connection are preserved, including the provider, model, API root, credential variable, and API selection. Comparisons account for omitted provider/URL defaults and normalize trailing slashes and whitespace. Changing the provider or endpoint clears the old connection settings; the wizard also uses the new connection's API default when changing endpoints. `--api-key-env LOCAL_MODEL_API_KEY` selects an existing environment credential without requiring `--api-key` or copying its value into `.env`. Setup validates the effective configuration, including `KERN_*` overrides, before saving changes or stopping a running agent.
 
-| Provider | Embedding model |
-|----------|-----------------|
-| `openai` | `text-embedding-3-small` |
-| `anthropic` | `openai/text-embedding-3-small` (via OpenRouter — Anthropic has no embeddings API) |
-| `openrouter` | `openai/text-embedding-3-small` |
-| `ollama` | `nomic-embed-text` |
+**Hosted chat, local embeddings:**
+
+```json
+{
+  "provider": "openrouter",
+  "model": "anthropic/claude-sonnet-5",
+  "embeddingModel": {
+    "provider": "openai-compatible",
+    "baseURL": "http://localhost:1234/v1",
+    "model": "your-loaded-embedding-model",
+    "auth": "none"
+  },
+  "summaryModel": "google/gemini-3.5-flash-lite"
+}
+```
+
+**All local, one server:**
+
+```json
+{
+  "provider": "openai-compatible",
+  "baseURL": "http://localhost:1234/v1",
+  "auth": "none",
+  "model": "your-loaded-chat-model",
+  "embeddingModel": "your-loaded-embedding-model",
+  "summaryModel": "your-loaded-non-thinking-model"
+}
+```
+
+The server must actually host the selected models and support `/embeddings` for memory. A chat model alone does not imply embedding support.
+
+**Local chat, explicit cloud summaries/audio:**
+
+```json
+{
+  "provider": "ollama",
+  "model": "gemma4:31b",
+  "summaryModel": { "provider": "openrouter", "model": "google/gemini-3.5-flash-lite" },
+  "audioModel": { "provider": "openrouter", "model": "google/gemini-3.8-flash" }
+}
+```
+
+Put `OPENROUTER_API_KEY` in `.kern/.env`. Its presence alone never enables cloud routing. Explicit media/audio overrides are used alone rather than falling back to the main model or another connection.
+
+### Defaults and embedding index lifecycle
+
+| Main provider | Default summary | Default embedding |
+|---------------|-----------------|-------------------|
+| Hosted `openai` | `gpt-6-luna` | `text-embedding-3-small` |
+| Hosted `anthropic` | `claude-haiku-5-5`, native Anthropic | none — explicitly configure another embedding provider |
+| Hosted `openrouter` | `google/gemini-3.5-flash-lite` | `openai/text-embedding-3-small` |
+| Default `ollama` endpoint | main model | `nomic-embed-text` |
+| Custom endpoint | main model | none — explicitly configure `embeddingModel` |
+
+For embeddings, an object may also include `dimensions`, a positive integer requested from models that support it. Kern validates the actual output size. Models that do not support this option should omit it.
+
+Startup logs resolved model routes and probes the embedding endpoint with one real request (60-second timeout, no automatic retries). Failed probes preserve existing vectors and metadata, disable embedding work for that process, and log the actual failure. Fix the endpoint and restart to resume.
+
+The vector index records the model, requested dimensions, and actual output dimensions as a fingerprint; moving the same model to another endpoint keeps existing vectors. A successful probe for a changed fingerprint rebuilds vectors, including existing chunks from inactive sessions, while preserving messages, chunk text, segment boundaries, summaries, and recall/segment cursors. Backfill restores existing vectors; subsequent indexing embeds only new history. Credential rotation or an endpoint change alone does not rebuild memory. Legacy databases without a fingerprint adopt it when their dimensions match the probed model; upgrading alone never re-embeds. No database deletion is needed when changing models.
+
+### Migrating from earlier configuration
+
+Kern runs one-time file migrations before startup and before reconfiguring an existing agent. A missing `version` means legacy configuration. Migration versions are package release versions; the stamp advances only after a migration succeeds. An agent stamped by a newer package cannot be opened by an older package.
+
+The first migration (`0.44.0-next`, released as `0.44.0`) moves legacy `OPENAI_BASE_URL` and `OLLAMA_BASE_URL` settings into JSON `baseURL`, preserving their endpoint and authentication. Connection fields that only restate what Kern would infer (such as `auth: "none"` or `api: "chat"` on a custom URL) are not written, and existing ones are removed; `kern init` follows the same rule. A custom OpenAI endpoint gets no `embeddingModel` or `summaryModel`: summaries use the chat model and recall stays off until an embedding model is configured. Ollama endpoints keep `nomic-embed-text`. It makes previously inferred OpenRouter summary routes explicit, including Anthropic background routes. Explicit new connection settings win, valid string references stay strings, and unrelated JSON fields and `.env` entries are retained. Legacy endpoint environment variables are consulted only during this one-time migration; subsequent routing uses JSON or the supported `KERN_*` overrides.
+
+Each run creates a verified snapshot in `.kern/backups/<old-version-or-legacy>-<timestamp>-<suffix>/` before replacing any target file. Snapshots contain the exact original bytes of every changed existing file and a `manifest.json` recording which files existed. They have restricted permissions and are gitignored, including for agents created before the new template. Files are staged and validated before replacement; `config.json` is replaced last so its version marks completion. On a write failure, Kern restores files already replaced and aborts startup. If restoration also fails, the error names the backup and files to restore. Migrations must accept partially migrated files so retrying after process interruption is safe.
+
+The existing live-PID check runs before migration. If the agent is already running under another process, stop it before upgrading or reconfiguring. This reuses Kern's existing guard and does not add a separate lock. `loadConfig()` remains read-only. Database and embedding-index migrations retain their own lifecycle.
+
+After automatic conversion, review these intentional behavior changes:
+
+1. Set `embeddingModel` to the model actually hosted by a custom server, or to `false` to silence the startup warning. The migration does not guess which model is installed.
+2. Configure `audioModel` explicitly for cross-provider audio. An OpenRouter key no longer adds a cloud fallback automatically.
+3. Fresh Anthropic agents use native Anthropic summaries and require an explicit external embedding connection. Migrated agents keep their explicit old OpenRouter routes; change them if you prefer native summaries.
+
+To restore manually, stop Kern, copy each backed-up file listed as `existed: true` in `manifest.json` into `.kern/`, and remove any target listed as `existed: false`. Use a package compatible with the restored configuration, or fix the migration error before restarting. Keep the entire snapshot together, especially when both config and `.env` changed. See [adding migrations](migrations.md) for contributor guidance.
+
+`kern init` offers connection, embedding model, and manual model-ID selection. Reconfiguration preserves other JSON fields and existing `.env` variables/comments. You can edit JSON directly for advanced overrides.
 
 ## Environment variable overrides
 
@@ -87,6 +169,9 @@ Environment variables override matching `config.json` fields. Useful for Docker 
 | `KERN_PORT` | `port` | number |
 | `KERN_MODEL` | `model` | string |
 | `KERN_PROVIDER` | `provider` | string |
+| `KERN_BASE_URL` | `baseURL` | string |
+| `KERN_EMBEDDING_MODEL` | `embeddingModel` | string |
+| `KERN_SUMMARY_MODEL` | `summaryModel` | string |
 
 Env vars take priority over `config.json`. Overrides are logged on startup.
 
@@ -96,8 +181,8 @@ Secrets. Gitignored. Never committed. Values here override inherited environment
 
 ```
 OPENROUTER_API_KEY=sk-or-...
-# OPENAI_BASE_URL=https://my-litellm-gateway.example.com/v1  # optional: route openai provider to a compatible endpoint
-OLLAMA_BASE_URL=http://localhost:11434
+# LOCAL_MODEL_API_KEY=...  # optional: referenced by apiKeyEnv in config.json
+# Endpoint URLs belong in config.json as baseURL
 SEARXNG_URL=http://searxng:8080
 JINA_API_KEY=jina_...
 TELEGRAM_BOT_TOKEN=...

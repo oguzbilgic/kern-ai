@@ -8,6 +8,8 @@ import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
 import { loadConfig, saveConfigField, type KernConfig } from "./config.js";
+import { migrateAgentFiles } from "./migrations/index.js";
+import { PACKAGE_VERSION } from "./package-version.js";
 import { readFile, appendFile } from "fs/promises";
 import { join, basename } from "path";
 import { randomBytes } from "crypto";
@@ -20,6 +22,7 @@ import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
 import { setIrcInterface } from "./plugins/irc/tools.js";
 import { SegmentIndex } from "./segments.js";
+import { logModelRoutes } from "./model.js";
 import { MemoryDB } from "./memory.js";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { getStatusData as getStatusDataFn, setQueueStatusFn, setInterfaceStatusFn, setSegmentStatsFn, setPluginStatusFn, type InterfaceStatus } from "./tools/kern.js";
@@ -122,18 +125,15 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
 }
 
 export async function startApp(agentDir: string, forceCli = false): Promise<void> {
-  // Update kernel if newer version available
-  await updateKernel(agentDir);
-
-  const config = await loadConfig(agentDir);
-
-  // Refuse to run twice for the same directory: the PID file is the lock.
-  // Checked before the database or any interface is opened.
+  // Reuse the existing PID guard before modifying any agent files.
   const livePid = await readLivePid(agentDir);
   if (livePid && livePid !== process.pid) {
-    log.error("kern", `${config.name} is already running (pid ${livePid}). Use 'kern stop' first.`);
+    log.error("kern", `${basename(agentDir)} is already running (pid ${livePid}). Use 'kern stop' first.`);
     process.exit(1);
   }
+  await migrateAgentFiles(agentDir);
+  await updateKernel(agentDir);
+  const config = await loadConfig(agentDir);
 
   // Auto-generate auth token if missing
   if (!process.env.KERN_AUTH_TOKEN) {
@@ -160,10 +160,11 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   _config = config;
 
   // Probe embedding model dimensions before creating DB
-  const embeddingDims = await MemoryDB.detectEmbeddingDimensions(config);
+  logModelRoutes(config);
+  const embeddingProfile = await MemoryDB.probeEmbeddingModel(config);
 
   // Initialize memory DB before runtime.init() so media sidecar can backfill
-  const memoryDB = new MemoryDB(agentDir, embeddingDims);
+  const memoryDB = new MemoryDB(agentDir, embeddingProfile);
   runtime.setMemoryDB(memoryDB);
 
   await runtime.init();
@@ -171,7 +172,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   // Initialize semantic segments (uses embeddings for context summarization)
   let segmentIndex: SegmentIndex | null = null;
   let segmentRunning = false;
-  if (embeddingDims > 0) {
+  if (memoryDB.embeddingsReady) {
     try {
       segmentIndex = new SegmentIndex(memoryDB, config);
       runtime.setSegmentIndex(segmentIndex);
@@ -205,13 +206,8 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   runtime.setPairingManager(pairing);
 
   // Log + start
-  let version = "unknown";
-  try {
-    const pkg = JSON.parse(await readFile(join(import.meta.dirname, "..", "package.json"), "utf-8"));
-    version = pkg.version;
-  } catch {}
   const hb = config.heartbeatInterval > 0 ? `, heartbeat:${config.heartbeatInterval}min` : "";
-  log("kern", `starting ${agentName} — v${version}, ${config.model}, tools:${config.toolScope}${hb}`);
+  log("kern", `starting ${agentName} — v${PACKAGE_VERSION}, ${config.model}, tools:${config.toolScope}${hb}`);
 
   // Start HTTP server
   const server = new AgentServer();

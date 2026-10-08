@@ -193,7 +193,7 @@ audio({ file: "meeting.mp3", prompt: "Summarize the key decisions" })
 - `file` — path to audio file, or filename from `.kern/media/`
 - `prompt` — question about the audio (default: transcribe verbatim)
 
-Most chat models can't hear audio, so the tool uses a fallback chain: `audioModel` config → agent model → provider default (`google/gemini-3.8-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.8-flash` routed via OpenRouter for any provider when `OPENROUTER_API_KEY` is set. Gemini models accept ogg/opus natively, so Telegram voice notes need no transcoding. The OpenAI default only handles wav/mp3 — ogg voice notes on non-OpenRouter providers use the cross-provider OpenRouter fallback. Set `audioModel` explicitly to skip the doomed attempt on a text-only chat model. Files over 20 MB are rejected.
+Most chat models cannot hear audio. An explicit `audioModel` string or object is authoritative; otherwise Kern tries the main model and a same-provider default. Cross-provider audio requires an object such as `{ "provider": "openrouter", "model": "google/gemini-3.8-flash" }`. An available key never enables fallback to another provider. Gemini accepts ogg/opus natively; hosted OpenAI defaults handle wav/mp3. Files over 20 MB are rejected.
 
 ## spawn
 
@@ -290,7 +290,7 @@ Returns raw messages for a specific range — use after search to get full conte
 
 On startup, kern indexes the current session's messages into a local sqlite-vec database (`.kern/recall.db`). Indexing runs in the background — the agent is available immediately while the index builds. Raw messages are stored in sqlite alongside embedded chunks, so retrieval doesn't need to read session files.
 
-Messages are chunked by turn (user→assistant pairs), embedded via `text-embedding-3-small`, and stored as vectors. After each turn, new messages are incrementally indexed — only new lines are parsed.
+Messages are chunked by turn (user→assistant pairs), embedded with the configured `embeddingModel` (see [Configuration](config.md#connections-and-model-references)), and stored as vectors. After each turn, new messages are incrementally indexed — only new lines are parsed.
 
 Search uses cosine similarity (KNN) to find the most relevant past conversation chunks.
 
@@ -298,7 +298,7 @@ Check indexing status via `kern({ action: "status" })` — the `recall` field sh
 
 ### Requirements
 
-Requires an API key for the configured provider (used for embeddings). Uses `text-embedding-3-small` (1536 dimensions).
+Requires a working embedding connection: the provider default (`text-embedding-3-small` on OpenAI and OpenRouter, `nomic-embed-text` on a local Ollama) or an explicit `embeddingModel`. Anthropic and custom endpoints have no default. Startup probes the model once; if the probe fails, recall is disabled for that run and existing vectors are kept. Set `embeddingModel: false` to turn recall off without a warning.
 
 ### Auto-recall
 
