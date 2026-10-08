@@ -589,7 +589,9 @@ export class MatrixInterface implements Interface {
       await this.setTyping(roomId, false).catch(() => {});
       const reason = String(err?.message || err || "Error processing message.");
       log.error("matrix", `turn failed in ${roomId}: ${reason}`);
-      await this.sendMessage(roomId, `⚠️ ${reason.slice(0, 300)}`).catch(() => {});
+      // m.notice, not m.text: other kern agents paired in this room ignore notices, so a shared failure
+      // (e.g. an exhausted API key) can't make every agent answer every other agent's warning (#439).
+      await this.sendMessage(roomId, `⚠️ ${reason.slice(0, 300)}`, "m.notice").catch(() => {});
     }
   }
 
@@ -647,12 +649,17 @@ export class MatrixInterface implements Interface {
     }
   }
 
-  private async sendMessage(roomId: string, body: string): Promise<void> {
+  /**
+   * Send a text message. `m.notice` is Matrix's convention for automated output that other bots
+   * should not respond to; the sync loop above only handles `m.text` and media, so kern itself
+   * never takes a turn on a notice.
+   */
+  private async sendMessage(roomId: string, body: string, msgtype: "m.text" | "m.notice" = "m.text"): Promise<void> {
     const txnId = `kern-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const formatted = mdToMatrixHtml(body);
     const plainBody = hasAnsi(body) ? stripAnsi(body) : body;
     const payload: Record<string, unknown> = {
-      msgtype: "m.text",
+      msgtype,
       body: plainBody,
     };
     if (formatted) {

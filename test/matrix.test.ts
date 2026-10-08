@@ -616,3 +616,54 @@ test("sendToUser: retains created DM in memory cache if m.direct persistence fai
   assert.equal(createCount, 1);
 });
 
+
+function pairedMatrix() {
+  return new MatrixInterface(
+    "http://localhost:8008",
+    "@agent:matrix",
+    "fake-token",
+    {
+      isPaired: () => true,
+      hasAnyPairedUsers: () => true,
+      autoPairFirst: async () => {},
+      getOrCreateCode: async () => "code",
+    } as any,
+  );
+}
+
+function captureSends(matrix: MatrixInterface): Array<Record<string, any>> {
+  const sent: Array<Record<string, any>> = [];
+  (matrix as any).api = async (method: string, path: string, body?: Record<string, any>) => {
+    if (method === "PUT" && path.includes("/send/m.room.message/")) sent.push(body || {});
+    return {};
+  };
+  (matrix as any).setTyping = async () => {};
+  return sent;
+}
+
+test("MatrixInterface: turn-failure warning is sent as m.notice so paired agents in the room ignore it (#439)", async () => {
+  const matrix = pairedMatrix();
+  const sent = captureSends(matrix);
+
+  await (matrix as any).handleIncoming("!group:matrix", "@peer:matrix", "hello", {}, async () => {
+    throw new Error("API authentication failed (403): Key limit exceeded (daily limit).");
+  });
+
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].msgtype, "m.notice");
+  assert.match(sent[0].body, /^⚠️ API authentication failed \(403\)/);
+});
+
+test("MatrixInterface: normal replies are still sent as m.text", async () => {
+  const matrix = pairedMatrix();
+  const sent = captureSends(matrix);
+
+  await (matrix as any).handleIncoming("!group:matrix", "@peer:matrix", "hello", {}, async (_env: any, onEvent: any) => {
+    onEvent({ type: "text-delta", text: "hi there" });
+    return "hi there";
+  });
+
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].msgtype, "m.text");
+  assert.strictEqual(sent[0].body, "hi there");
+});
