@@ -4,7 +4,7 @@ import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
 import { isAgentDir, readLivePid } from "./agent-dir.js";
 import { startAgent, stopAgent } from "./daemon.js";
-import { configDefaults, resolveConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
+import { configDefaults, resolveConfig, serializeConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
 import { resolveModel, configureConnection, connectionSettings } from "./model.js";
 import { migrateAgentFiles } from "./migrations/index.js";
 import { PACKAGE_VERSION } from "./package-version.js";
@@ -258,7 +258,7 @@ async function runConfig(dir: string): Promise<void> {
   if (slackBotToken) updates.SLACK_BOT_TOKEN = slackBotToken;
   if (slackAppToken) updates.SLACK_APP_TOKEN = slackAppToken;
   resolveConfig(config, { ...process.env, ...currentEnv, ...updates });
-  await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
+  await writeFile(join(dir, ".kern", "config.json"), serializeConfig(config));
   await saveEnvUpdates(dir, updates);
   print("");
   print("  ✓ Config updated");
@@ -486,7 +486,7 @@ node_modules/
   }
 
   // .kern/ config always written (new agent or adopt)
-  await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
+  await writeFile(join(dir, ".kern", "config.json"), serializeConfig(config));
   print("  + .kern/config.json");
 
   await saveEnvUpdates(dir, envUpdates, envTemplate);

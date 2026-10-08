@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { compare, gt, lte, valid } from "semver";
-import { resolveConfig } from "../config.js";
+import { resolveConfig, serializeConfig } from "../config.js";
 import { parse } from "dotenv";
 import { readLivePid } from "../agent-dir.js";
 import { PACKAGE_VERSION } from "../package-version.js";
@@ -83,7 +83,7 @@ export async function migrateAgentFiles(
   const changes: FileChange[] = [
     ...(result.env !== (rawEnv?.toString("utf-8") ?? null)
       ? [{ name: ".env", before: rawEnv, after: result.env === null ? null : Buffer.from(result.env) }] : []),
-    { name: "config.json", before: rawConfig, after: Buffer.from(JSON.stringify(result.config, null, 2) + "\n") },
+    { name: "config.json", before: rawConfig, after: Buffer.from(serializeConfig(result.config)) },
   ];
   const backupsDir = join(kernDir, "backups");
   await fs.mkdir(backupsDir, { recursive: true, mode: 0o700 });

@@ -42,6 +42,7 @@ test("legacy endpoints migrate with exact backups, no secret copying, and unknow
   const dir = await agent(t, input, env);
   await migrateAgentFiles(dir);
   assert.deepEqual(await configAt(dir), { ...input, baseURL: "http://localhost:1234/v1", apiKeyEnv: "OPENAI_API_KEY", version: release });
+  assert.deepEqual(Object.keys(await configAt(dir)), ["version", "model", "provider", "baseURL", "apiKeyEnv", "customPlugin"]);
   assert.equal(await fs.readFile(join(dir, ".kern", ".env"), "utf-8"), env);
   const backup = await backupAt(dir);
   assert.equal(await fs.readFile(join(backup, "config.json"), "utf-8"), JSON.stringify(input));

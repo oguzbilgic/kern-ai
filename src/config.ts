@@ -314,6 +314,13 @@ function applyEnvOverrides(config: KernConfig, env: NodeJS.ProcessEnv): KernConf
 /**
  * Write a single field into agent's .kern/config.json, preserving existing fields.
  */
+/** Known fields in their documented order (version and name first), then anything else as found. */
+export function serializeConfig(config: object): string {
+  const entries = Object.entries(config);
+  const rank = (key: string) => Object.keys(FIELD_TYPES).indexOf(key) >>> 0; // unknown keys sort last, keeping their order
+  return JSON.stringify(Object.fromEntries(entries.sort(([a], [b]) => rank(a) - rank(b))), null, 2) + "\n";
+}
+
 export async function saveConfigField(agentDir: string, key: string, value: unknown): Promise<void> {
   const configPath = join(agentDir, ".kern", "config.json");
   let config: Record<string, unknown> = {};
@@ -322,5 +329,5 @@ export async function saveConfigField(agentDir: string, key: string, value: unkn
     config = JSON.parse(raw);
   } catch {}
   config[key] = value;
-  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  await writeFile(configPath, serializeConfig(config), "utf-8");
 }

@@ -56,6 +56,7 @@ test("fresh setup stamps the package version and ignores backups without running
   const before = await readFile(path);
   assert.equal(JSON.parse(before.toString()).version, PACKAGE_VERSION);
   assert.equal(JSON.parse(before.toString()).summaryModel, undefined);
+  assert.deepEqual(Object.keys(JSON.parse(before.toString())).slice(0, 4), ["version", "name", "model", "provider"]);
   assert.ok((await readFile(join(dir, ".gitignore"), "utf-8")).includes(".kern/backups/"));
   await migrateAgentFiles(dir);
   assert.deepEqual(await readFile(path), before);
