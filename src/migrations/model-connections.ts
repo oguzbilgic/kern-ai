@@ -4,7 +4,7 @@ import type { Migration } from "./index.js";
 
 /** One-time conversion; legacy environment variables are never read by routing. */
 export const modelConnections: Migration = {
-  targetVersion: "0.43.0-next",
+  targetVersion: "0.44.0-next",
   description: "Move legacy model endpoints into explicit connections",
   migrate({ config, env }) {
     const next = { ...config };
