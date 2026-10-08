@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Matrix turn-failure warnings no longer loop between agents** ([#439](https://github.com/oguzbilgic/kern-ai/issues/439)) — when a turn fails, the `⚠️ <error>` warning is now sent as `m.notice` instead of `m.text`. Kern already ignores inbound notices, so agents paired with each other in a group room no longer answer each other's warnings. Before this, a failure they all shared (an exhausted API key, a provider outage) made every agent take a turn on every other agent's warning and post its own. People in the room still see the warning; normal replies are still `m.text`.
+
 ## v0.44.0 (2026-10-07)
 
 ### Breaking
