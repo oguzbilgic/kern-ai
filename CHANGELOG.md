@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.44.0 (2026-10-07)
 
 ### Breaking
 - **Model connections are configured in `config.json`** ([#437](https://github.com/oguzbilgic/kern-ai/issues/437)) — `provider` plus optional `baseURL`, `apiKeyEnv`, `auth: "none"`, and `api` describe the main connection. `embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, and `audioModel` take a model ID on that connection or an object with its own connection fields. `embeddingModel: false` turns off embedding-based memory. New `openai-compatible` provider for local servers and gateways. See [docs/config.md](docs/config.md#connections-and-model-references).
