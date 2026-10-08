@@ -47,7 +47,7 @@ export class MessageQueue {
   // Idle timeout: a turn is killed only after this long with NO activity
   // (no stream events). Every token/tool event resets the timer via touch(),
   // so long productive turns never time out — only genuinely hung ones.
-  private idleTimeoutMs = 5 * 60 * 1000;
+  private idleTimeoutMs = 20 * 60 * 1000;
   // Resets the current turn's idle timer. Null when no turn is active.
   private touchFn: (() => void) | null = null;
   private timeoutNarrator: TimeoutNarrator<any> | null = null;
