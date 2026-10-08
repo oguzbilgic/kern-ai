@@ -7,8 +7,16 @@ import { execFileSync } from "node:child_process";
 import { configDefaults, loadConfig, resolveConfig } from "../src/config.js";
 import { resolveModel } from "../src/model.js";
 import { migrateAgentFiles, MIGRATIONS, type Migration } from "../src/migrations/index.js";
+import { PACKAGE_VERSION } from "../src/package-version.js";
+import { prerelease } from "semver";
 
 const release = MIGRATIONS[0].targetVersion;
+
+test("a release build carries no -next migration target", () => {
+  // During development the newest migration targets the -next package version so it runs on
+  // dev builds. The release commit bumps both package.json and that target to the release.
+  if (!prerelease(PACKAGE_VERSION)) assert.equal(MIGRATIONS.some(m => prerelease(m.targetVersion)), false);
+});
 const legacyEnv = ["OPENAI_BASE_URL", "OLLAMA_BASE_URL", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "KERN_PROVIDER"];
 
 async function agent(t: TestContext, config: object, env?: string) {
