@@ -128,7 +128,7 @@ Put `OPENROUTER_API_KEY` in `.kern/.env`. Its presence alone never enables cloud
 | Main provider | Default summary | Default embedding |
 |---------------|-----------------|-------------------|
 | Hosted `openai` | `gpt-6-luna` | `text-embedding-3-small` |
-| Hosted `anthropic` | `claude-haiku-5`, native Anthropic | none — explicitly configure another embedding provider |
+| Hosted `anthropic` | `claude-haiku-5-5`, native Anthropic | none — explicitly configure another embedding provider |
 | Hosted `openrouter` | `google/gemini-3.5-flash-lite` | `openai/text-embedding-3-small` |
 | Default `ollama` endpoint | main model | `nomic-embed-text` |
 | Custom endpoint | main model | none — explicitly configure `embeddingModel` |

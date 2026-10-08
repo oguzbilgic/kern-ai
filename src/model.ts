@@ -113,7 +113,7 @@ export function resolveSummaryModel(config: KernConfig): ResolvedModel {
   if (config.summaryModel) return resolveModel(config, config.summaryModel);
   const main = resolveModel(config);
   const defaults: Record<string, string> = {
-    openai: "gpt-6-luna", anthropic: "claude-haiku-5", openrouter: "google/gemini-3.5-flash-lite",
+    openai: "gpt-6-luna", anthropic: "claude-haiku-5-5", openrouter: "google/gemini-3.5-flash-lite",
   };
   // A custom endpoint may not host any preset model; reuse its chat model.
   const preset = main.baseURL === CONNECTION_DEFAULTS[main.provider].baseURL;

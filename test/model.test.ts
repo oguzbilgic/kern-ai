@@ -134,7 +134,7 @@ test("authenticated local model uses exactly its configured secret", async t => 
 
 test("summary defaults are native Anthropic, or the main model for custom servers", () => {
   const anthropic = cfg({ provider: "anthropic", model: "claude-main" });
-  assert.equal(resolveSummaryModel(anthropic).model, "claude-haiku-5");
+  assert.equal(resolveSummaryModel(anthropic).model, "claude-haiku-5-5");
   assert.equal(resolveSummaryModel(anthropic).provider, "anthropic");
   assert.equal(resolveEmbeddingModel(anthropic), null);
   const local = cfg({ provider: "openai", baseURL: "http://localhost:1234/v1", model: "local-main" });
