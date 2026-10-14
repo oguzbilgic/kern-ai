@@ -43,7 +43,7 @@ When old messages are trimmed, the agent loses direct access to that history. Se
 
 1. **Segmentation** — messages are grouped into semantic segments (L0) based on embedding similarity. Topic shifts create boundaries. Runs incrementally after each turn.
 2. **Summarization** — each segment is summarized by an LLM (~10-20:1 compression).
-3. **Rollup** — every 10 L0 segments are rolled up into an L1 parent. 10 L1s → L2, etc. This builds a hierarchical tree.
+3. **Rollup** — every 10 *contiguous* summarized L0 segments are rolled up into an L1 parent. 10 L1s → L2, etc. This builds a hierarchical tree where each level tiles the indexed history exactly once: a parent covers precisely the run of its children, with no gaps and no overlaps. Shorter runs that sit in a hole between existing parents are rolled up as-is so nothing is left orphaned forever.
 4. **Injection** — `composeHistory` fills the summary budget with summaries from the tree, using breadth-first expansion: highest-level segments expand first (L2→L1 before L1→L0) for balanced coverage across the full history. The trim boundary is snapped to L0 segment edges and then walked back to the nearest user message for turn-safe boundaries.
 
 The result is a `<conversation_summary>` block in the system prompt:

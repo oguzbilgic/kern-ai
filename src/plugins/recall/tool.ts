@@ -6,7 +6,7 @@ let _recallIndex: RecallIndex | null = null;
 let _contextSessionId: string | null = null;
 let _contextTrimmedCount = 0;
 
-export function setRecallIndex(index: RecallIndex) {
+export function setRecallIndex(index: RecallIndex | null) {
   _recallIndex = index;
 }
 

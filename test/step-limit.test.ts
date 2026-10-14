@@ -15,7 +15,7 @@ test("step limit notice: appends notice when steps hit maxSteps with partial tex
             start(controller) {
               controller.enqueue({ type: "response-metadata", id: "1", modelId: "mock", timestamp: new Date() });
               controller.enqueue({ type: "tool-call", toolCallId: "c1", toolName: "t1", input: "{}" });
-              controller.enqueue({ type: "finish", finishReason: "tool-calls", usage: { inputTokens: { total: 10 }, outputTokens: { total: 10 } } });
+              controller.enqueue({ type: "finish", finishReason: { unified: "tool-calls" }, usage: { inputTokens: { total: 10 }, outputTokens: { total: 10 } } });
               controller.close();
             }
           }),
@@ -29,7 +29,7 @@ test("step limit notice: appends notice when steps hit maxSteps with partial tex
             controller.enqueue({ type: "text-start", id: "d1" });
             controller.enqueue({ type: "text-delta", id: "d1", delta: "Partial summary of work." });
             controller.enqueue({ type: "text-end", id: "d1" });
-            controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: { total: 10 }, outputTokens: { total: 10 } } });
+            controller.enqueue({ type: "finish", finishReason: { unified: "stop" }, usage: { inputTokens: { total: 10 }, outputTokens: { total: 10 } } });
             controller.close();
           }
         }),
@@ -81,7 +81,7 @@ test("step limit notice: pluralizes correctly when maxSteps is 1 and handles emp
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: "response-metadata", id: String(callCount), modelId: "mock", timestamp: new Date() });
-            controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: { total: 10 }, outputTokens: { total: 10 } } });
+            controller.enqueue({ type: "finish", finishReason: { unified: "stop" }, usage: { inputTokens: { total: 10 }, outputTokens: { total: 10 } } });
             controller.close();
           }
         }),

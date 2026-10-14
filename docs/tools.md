@@ -4,16 +4,66 @@ kern provides built-in tools. Availability depends on `toolScope` in config.
 
 ## bash
 
-Run shell commands on Unix/Linux. Full access to the system.
+Run shell commands on Unix/Linux. Full access to the system. Provided by the shell plugin (`src/plugins/shell/`).
 
 ```
 bash({ command: "ls -la", timeout: 120000 })
+bash({ command: "npm test", background: true })
+bash({ command: "npm run e2e", background: true, remindEvery: 600 })
 ```
 
 - `command` — shell command to execute
-- `timeout` — optional, milliseconds (default 120000)
+- `timeout` — optional, milliseconds (default 120000 in the foreground; no limit in the background)
+- `background` — optional; run detached and return immediately (see below)
+- `remindEvery` — optional, seconds; with `background`, announce a "still running" reminder at that interval (default: never)
 
 Scope: `full` only. Unix/Linux only — on Windows, `pwsh` is provided instead.
+
+### Background jobs
+
+Long-running commands (test suites, builds, migrations, external coding CLIs) would otherwise block the turn and hit the tool timeout or the queue's idle timeout. With `background: true`, the command is started in its own process group, its combined output is appended to `.kern/jobs/<id>/output.log`, and the call returns at once with a job ID, PID, log path, and whatever output appeared in the first two seconds. A command that finishes within that window returns its output directly, like a foreground call.
+
+When the job ends, its exit code and output tail (up to 25k chars) arrive as a new message stamped with the envelope of the conversation that started it:
+
+```
+[via slack, #builds, user: U04ABC, time: 2026-09-22T15:04:05-07:00]
+[job:job_a1b2c3d4 exited 0, 42s] npm test
+...
+(full log: .kern/jobs/job_a1b2c3d4/output.log)
+```
+
+Because the completion carries the origin's channel, the queue routes it like any message from that conversation:
+
+- **Still in the turn that started it** — spliced in at the next step, so the agent sees the result mid-flight and answers once.
+- **Idle** — wakes the agent into a new turn; the runtime sends the reply to the originating chat (the same Slack channel, Telegram chat, Matrix room, or DM). The agent does not need the `message` tool for this.
+- **Busy with another conversation** — waits in the queue; it is never injected into a foreign turn.
+
+#### Reminders
+
+Nothing is announced while a job runs unless it was started with `remindEvery`. With it, a one-line message arrives at that interval, routed exactly like a completion:
+
+```
+[job:job_a1b2c3d4 still running, 20m] npm run e2e
+```
+
+That gives the agent a chance to tail the job, decide it has stalled or is no longer needed, and kill it, instead of leaving it to run unnoticed. There is no default interval: every reminder to an idle agent is a turn, so opting in per job keeps the cost deliberate. Reminders stop when the job ends; the first one fires one interval after the two-second grace window closes. At most one reminder is in flight per job — while the agent is busy with another conversation the queued reminder waits and further ticks are skipped, so they never pile up. Jobs started outside a conversation (no origin) get no reminders, and the tool result does not promise any.
+
+Running jobs are killed on shutdown (SIGTERM, then SIGKILL after two seconds) and their completion is not announced. If the agent died without shutting down, leftover jobs are killed on the next start. Completions from turns that came from the CLI or a heartbeat still arrive as messages, but the agent's reply has no chat to go to — the tool says so, and the agent should use `message` if a person needs the result. Jobs are tracked per process — after a restart, `jobs({ action: "status" })` can still read a finished job's `record.json`, but running ones are gone.
+
+## jobs
+
+Inspect and manage background jobs.
+
+```
+jobs({ action: "list" })                        // all jobs with status
+jobs({ action: "status", id: "job_a1b2c3d4" })  // command, pid, exit code, origin, log path
+jobs({ action: "tail", id: "job_a1b2c3d4" })    // last output (chars: optional, default 4000)
+jobs({ action: "kill", id: "job_a1b2c3d4" })    // SIGTERM the process group
+```
+
+The operator can list jobs from chat with `/jobs` (or `!jobs`).
+
+Scope: `full` only, alongside `bash`.
 
 ## pwsh
 
@@ -143,7 +193,7 @@ audio({ file: "meeting.mp3", prompt: "Summarize the key decisions" })
 - `file` — path to audio file, or filename from `.kern/media/`
 - `prompt` — question about the audio (default: transcribe verbatim)
 
-Most chat models can't hear audio, so the tool uses a fallback chain: `audioModel` config → agent model → provider default (`google/gemini-3.7-flash` on OpenRouter, `gpt-audio-mini` on OpenAI) → `google/gemini-3.7-flash` routed via OpenRouter for any provider when `OPENROUTER_API_KEY` is set. Gemini models accept ogg/opus natively, so Telegram voice notes need no transcoding. The OpenAI default only handles wav/mp3 — ogg voice notes on non-OpenRouter providers use the cross-provider OpenRouter fallback. Set `audioModel` explicitly to skip the doomed attempt on a text-only chat model. Files over 20 MB are rejected.
+Most chat models cannot hear audio. An explicit `audioModel` string or object is authoritative; otherwise Kern tries the main model and a same-provider default. Cross-provider audio requires an object such as `{ "provider": "openrouter", "model": "google/gemini-3.8-flash" }`. An available key never enables fallback to another provider. Gemini accepts ogg/opus natively; hosted OpenAI defaults handle wav/mp3. Files over 20 MB are rejected.
 
 ## spawn
 
@@ -156,7 +206,7 @@ spawn({ prompt: "Research Node.js 22 crypto changes and summarize breaking chang
 - `prompt` — the task for the sub-agent (self-contained — child starts with no context about your current work)
 - `maxSteps` — max reasoning steps (default 20, max 50)
 
-When the child finishes, its result arrives as a new turn with metadata like `[via subagent, subagent:<id>, user: subagent, time: <iso8601>]`. The envelope identifies the source; the body is the child's final answer (no extra header on success). Failed sub-agents prefix the body with a `[subagent:<id> failed, 12s]` style line so the outcome is visible; cancelled sub-agents emit only the header line with no body. You can spawn multiple sub-agents in parallel and synthesize their results as they arrive.
+When the child finishes, its result arrives as a new message in the conversation that asked for it — stamped with the origin's envelope, like a [background job](#background-jobs) completion — and the agent's reply routes back to that chat. The body starts with a `[subagent:<id> done, 12s]` line followed by the child's final answer; failed sub-agents use `[subagent:<id> failed, 12s]` followed by the error, and cancelled sub-agents emit only the `[subagent:<id> cancelled, 12s]` header. You can spawn multiple sub-agents in parallel and synthesize their results as they arrive. See [sub-agents](subagents.md#announces).
 
 Sub-agents run with a read-only toolset: `read`, `glob`, `grep`, `webfetch`, `websearch`, `pdf`, `image`, `audio`. They cannot run shell commands, edit files, call plugin tools, or spawn further sub-agents.
 
@@ -203,10 +253,10 @@ Send a message to a user on any channel.
 message({ userId: "12345", interface: "telegram", text: "Hello!" })
 ```
 
-- `userId` — from USERS.md or pairing data
-- `interface` — `telegram`, `slack`, or `matrix`
-- Looks up chatId from pairing data
-- Broadcasts outgoing event to TUI
+- `userId` — user or channel/room target (e.g. user ID, or room/channel ID)
+- `interface` — `telegram`, `slack`, `matrix`, `discord`, `nostr`, or `irc`
+- Resolves recipient appropriately per interface (on Matrix, an `@user:server` MXID resolves to a 1:1 direct chat via `m.direct` or creates a private DM room; `!room:server` or `#alias:server` targets the room directly)
+- Broadcasts outgoing event to TUI/Web UI
 
 ## recall
 
@@ -240,7 +290,7 @@ Returns raw messages for a specific range — use after search to get full conte
 
 On startup, kern indexes the current session's messages into a local sqlite-vec database (`.kern/recall.db`). Indexing runs in the background — the agent is available immediately while the index builds. Raw messages are stored in sqlite alongside embedded chunks, so retrieval doesn't need to read session files.
 
-Messages are chunked by turn (user→assistant pairs), embedded via `text-embedding-3-small`, and stored as vectors. After each turn, new messages are incrementally indexed — only new lines are parsed.
+Messages are chunked by turn (user→assistant pairs), embedded with the configured `embeddingModel` (see [Configuration](config.md#connections-and-model-references)), and stored as vectors. After each turn, new messages are incrementally indexed — only new lines are parsed.
 
 Search uses cosine similarity (KNN) to find the most relevant past conversation chunks.
 
@@ -248,7 +298,7 @@ Check indexing status via `kern({ action: "status" })` — the `recall` field sh
 
 ### Requirements
 
-Requires an API key for the configured provider (used for embeddings). Uses `text-embedding-3-small` (1536 dimensions).
+Requires a working embedding connection: the provider default (`text-embedding-3-small` on OpenAI and OpenRouter, `nomic-embed-text` on a local Ollama) or an explicit `embeddingModel`. Anthropic and custom endpoints have no default. Startup probes the model once; if the probe fails, recall is disabled for that run and existing vectors are kept. Set `embeddingModel: false` to turn recall off without a warning.
 
 ### Auto-recall
 

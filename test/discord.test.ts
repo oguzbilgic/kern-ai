@@ -36,6 +36,18 @@ test("chunkMessage: hard cuts when no whitespace", () => {
   assert.strictEqual(chunks[1].length, 500);
 });
 
+test("formatForDiscord: rewrites code blocks with ANSI to ```ansi", async () => {
+  const { formatForDiscord } = await import("../src/interfaces/discord.js");
+  const raw = "```text\n\x1b[32mSuccess\x1b[0m\n```";
+  assert.strictEqual(formatForDiscord(raw), "```ansi\n\x1b[32mSuccess\x1b[0m\n```");
+
+  const unlabelled = "```\n\x1b[31mError\x1b[0m\n```";
+  assert.strictEqual(formatForDiscord(unlabelled), "```ansi\n\x1b[31mError\x1b[0m\n```");
+
+  const plain = "```text\nno color here\n```";
+  assert.strictEqual(formatForDiscord(plain), plain);
+});
+
 test("DiscordInterface: start() is non-blocking and stop() halts retry loop cleanly", async () => {
   const { DiscordInterface } = await import("../src/interfaces/discord.js");
   const discord = new DiscordInterface("fake-token");

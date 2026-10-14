@@ -8,7 +8,7 @@ import * as nip44 from "nostr-tools/nip44";
 import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, stripAnsi } from "../util.js";
 
 /**
  * Nostr interface — encrypted DMs (NIP-04, kind 4) over one or more relays.
@@ -140,10 +140,16 @@ export class NostrInterface implements Interface {
       // `since = lastEmitted + 1`, so DMs that landed while we were
       // disconnected are replayed. It does NOT retry a failed *initial*
       // connect — that's what this outer loop is for.
-      // Use `ws`, not Node's built-in WebSocket: nostr-tools calls ws.close()
-      // from its onerror handler, and undici's WebSocket re-fires error on
-      // close → infinite recursion → RangeError, process down.
-      const relay = new Relay(url, { enableReconnect: true, websocketImplementation: WebSocket } as any);
+      // Use `ws` subclassed with a default error listener: nostr-tools calls ws.close()
+      // from its timeout/onerror handlers before connection completes, and `ws` emits
+      // an unhandled 'error' event on close-before-connect if no error listener is attached.
+      class SafeWebSocket extends WebSocket {
+        constructor(url: any, protocols: any, options: any) {
+          super(url, protocols, options);
+          this.on("error", () => {});
+        }
+      }
+      const relay = new Relay(url, { enableReconnect: true, websocketImplementation: SafeWebSocket } as any);
       this.relays.set(url, relay);
 
       let closed: () => void = () => {};
@@ -346,16 +352,17 @@ export class NostrInterface implements Interface {
 
   /** Encrypt, sign, and publish a DM (NIP-17 gift wrap or legacy NIP-04) to every connected relay. */
   private async sendDM(toPk: string, text: string, mode: "nip17" | "nip04" = "nip17"): Promise<boolean> {
+    const cleanText = stripAnsi(text);
     let event: NostrEvent;
 
     if (mode === "nip17") {
       // NIP-17 / NIP-59: Gift wrap (kind 1059) containing rumor (kind 14)
       // If recipient used a client with custom encryption pubkey (like Jumble / NIP-4e), wrap to that key.
       const recipientEncryptionPk = this.senderEncKey.get(toPk) || toPk;
-      event = nip17.wrapEvent(this.sk, { publicKey: recipientEncryptionPk }, text) as NostrEvent;
+      event = nip17.wrapEvent(this.sk, { publicKey: recipientEncryptionPk }, cleanText) as NostrEvent;
     } else {
       // Legacy NIP-04 (kind 4)
-      const content = nip04.encrypt(this.sk, toPk, text);
+      const content = nip04.encrypt(this.sk, toPk, cleanText);
       event = finalizeEvent(
         {
           kind: 4,

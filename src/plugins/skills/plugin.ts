@@ -122,20 +122,33 @@ export const skillsPlugin: KernPlugin = {
     "/skills": {
       description: "list available skills",
       handler: async () => {
-        if (catalog.length === 0) return "No skills found.";
+        if (catalog.length === 0) {
+          return "```yaml\nskills: {}\n```";
+        }
         const active = getActiveSkills();
-        const lines = catalog.map((s) => {
-          const icon = active.has(s.name) ? "✦" : "○";
-          return `  ${icon} ${s.name} — ${s.description || "(no description)"}`;
-        });
-        return `Skills (${catalog.length} available, ${active.size} active)\n\n${lines.join("\n")}`;
+        const lines = ["```yaml", "skills:"];
+        for (const s of catalog) {
+          const status = active.has(s.name) ? "active" : "available";
+          lines.push(`  ${s.name}:`);
+          lines.push(`    status: ${status}`);
+          lines.push(`    source: ${s.source}`);
+          if (s.description) {
+            lines.push(`    desc: ${s.description}`);
+          }
+        }
+        lines.push("```");
+        return lines.join("\n");
       },
     },
   },
 
   onStatus(_ctx) {
+    const active = getActiveSkills();
     return {
-      skills: `${getActiveSkills().size} active / ${catalog.length} total`,
+      skills: {
+        active: active.size,
+        total: catalog.length,
+      },
     };
   },
 };

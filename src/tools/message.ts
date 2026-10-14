@@ -13,7 +13,11 @@ export const messageTool = tool({
   description:
     "Send a message to a user on a specific channel. Use this to proactively reach out to users, notify them, or relay information from your operator. Do NOT use this tool to reply to incoming messages — your standard text response is automatically sent back to the user.",
   inputSchema: z.object({
-    userId: z.string().describe("The user ID to message (from USERS.md or pairing data)"),
+    userId: z
+      .string()
+      .describe(
+        "The recipient identifier: user ID (from USERS.md or pairing data), username/handle, or a specific channel/room ID (e.g. #channel, !roomId:server)",
+      ),
     interface: z.string().describe("The interface to send on: telegram, slack, matrix, discord, nostr, irc, hub."),
     text: z.string().describe("The message text to send"),
   }),

@@ -1,31 +1,45 @@
 import { mkdir, writeFile, readFile } from "fs/promises";
-import { join, resolve, basename } from "path";
+import { join, resolve, basename, relative } from "path";
 import { existsSync } from "fs";
 import { input, select, password } from "@inquirer/prompts";
-import { registerAgent, findAgent, isProcessRunning, readPid, removePidFile, assignPort } from "./registry.js";
-import { startAgent } from "./daemon.js";
-import type { KernConfig } from "./config.js";
-import { ionetBaseURL } from "./model.js";
+import { isAgentDir, readLivePid } from "./agent-dir.js";
+import { startAgent, stopAgent } from "./daemon.js";
+import { configDefaults, resolveConfig, serializeConfig, type KernConfig, type ModelConnection, type ModelRef } from "./config.js";
+import { resolveModel, configureConnection, connectionSettings } from "./model.js";
+import { migrateAgentFiles } from "./migrations/index.js";
+import { PACKAGE_VERSION } from "./package-version.js";
+import { parse as parseEnv } from "dotenv";
 import { log } from "./log.js";
+
+// Default models per provider
+export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+  openrouter: "google/gemini-3.8-flash",
+  anthropic: "claude-opus-5-5",
+  openai: "gpt-6-sol",
+  ollama: "gemma4:31b",
+  ionet: "meta-llama/Llama-3.3-70B-Instruct",
+};
 
 // Fallback models used when live fetch fails (e.g. no network, bad key)
 const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
   openrouter: [
-    { name: "Claude Opus 4.8", value: "anthropic/claude-opus-4.8" },
-    { name: "Claude Fable 5", value: "anthropic/claude-fable-5" },
-    { name: "Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4.6" },
-    { name: "GPT-5.5", value: "openai/gpt-5.5" },
-    { name: "Gemini 3.5 Flash", value: "google/gemini-3.5-flash" },
+    { name: "Gemini 3.8 Flash", value: "google/gemini-3.8-flash" },
+    { name: "Claude Opus 5.5", value: "anthropic/claude-opus-5.5" },
+    { name: "Claude Fable 5.1", value: "anthropic/claude-fable-5.1" },
+    { name: "Claude Sonnet 5", value: "anthropic/claude-sonnet-5" },
+    { name: "GPT-6 Sol", value: "openai/gpt-6-sol" },
+    { name: "Qwen 3.8 27B", value: "qwen/qwen3.8-27b" },
   ],
   anthropic: [
-    { name: "Claude Opus 4.8", value: "claude-opus-4-8" },
-    { name: "Claude Fable 5", value: "claude-fable-5" },
-    { name: "Claude Sonnet 4.6", value: "claude-sonnet-4-6" },
+    { name: "Claude Opus 5.5", value: "claude-opus-5-5" },
+    { name: "Claude Fable 5.1", value: "claude-fable-5-1" },
+    { name: "Claude Sonnet 5", value: "claude-sonnet-5" },
   ],
   openai: [
-    { name: "GPT-5.5", value: "gpt-5.5" },
-    { name: "GPT-5.5 Pro", value: "gpt-5.5-pro" },
-    { name: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
+    { name: "GPT-6 Sol", value: "gpt-6-sol" },
+    { name: "GPT-6 Sol Pro", value: "gpt-6-sol-pro" },
+    { name: "GPT-6 Luna", value: "gpt-6-luna" },
+    { name: "GPT-6 Astra", value: "gpt-6-astra" },
   ],
   ollama: [
     { name: "Gemma 4 31B", value: "gemma4:31b" },
@@ -45,193 +59,175 @@ const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
 
 // Models to exclude from OpenRouter (embeddings, moderation, old versions, etc.)
 const OPENROUTER_EXCLUDE = /embed|moderat|whisper|tts|dall-e|vision-preview/i;
+const OPENROUTER_PREFERRED = /^(anthropic|openai|google|deepseek|meta-llama)\//;
 
-async function fetchModels(
-  provider: string,
-  apiKey: string,
-): Promise<{ name: string; value: string }[] | null> {
-  try {
-    let url: string;
-    const headers: Record<string, string> = {};
+interface HostedModel { id: string; display_name?: string; name?: string; created?: number; created_at?: string; context_length?: number }
 
-    switch (provider) {
-      case "anthropic":
-        url = "https://api.anthropic.com/v1/models";
-        headers["x-api-key"] = apiKey;
-        headers["anthropic-version"] = "2023-06-01";
-        break;
-      case "openrouter":
-        url = "https://openrouter.ai/api/v1/models";
-        // OpenRouter doesn't require auth for model listing
-        break;
-      case "openai":
-        url = "https://api.openai.com/v1/models";
-        headers["Authorization"] = `Bearer ${apiKey}`;
-        break;
-      case "ollama":
-        url = `${apiKey || "http://localhost:11434"}/api/tags`;
-        break;
-      case "ionet":
-        url = `${ionetBaseURL()}/models`;
-        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-        break;
-      default:
-        return null;
-    }
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-
-    const json: any = await res.json();
-    const models: any[] = json.data || [];
-
-    if (provider === "anthropic") {
-      // Anthropic returns { id, display_name, created_at }
-      // Sort by created_at descending (newest first)
-      return models
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .map((m) => ({ name: m.display_name || m.id, value: m.id }));
-    }
-
-    if (provider === "openrouter") {
-      // OpenRouter returns thousands of models — filter to well-known providers
-      // and sort by context length (proxy for capability)
-      const preferred = ["anthropic/", "openai/", "google/", "deepseek/", "meta-llama/"];
-      return models
-        .filter((m) => preferred.some((p) => m.id.startsWith(p)) && !OPENROUTER_EXCLUDE.test(m.id))
-        .sort((a, b) => (b.context_length || 0) - (a.context_length || 0))
-        .slice(0, 20)
-        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
-        .map((m) => ({ name: m.name || m.id, value: m.id }));
-    }
-
-    if (provider === "openai") {
-      // OpenAI returns all models including fine-tunes, embeddings, etc.
-      // Filter to chat-capable models
-      const chatModels = models
-        .filter((m) => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search/i.test(m.id))
-        .sort((a, b) => (b.created || 0) - (a.created || 0))
-        .slice(0, 15);
-      return chatModels.map((m) => ({ name: m.id, value: m.id }));
-    }
-
-    if (provider === "ollama") {
-      // Ollama /api/tags returns { models: [{ name, size, ... }] }
-      const ollamaModels: any[] = json.models || [];
-      if (ollamaModels.length === 0) return null;
-      return ollamaModels
-        .sort((a, b) => (b.size || 0) - (a.size || 0))
-        .map((m) => ({ name: m.name, value: m.name }));
-    }
-
-    if (provider === "ionet") {
-      // IO Intelligence returns { data: [{ id: "org/name", ... }] }
-      return models
-        .map((m) => ({ name: m.id, value: m.id }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    }
-
-    return null;
-  } catch {
-    return null;
+/** Hosted catalogs are large and unordered; show the newest or most capable models first. Custom endpoints are never filtered. */
+function shapeHostedCatalog(provider: string, models: HostedModel[]): HostedModel[] {
+  switch (provider) {
+    case "anthropic": return models.sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
+    case "openai": return models.filter(m => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search|embed/i.test(m.id)).sort((a, b) => (b.created ?? 0) - (a.created ?? 0)).slice(0, 15);
+    case "openrouter": return models.filter(m => OPENROUTER_PREFERRED.test(m.id) && !OPENROUTER_EXCLUDE.test(m.id)).sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0)).slice(0, 20);
+    // IO Intelligence reports neither dates nor context lengths; order its org/name IDs alphabetically.
+    case "ionet": return models.sort((a, b) => a.id.localeCompare(b.id));
+    default: return models;
   }
 }
 
-async function getModelChoices(
-  provider: string,
-  apiKey: string,
-): Promise<{ name: string; value: string }[]> {
-  // Ollama always tries to fetch (URL is the key), others need an API key
-  if (apiKey || provider === "ollama") {
-    print("  Fetching models...");
-    const live = await fetchModels(provider, apiKey);
-    if (live && live.length > 0) return live;
-    print("  Could not fetch models, using defaults");
+/** Model discovery uses the same connection as inference. */
+export async function fetchModels(connection: ModelConnection, key?: string, embedding = false): Promise<{ name: string; value: string }[] | null> {
+  const resolved = resolveModel({ ...configDefaults, ...connection, model: "discovery" });
+  // IO Intelligence serves chat models only; never offer them as embedding models.
+  if (embedding && resolved.provider === "ionet") return [];
+  const headers: Record<string, string> = {};
+  if (key && resolved.auth !== "none") {
+    if (resolved.provider === "anthropic") headers["x-api-key"] = key;
+    else headers.Authorization = `Bearer ${key}`;
   }
-  return FALLBACK_MODELS[provider] || FALLBACK_MODELS.openrouter;
+  if (resolved.provider === "anthropic") headers["anthropic-version"] = "2023-06-01";
+  try {
+    const res = await fetch(`${resolved.baseURL}/models`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = await res.json() as { data?: HostedModel[] };
+    let models = (json.data ?? []).filter(m => typeof m.id === "string");
+    if (!connection.baseURL && !embedding) models = shapeHostedCatalog(connection.provider, models);
+    return models.map(m => ({ name: m.display_name || m.name || m.id, value: m.id }));
+  } catch { return null; }
+}
+
+async function getModelChoices(connection: ModelConnection, key = "", embedding = false): Promise<{ name: string; value: string }[]> {
+  print("  Fetching models...");
+  const live = await fetchModels(connection, key, embedding);
+  if (live?.length) return live;
+  print("  Could not fetch models; you can enter a model ID manually");
+  // Never suggest hosted IDs for a custom endpoint.
+  return connection.baseURL || connection.provider === "openai-compatible" || embedding ? [] : FALLBACK_MODELS[connection.provider] || [];
+}
+
+async function chooseModel(connection: ModelConnection, key: string, current = "", embedding = false): Promise<string> {
+  const choices = await getModelChoices(connection, key, embedding);
+  if (current && !choices.some(c => c.value === current)) choices.unshift({ name: current, value: current });
+  const manual = "__kern_manual__";
+  const chosen = choices.length ? await select({ message: embedding ? "Embedding model" : "Model", choices: [...choices, { name: "Enter model ID manually", value: manual }], default: current || choices[0].value }) : manual;
+  return chosen === manual ? input({ message: "Model ID", default: current, required: true }) : chosen;
+}
+
+/** Preserve unrelated variables, comments, and formatting, and quote new secrets correctly. */
+export function mergeEnvText(text: string, updates: Record<string, string>): string {
+  const pending = new Map(Object.entries(updates));
+  const output: string[] = [];
+  // dotenv permits quoted multiline values; preserve their entire source spans.
+  const assignment = /(^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:"(?:\\.|[^"\\])*"|'[^']*'|`[^`]*`|[^\r\n]*)(?:[^\r\n]*))/gm;
+  let cursor = 0;
+  for (const match of text.matchAll(assignment)) {
+    output.push(text.slice(cursor, match.index));
+    const key = match[2];
+    if (key in updates) {
+      if (pending.has(key)) output.push(`${key}=${encodeEnvValue(updates[key])}`);
+      pending.delete(key);
+    } else output.push(match[0]);
+    cursor = match.index! + match[0].length;
+  }
+  output.push(text.slice(cursor));
+  let result = output.join("").replace(/\n*$/, "\n");
+  for (const [key, value] of pending) result += `${key}=${encodeEnvValue(value)}\n`;
+  return result;
+}
+
+function encodeEnvValue(value: string): string {
+  if (!/[\s#'"`\\]/.test(value)) return value;
+  if (!value.includes("'")) return `'${value}'`;
+  if (!value.includes('"')) return `"${value.replace(/\n/g, "\\n").replace(/\r/g, "\\r")}"`;
+  if (!value.includes("`")) return `\`${value}\``;
+  throw new Error("Secret contains all quote styles; set it directly in .kern/.env");
+}
+
+async function saveEnvUpdates(dir: string, updates: Record<string, string>, template = ""): Promise<void> {
+  const path = join(dir, ".kern", ".env");
+  const text = existsSync(path) ? await readFile(path, "utf-8") : template;
+  await writeFile(path, mergeEnvText(text, updates));
+}
+
+interface ConnectionPrompt {
+  connection: ModelConnection;
+  apiKey: string;
+  envVar: string;
+}
+
+async function promptConnection(current: Partial<KernConfig>, env: Record<string, string>): Promise<ConnectionPrompt> {
+  const previous = configureConnection(connectionSettings(current), {});
+  const provider = await select({ message: "Provider", choices: PROVIDERS.map(p => ({ name: p.name, value: p.value })), default: previous.provider });
+  const same = provider === previous.provider;
+  const custom = provider === "ollama" || provider === "openai-compatible" || (same && !!previous.baseURL);
+  const baseURL = custom ? await input({ message: "API root URL (include /v1)", default: same && previous.baseURL ? previous.baseURL : provider === "ollama" ? "http://localhost:11434/v1" : "http://localhost:1234/v1", required: true }) : undefined;
+  const connection = configureConnection(previous, { provider, baseURL });
+  const resolved = resolveModel({ ...configDefaults, ...connection, model: "setup" });
+  const defaultEnvVar = resolved.apiKeyEnv || API_KEY_ENV[provider];
+  const authenticate = custom ? await select({ message: "Authentication", choices: [{ name: "None", value: false }, { name: "API key", value: true }], default: !!resolved.apiKeyEnv && resolved.auth !== "none" }) : true;
+  const envVar = authenticate ? await input({ message: "API key environment variable", default: defaultEnvVar, required: true }) : defaultEnvVar;
+  const currentKey = env[envVar] || "";
+  const supplied = authenticate ? await password({ message: currentKey ? "API key (Enter to keep existing)" : "API key", mask: "*" }) : "";
+  const apiKey = supplied || (authenticate ? currentKey : "");
+  return { connection: configureConnection(connection, { apiKeyEnv: authenticate ? envVar : undefined, auth: authenticate ? undefined : "none" }), apiKey, envVar };
+}
+
+async function promptEmbedding(config: KernConfig, env: Record<string, string>): Promise<{ ref: ModelRef | false; updates: Record<string, string> }> {
+  const selection = await select({ message: "Embeddings for memory", choices: [{ name: "Keep current / provider default", value: "keep" }, { name: "Choose model on this connection", value: "same" }, { name: "Use another connection", value: "other" }, { name: "Disable", value: "off" }] });
+  if (selection === "keep") return { ref: config.embeddingModel, updates: {} };
+  if (selection === "off") return { ref: false, updates: {} };
+  if (selection === "same") {
+    const connection = resolveModel(config);
+    const ref = await chooseModel(connection, connection.apiKeyEnv ? env[connection.apiKeyEnv] || "" : "", typeof config.embeddingModel === "string" ? config.embeddingModel : "", true);
+    return { ref, updates: {} };
+  }
+  const prompt = await promptConnection({}, env);
+  const model = await chooseModel(prompt.connection, prompt.apiKey, "", true);
+  return { ref: { ...prompt.connection, model }, updates: prompt.apiKey ? { [prompt.envVar]: prompt.apiKey } : {} };
 }
 
 const PROVIDERS = [
   { name: "OpenRouter", value: "openrouter", keyLabel: "OpenRouter API key" },
   { name: "Anthropic", value: "anthropic", keyLabel: "Anthropic API key" },
   { name: "OpenAI", value: "openai", keyLabel: "OpenAI API key" },
-  { name: "Ollama (local)", value: "ollama", keyLabel: "Ollama server URL" },
+  { name: "Ollama (local)", value: "ollama", keyLabel: "Ollama API key" },
   { name: "IO Intelligence (io.net)", value: "ionet", keyLabel: "IO Intelligence API key" },
+  { name: "OpenAI-compatible server (local / gateway)", value: "openai-compatible", keyLabel: "Server API key" },
 ];
 
 export const API_KEY_ENV: Record<string, string> = {
   openrouter: "OPENROUTER_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
-  ollama: "OLLAMA_BASE_URL",
+  ollama: "OLLAMA_API_KEY",
   ionet: "IONET_API_KEY",
+  "openai-compatible": "LOCAL_MODEL_API_KEY",
 };
 
 function print(text: string) {
   console.log(text);
 }
 
-async function runConfig(name: string, dir: string): Promise<void> {
-  print("");
-  print(`  kern config — ${name}`);
-  print("");
-
+async function runConfig(dir: string): Promise<void> {
+  await migrateAgentFiles(dir);
   // Load existing config and env
   let currentConfig: Partial<KernConfig> = {};
   try {
     currentConfig = JSON.parse(await readFile(join(dir, ".kern", "config.json"), "utf-8"));
   } catch {}
+  const name = currentConfig.name || basename(dir);
 
-  let currentEnv: Record<string, string> = {};
-  try {
-    const envContent = await readFile(join(dir, ".kern", ".env"), "utf-8");
-    for (const line of envContent.split("\n")) {
-      if (line.trim() && !line.startsWith("#")) {
-        const eq = line.indexOf("=");
-        if (eq > 0) {
-          currentEnv[line.slice(0, eq)] = line.slice(eq + 1);
-        }
-      }
-    }
-  } catch {}
+  print("");
+  print(`  kern config — ${name}`);
+  print(`  ${dir}`);
+  print("");
 
-  // Provider
-  const provider = await select({
-    message: "Provider",
-    choices: PROVIDERS.map((p) => ({ name: p.name, value: p.value })),
-    default: currentConfig.provider || "openrouter",
-  });
-
-  // API key or URL
-  const providerInfo = PROVIDERS.find((p) => p.value === provider)!;
-  const envVar = API_KEY_ENV[provider];
-  const currentKey = currentEnv[envVar];
-  const maskedKey = currentKey ? `****${currentKey.slice(-4)}` : "";
-
-  let apiKey: string;
-  if (provider === "ollama") {
-    // Ollama needs a server URL, not an API key
-    apiKey = await input({
-      message: "Ollama server URL",
-      default: currentKey || "http://localhost:11434",
-    });
-  } else {
-    const apiKeyMsg = maskedKey ? `${providerInfo.keyLabel} (${maskedKey}, enter to keep)` : providerInfo.keyLabel;
-    apiKey = await password({
-      message: apiKeyMsg,
-      mask: "*",
-    });
-  }
-
-  // Model — fetch live from provider, fall back to defaults
-  const keyForFetch = !apiKey ? currentKey : apiKey;
-  const modelChoices = await getModelChoices(provider, keyForFetch || "");
-  const currentModel = currentConfig.model || modelChoices[0].value;
-  const model = await select({
-    message: "Model",
-    choices: modelChoices,
-    default: currentModel,
-  });
+  const envPath = join(dir, ".kern", ".env");
+  const currentEnv = existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {};
+  const { connection, apiKey, envVar } = await promptConnection(currentConfig, currentEnv);
+  const model = await chooseModel(connection, apiKey, currentConfig.model || "");
+  const pendingConfig = { ...configDefaults, ...configureConnection(currentConfig, connection), model };
+  const embedding = await promptEmbedding(pendingConfig, { ...currentEnv, [envVar]: apiKey });
 
   // Telegram
   const currentTgToken = currentEnv["TELEGRAM_BOT_TOKEN"];
@@ -262,97 +258,85 @@ async function runConfig(name: string, dir: string): Promise<void> {
     });
   }
 
-  // Build new config
-  const config: Partial<KernConfig> = {
+  // Build new config (keep the sticky port and any other fields as they are)
+  const config = configureConnection({
+    ...currentConfig,
     name,
     model,
-    provider,
+    embeddingModel: embedding.ref,
     toolScope: currentConfig.toolScope || "full",
-  };
-  // Build new env
-  const envLines: string[] = [];
-  const actualKey = !apiKey ? currentKey : apiKey;
-  if (actualKey) {
-    envLines.push(`${envVar}=${actualKey}`);
-  } else {
-    envLines.push(`# ${envVar}=`);
-  }
-  const actualTg = !telegramToken ? currentTgToken : telegramToken;
-  if (actualTg) {
-    envLines.push(`TELEGRAM_BOT_TOKEN=${actualTg}`);
-  } else {
-    envLines.push(`# TELEGRAM_BOT_TOKEN=`);
-  }
-  const actualSlackBot = !slackBotToken ? currentSlackBot : slackBotToken;
-  if (actualSlackBot) {
-    envLines.push(`SLACK_BOT_TOKEN=${actualSlackBot}`);
-  } else {
-    envLines.push(`# SLACK_BOT_TOKEN=`);
-  }
-  const actualSlackApp = !slackAppToken ? currentSlackApp : slackAppToken;
-  if (actualSlackApp) {
-    envLines.push(`SLACK_APP_TOKEN=${actualSlackApp}`);
-  } else {
-    envLines.push(`# SLACK_APP_TOKEN=`);
-  }
-
-  // Write
-  await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
-  await writeFile(join(dir, ".kern", ".env"), envLines.join("\n") + "\n");
+  }, connection);
+  const updates: Record<string, string> = { ...embedding.updates };
+  if (apiKey) updates[envVar] = apiKey;
+  if (telegramToken) updates.TELEGRAM_BOT_TOKEN = telegramToken;
+  if (slackBotToken) updates.SLACK_BOT_TOKEN = slackBotToken;
+  if (slackAppToken) updates.SLACK_APP_TOKEN = slackAppToken;
+  resolveConfig(config, { ...process.env, ...currentEnv, ...updates });
+  await writeFile(join(dir, ".kern", "config.json"), serializeConfig(config));
+  await saveEnvUpdates(dir, updates);
   print("");
   print("  ✓ Config updated");
 
   // Restart if running, otherwise start
-  const agent = findAgent(name);
-  if (agent) {
-    const pid = readPid(agent.path);
-    if (pid && isProcessRunning(pid)) {
-      process.kill(pid, "SIGTERM");
-      await removePidFile(agent.path);
-      print("  ✓ Stopped");
-      await new Promise((r) => setTimeout(r, 500));
-    }
+  if (await readLivePid(dir)) {
+    await stopAgent(dir);
   }
 
   print("  ✓ Starting...");
   print("");
-  await startAgent(name);
+  await startAgent(dir);
+}
+
+/**
+ * Where `kern init [path]` scaffolds: `path` as given (default `.`), or
+ * `./<name>` when a bare name is given and no such directory exists.
+ */
+export function resolveInitDir(targetArg?: string): string {
+  return resolve(targetArg ?? ".");
 }
 
 export async function runInit(targetArg?: string, flags?: Record<string, string>): Promise<void> {
-  // Check if target is an existing agent — go straight to config
-  if (targetArg && !flags) {
-    const registered = findAgent(targetArg);
-    const dir = registered ? registered.path : resolve(targetArg);
-    if (existsSync(dir) && (existsSync(join(dir, "AGENTS.md")) || existsSync(join(dir, ".kern")))) {
-      await runConfig(registered?.name || targetArg, dir);
-      return;
-    }
+  const dir = resolveInitDir(targetArg);
+
+  // Existing agent (has .kern/) — go straight to config. A directory that only
+  // has AGENTS.md is adopted by the scaffold below.
+  if (!flags && isAgentDir(dir)) {
+    await runConfig(dir);
+    return;
   }
 
   // Non-interactive mode
-  if (flags && flags["api-key"]) {
-    const name = targetArg;
-    if (!name) {
-      console.error("Usage: kern init <name> --api-key <key>");
-      process.exit(1);
-    }
+  if (flags && Object.keys(flags).length) {
+    const name = basename(dir);
 
-    const provider = flags.provider || "openrouter";
-    const apiKey = flags["api-key"];
-    let model = flags.model;
+    await migrateAgentFiles(dir);
+    const configPath = join(dir, ".kern", "config.json");
+    const previous = configureConnection<Partial<KernConfig>>(existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {}, {});
+    const envPath = join(dir, ".kern", ".env");
+    const env = { ...process.env, ...(existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {}) };
+    const provider = flags.provider || previous.provider;
+    const apiKey = flags["api-key"] || "";
+    const envVar = flags["api-key-env"] || (provider === previous.provider ? previous.apiKeyEnv : undefined) || API_KEY_ENV[provider];
+    const connection = configureConnection(previous, {
+      provider,
+      baseURL: flags["base-url"],
+      api: flags.api as "chat" | "responses" | undefined,
+      ...(apiKey || flags["api-key-env"] ? { apiKeyEnv: envVar } : {}),
+    });
+    let model = flags.model || (provider === previous.provider ? previous.model : undefined);
     if (!model) {
-      const choices = await getModelChoices(provider, apiKey);
-      model = choices[0]?.value || "anthropic/claude-opus-4.8";
+      const choices = await getModelChoices(connection, apiKey || env[envVar] || "");
+      model = choices[0]?.value || (!connection.baseURL ? DEFAULT_PROVIDER_MODELS[provider] : undefined);
+      if (!model) throw new Error("This connection requires --model with a model ID hosted by the server");
     }
-    const envVar = API_KEY_ENV[provider] || "OPENROUTER_API_KEY";
     const telegramToken = flags["telegram-token"] || "";
     const slackBotToken = flags["slack-bot-token"] || "";
     const slackAppToken = flags["slack-app-token"] || "";
-    const dir = resolve(name);
 
     await scaffoldAgent({
-      name, dir, provider, model, apiKey, envVar,
+      name, dir, provider, model, apiKey, envVar, connection,
+      embeddingModel: flags["embedding-model"] === "off" ? false : flags["embedding-model"],
+      summaryModel: flags["summary-model"],
       telegramToken, slackBotToken, slackAppToken,
     });
     return;
@@ -366,34 +350,14 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   // Agent name
   const name = await input({
     message: "Agent name",
-    default: targetArg,
+    default: basename(dir),
     required: true,
   });
 
-  const dir = resolve(targetArg || name);
-
-  // Provider
-  const provider = await select({
-    message: "Provider",
-    choices: PROVIDERS.map((p) => ({ name: p.name, value: p.value })),
-    default: "openrouter",
-  });
-
-  // API key
-  const providerInfo = PROVIDERS.find((p) => p.value === provider)!;
-  const envVar = API_KEY_ENV[provider];
-  const apiKey = await password({
-    message: providerInfo.keyLabel,
-    mask: "*",
-  });
-
-  // Model — fetch live from provider, fall back to defaults
-  const modelChoices = await getModelChoices(provider, apiKey);
-  const model = await select({
-    message: "Model",
-    choices: modelChoices,
-    default: modelChoices[0].value,
-  });
+  const { connection, apiKey, envVar } = await promptConnection({}, {});
+  const provider = connection.provider;
+  const model = await chooseModel(connection, apiKey);
+  const embedding = await promptEmbedding({ ...configDefaults, ...connection, model }, { [envVar]: apiKey });
 
   // Telegram bot token (optional)
   const telegramToken = await password({
@@ -416,12 +380,17 @@ export async function runInit(targetArg?: string, flags?: Record<string, string>
   }
 
   await scaffoldAgent({
-    name, dir, provider, model, apiKey, envVar,
+    name, dir, provider, model, apiKey, envVar, connection, embeddingModel: embedding.ref,
+    extraEnv: embedding.updates,
     telegramToken, slackBotToken, slackAppToken,
   });
 }
 
 export interface ScaffoldOpts {
+  connection?: Partial<ModelConnection>;
+  embeddingModel?: ModelRef | false;
+  summaryModel?: ModelRef;
+  extraEnv?: Record<string, string>;
   name: string;
   dir: string;
   provider: string;
@@ -431,13 +400,27 @@ export interface ScaffoldOpts {
   telegramToken: string;
   slackBotToken: string;
   slackAppToken: string;
+  matrixHomeserver?: string;
+  matrixUserId?: string;
+  matrixAccessToken?: string;
+  discordToken?: string;
+  nostrNsec?: string;
+  nostrRelays?: string;
+  ircUrl?: string;
   skipStart?: boolean;
 }
 
 export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
-  const { name, dir, provider, model, apiKey, envVar, telegramToken, slackBotToken, slackAppToken, skipStart } = opts;
+  const {
+    name, dir, provider, model, apiKey, envVar,
+    telegramToken, slackBotToken, slackAppToken,
+    matrixHomeserver, matrixUserId, matrixAccessToken,
+    discordToken, nostrNsec, nostrRelays, ircUrl,
+    skipStart,
+  } = opts;
 
   const dirExists = existsSync(dir);
+  await migrateAgentFiles(dir);
   print("");
   print(dirExists ? `  Adding kern to ${dir}/...` : `  Creating ${dir}/...`);
 
@@ -454,36 +437,27 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
   const knowledgeMd = await readFile(join(templatesDir, "KNOWLEDGE.md"), "utf-8");
   const usersMd = await readFile(join(templatesDir, "USERS.md"), "utf-8");
 
-  // .kern/config.json
-  const config: Partial<KernConfig> = {
-    name,
-    model,
-    provider,
-    toolScope: "full",
-    port: await assignPort(),
+  // .kern/config.json — no port yet: the first start assigns one from live
+  // state, so two agents scaffolded while nothing runs don't both get 4100
+  const configPath = join(dir, ".kern", "config.json");
+  const previous = existsSync(configPath) ? JSON.parse(await readFile(configPath, "utf-8")) : {};
+  const config = configureConnection({
+    ...previous, version: previous.version ?? PACKAGE_VERSION,
+    name: previous.name ?? name, model, toolScope: previous.toolScope || "full",
+    ...(opts.embeddingModel !== undefined ? { embeddingModel: opts.embeddingModel } : {}),
+    ...(opts.summaryModel !== undefined ? { summaryModel: opts.summaryModel } : {}),
+  }, { provider, ...opts.connection, ...(apiKey ? { apiKeyEnv: opts.connection?.apiKeyEnv ?? envVar } : {}) });
+  const envPath = join(dir, ".kern", ".env");
+  const env = { ...process.env, ...(existsSync(envPath) ? parseEnv(await readFile(envPath, "utf-8")) : {}), ...opts.extraEnv, ...(apiKey ? { [envVar]: apiKey } : {}) };
+  resolveConfig(config, env);
+  // .kern/.env — a fresh file lists the common secrets as commented placeholders
+  const tokens: Record<string, string | undefined> = {
+    [envVar]: apiKey, TELEGRAM_BOT_TOKEN: telegramToken, SLACK_BOT_TOKEN: slackBotToken, SLACK_APP_TOKEN: slackAppToken,
+    MATRIX_HOMESERVER: matrixHomeserver, MATRIX_USER_ID: matrixUserId, MATRIX_ACCESS_TOKEN: matrixAccessToken,
+    DISCORD_TOKEN: discordToken, NOSTR_NSEC: nostrNsec, NOSTR_RELAYS: nostrRelays, IRC_URL: ircUrl, ...opts.extraEnv,
   };
-  // .kern/.env
-  const envLines: string[] = [];
-  if (apiKey) {
-    envLines.push(`${envVar}=${apiKey}`);
-  } else {
-    envLines.push(`# ${envVar}=`);
-  }
-  if (telegramToken) {
-    envLines.push(`TELEGRAM_BOT_TOKEN=${telegramToken}`);
-  } else {
-    envLines.push(`# TELEGRAM_BOT_TOKEN=`);
-  }
-  if (slackBotToken) {
-    envLines.push(`SLACK_BOT_TOKEN=${slackBotToken}`);
-  } else {
-    envLines.push(`# SLACK_BOT_TOKEN=`);
-  }
-  if (slackAppToken) {
-    envLines.push(`SLACK_APP_TOKEN=${slackAppToken}`);
-  } else {
-    envLines.push(`# SLACK_APP_TOKEN=`);
-  }
+  const envUpdates = Object.fromEntries(Object.entries(tokens).filter((entry): entry is [string, string] => !!entry[1]));
+  const envTemplate = [envVar, "TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"].filter(key => !envUpdates[key]).map(key => `# ${key}=\n`).join("");
 
   // .gitignore
   const gitignore = `.kern/.env
@@ -491,6 +465,7 @@ export async function scaffoldAgent(opts: ScaffoldOpts): Promise<void> {
 .kern/sessions/
 .kern/media/
 .kern/logs/
+.kern/backups/
 .kern/*.db
 node_modules/
 `;
@@ -525,10 +500,10 @@ node_modules/
   }
 
   // .kern/ config always written (new agent or adopt)
-  await writeFile(join(dir, ".kern", "config.json"), JSON.stringify(config, null, 2) + "\n");
+  await writeFile(join(dir, ".kern", "config.json"), serializeConfig(config));
   print("  + .kern/config.json");
 
-  await writeFile(join(dir, ".kern", ".env"), envLines.join("\n") + "\n");
+  await saveEnvUpdates(dir, envUpdates, envTemplate);
   print("  + .kern/.env");
 
   if (!existsSync(join(dir, ".gitignore"))) {
@@ -553,20 +528,18 @@ node_modules/
     print("  ○ git repo (exists)");
   }
 
-  // Register and start
-  await registerAgent(dir);
-
   if (!skipStart) {
     print("");
     print("  ✓ Starting...");
     print("");
-    await startAgent(name);
+    await startAgent(dir);
+    const rel = relative(resolve("."), dir);
+    const here = rel === "" ? "" : ` ${rel.startsWith("..") ? dir : rel}/`;
     print("");
     print("  Next steps:");
-    print(`    \x1b[36mkern tui\x1b[0m            terminal chat`);
+    print(`    \x1b[36mkern tui${here}\x1b[0m            terminal chat`);
     print(`    \x1b[36mkern web start\x1b[0m      browser chat`);
-    print(`    \x1b[36mkern install ${name}\x1b[0m     auto-restart + boot persistence (systemd)`);
+    print(`    \x1b[36mkern status${here}\x1b[0m         agent status`);
     print("");
   }
 }
-

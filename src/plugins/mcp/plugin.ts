@@ -145,7 +145,11 @@ export const mcpPlugin: KernPlugin = {
     if (configured === 0) return {};
     const total = active.reduce((sum, s) => sum + s.tools.length, 0);
     return {
-      mcp: `${active.length}/${configured} server(s), ${total} tool(s)`,
+      mcp: {
+        connected: active.length,
+        configured,
+        tools: total,
+      },
     };
   },
 
@@ -154,28 +158,32 @@ export const mcpPlugin: KernPlugin = {
       description: "list MCP servers and their tools",
       handler: async () => {
         if (configured === 0) {
-          return "No MCP servers configured. See docs/mcp.md";
+          return "```yaml\nmcp: {}\n```";
         }
 
-        const total = active.reduce((sum, s) => sum + s.tools.length, 0);
-        const lines = [`MCP (${configured} configured, ${active.length}/${configured} connected, ${total} tools)`, ""];
-
+        const lines = ["```yaml", "mcp:"];
         for (const s of active) {
-          lines.push(`  ✦ ${s.name} — ${s.tools.length} tools`);
+          lines.push(`  ${s.name}:`);
+          lines.push("    status: connected");
+          lines.push(`    toolsCount: ${s.tools.length}`);
           if (s.tools.length > 0) {
             const TOOL_CAP = 20;
             const names = s.tools.map((t) => t.name);
             const shown = names.slice(0, TOOL_CAP);
-            const extra = names.length - shown.length;
-            const tail = extra > 0 ? `, (... ${extra} more)` : "";
-            lines.push(`      ${shown.join(", ")}${tail}`);
+            lines.push(`    tools: [${shown.join(", ")}]`);
+            if (names.length > shown.length) {
+              lines.push(`    extraTools: ${names.length - shown.length}`);
+            }
           }
         }
 
         for (const f of failed) {
-          lines.push(`  ✗ ${f.name} — ${f.reason}`);
+          lines.push(`  ${f.name}:`);
+          lines.push("    status: failed");
+          lines.push(`    error: "${f.reason.replace(/"/g, '\\"')}"`);
         }
 
+        lines.push("```");
         return lines.join("\n");
       },
     },

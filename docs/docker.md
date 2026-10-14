@@ -4,15 +4,34 @@ Run a kern agent as a Docker container. All state persists in a mounted volume.
 
 ## Quick start
 
+### 1. Initialize a new agent
+
+To scaffold a fresh agent, pass its name and API key(s). This creates the agent workspace, generates its configuration, and starts polling on your configured interfaces:
+
 ```bash
-docker run -d \
-  -v kern-data:/home/kern/agent \
-  -p 4100:4100 \
+docker run -d --restart=unless-stopped \
+  --name bob \
+  -v bob-home:/home/agent \
+  -e KERN_NAME=bob \
   -e OPENROUTER_API_KEY=sk-or-... \
+  -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-This starts an agent with default settings. The agent scaffolds itself on first run if no config exists.
+On first run, the agent writes its name and model into `workspace/.kern/config.json`, and saves your API keys into `workspace/.kern/.env`. The port comes from `KERN_PORT` (4100 in the image).
+
+### 2. Running an existing agent
+
+Once initialized, all config, conversation history, memory database, and user-installed tools (`npm install -g`, `pip install`) live permanently in the volume. If API keys and bot tokens are stored in `workspace/.kern/.env`, the container needs no environment variables at all:
+
+```bash
+docker run -d --restart=unless-stopped \
+  --name bob \
+  -v bob-home:/home/agent \
+  ghcr.io/oguzbilgic/kern-ai
+```
+
+*(Note: during initial scaffold, provider keys and all configured interface credentials — Telegram, Slack, Matrix, Discord, Nostr, IRC — are automatically saved to `workspace/.kern/.env`).*
 
 ## Environment variables
 
@@ -21,12 +40,19 @@ This starts an agent with default settings. The agent scaffolds itself on first 
 | `OPENROUTER_API_KEY` | Yes (or provider-specific key) | — |
 | `KERN_AUTH_TOKEN` | No | Auto-generated on first run |
 | `KERN_NAME` | No | `agent` (directory basename) |
-| `KERN_MODEL` | No | `anthropic/claude-opus-4.6` |
+| `KERN_MODEL` | No | `google/gemini-3.8-flash` |
 | `KERN_PROVIDER` | No | `openrouter` |
 | `KERN_PORT` | No | `4100` |
 | `TELEGRAM_BOT_TOKEN` | No | — |
 | `SLACK_BOT_TOKEN` | No | — |
 | `SLACK_APP_TOKEN` | No | — |
+| `MATRIX_HOMESERVER` | No | — |
+| `MATRIX_USER_ID` | No | — |
+| `MATRIX_ACCESS_TOKEN` | No | — |
+| `DISCORD_TOKEN` | No | — |
+| `NOSTR_NSEC` | No | — |
+| `NOSTR_RELAYS` | No | — |
+| `IRC_URL` | No | — |
 
 For other providers, pass the matching API key:
 
@@ -38,21 +64,45 @@ For other providers, pass the matching API key:
 -e KERN_PROVIDER=openai -e OPENAI_API_KEY=sk-...
 
 # Ollama
--e KERN_PROVIDER=ollama -e OLLAMA_BASE_URL=http://host:11434
+-e KERN_PROVIDER=ollama -e KERN_BASE_URL=http://host:11434/v1 -e KERN_EMBEDDING_MODEL=nomic-embed-text
 ```
 
 ## Volumes
 
-The agent stores all state in its working directory. Mount a volume to persist data across container restarts.
+Mount a volume to `/home/agent` to persist everything across container restarts:
+- **Workspace** (`/home/agent/workspace`) — agent config, sessions, knowledge, notes, dashboards
+- **Environment** — globally installed packages (`npm install -g`, `pip install`), SSH keys, shell history, dotfiles
 
-**Agent only** — persists agent config, sessions, and knowledge:
 ```bash
--v kern-data:/home/kern/agent
+-v kern-data:/home/agent
 ```
 
-**Full home** — also persists globally installed packages (`npm install -g`, `pip install`), SSH keys, and user-level config:
+If you only want to mount a local directory for the workspace without persisting user-level packages:
 ```bash
--v kern-data:/home/kern
+-v $(pwd):/home/agent/workspace
+```
+
+### Custom workspace directory
+
+By default, the container starts inside `/home/agent/workspace`. If your agent lives in a different subfolder within the mounted volume (e.g. named after the agent or repo), override the working directory with `-w` (or `working_dir` in Docker Compose):
+
+**Docker CLI:**
+```bash
+docker run -d \
+  -v kern-data:/home/agent \
+  -w /home/agent/my-agent \
+  ghcr.io/oguzbilgic/kern-ai
+```
+
+**Docker Compose:**
+```yaml
+services:
+  agent:
+    image: ghcr.io/oguzbilgic/kern-ai:latest
+    restart: unless-stopped
+    volumes:
+      - kern-data:/home/agent
+    working_dir: /home/agent/my-agent
 ```
 
 ## Pre-installed tools
@@ -63,7 +113,7 @@ Agents can install additional tools at runtime:
 - `npm install -g <package>` — installs to user space (`~/.npm-global`)
 - `pip install <package>` — installs to user space (`~/.local`)
 
-These persist across restarts when the volume is mounted at `/home/kern`.
+These persist across container recreation when `/home/agent` is mounted.
 
 ## Web UI
 
@@ -89,5 +139,5 @@ Connect to agents from the web UI sidebar:
 
 ```bash
 docker build -t kern-ai .
-docker run -d -v kern-data:/home/kern/agent -p 4100:4100 -e OPENROUTER_API_KEY=sk-or-... kern-ai
+docker run -d -v kern-data:/home/agent -p 4100:4100 -e OPENROUTER_API_KEY=sk-or-... kern-ai
 ```

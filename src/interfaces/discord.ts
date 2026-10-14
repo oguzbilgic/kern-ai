@@ -9,7 +9,7 @@ import {
 import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, hasAnsi, stripAnsi } from "../util.js";
 import { setDiscordClient } from "../plugins/discord/plugin.js";
 
 const MAX_DISCORD_MSG_LENGTH = 2000;
@@ -23,14 +23,30 @@ function mimeToType(mime: string): Attachment["type"] {
 }
 
 /**
+ * Format markdown for Discord:
+ * If a code block contains ANSI escapes, tag it with ```ansi so Discord colors it.
+ */
+export function formatForDiscord(text: string): string {
+  if (!hasAnsi(text)) return text;
+  // Replace code fences containing ANSI with ```ansi
+  return text.replace(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (match, code) => {
+    if (hasAnsi(code)) {
+      return `\`\`\`ansi\n${code}\`\`\``;
+    }
+    return match;
+  });
+}
+
+/**
  * Split text into chunks that fit Discord's 2000 character limit.
  * Tries to split on line breaks, then spaces, then hard cut.
  */
 export function chunkMessage(text: string, limit = MAX_DISCORD_MSG_LENGTH): string[] {
-  if (text.length <= limit) return [text];
+  const formatted = formatForDiscord(text);
+  if (formatted.length <= limit) return [formatted];
 
   const chunks: string[] = [];
-  let remaining = text;
+  let remaining = formatted;
 
   while (remaining.length > 0) {
     if (remaining.length <= limit) {

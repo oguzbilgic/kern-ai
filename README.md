@@ -1,151 +1,189 @@
 # kern
 
-Agents that do the work and show it.
+Coworker agents that live in your chat.
 
-Agents that run on your machine, use real tools, remember everything, and publish their own dashboards. Not chatbots — autonomous workers with one brain across every channel.
+kern runs an agent as a long-lived process with one persistent memory, reachable on Slack, Matrix, Telegram, Discord, IRC, and Nostr. Give it a job title, a container, and a bot account. It remembers what happened months ago, runs long jobs in the background, delegates research to sub-agents, and reports back in the channel where the work was asked for.
 
-![kern web UI](https://kern-ai.com/images/agent-intranet.png)
+No dashboards to host, no ports to expose. A fleet is a set of containers, each one a coworker in your workspace.
+
+![kern](https://kern-ai.com/images/agent-intranet.png)
 
 ## Why kern
 
-- **One brain, every channel** — terminal, browser, Telegram, Slack, Matrix, Nostr feed into one session. The agent knows who's talking, what channel it's in, and what happened 10,000 messages ago.
-- **Memory that compounds** — conversations segmented by topic, summarized into a hierarchy, compressed into context. Semantic recall over everything. The agent gets better the longer it runs.
-- **Agents build their own UI** — dashboards with live data, served from the agent, displayed in a side panel. Not chat — real interfaces that update themselves.
-- **Your infra, your data** — runs on your laptop, server, or homelab. The whole agent is a git-tracked folder. Pay only for API tokens — or use Ollama for fully local, zero-cost inference.
+- **One brain, every channel** — Slack, Matrix, Telegram, Discord, IRC, Nostr, and the terminal all feed one session. The agent knows who is talking, which room it is in, and what was said 10,000 messages ago.
+- **Memory like a coworker** — conversations are segmented by topic, summarized into a hierarchy, and compressed into context. Semantic recall over everything. Notes and knowledge files live in a git repo the agent maintains. It gets better the longer it runs.
+- **Does the work** — shell, files, web, PDFs, images, audio. Long commands run as background jobs and the agent keeps talking. Sub-agents fan out research in parallel. Skills and MCP servers extend what it can do.
+- **Reports back where it was asked** — a background job started from `#builds` finishes in `#builds`. A sub-agent spawned from a Telegram DM answers in that DM. No polling, no lost results.
+- **A fleet is just containers** — one image, one volume per agent, one bot account per agent. Ten agents on Slack with ten job titles is ten `docker run` lines.
+- **Your infra, your data** — runs on your laptop, server, or homelab. Pay only for API tokens, or use Ollama for local inference.
 
 kern pairs with [agent-kernel](https://github.com/oguzbilgic/agent-kernel) — the kernel defines how an agent remembers, kern runs it.
 
 ## Quick start
 
-### Docker
+Put an agent on Slack:
 
 ```bash
-# Run an agent
 docker run -d --restart=unless-stopped \
-  -p 4100:4100 \
-  -v my-agent:/home/kern/agent \
+  --name ops \
+  -v ops-home:/home/agent \
+  -e KERN_NAME=ops \
   -e OPENROUTER_API_KEY=sk-or-... \
-  -e KERN_AUTH_TOKEN=my-secret-token \
+  -e SLACK_BOT_TOKEN=xoxb-... \
+  -e SLACK_APP_TOKEN=xapp-... \
   ghcr.io/oguzbilgic/kern-ai
-
-# Run the web UI
-docker run -d -p 8080:8080 ghcr.io/oguzbilgic/kern-ai kern web run
 ```
 
-Open `http://localhost:8080`, click **Add agent**, enter `http://localhost:4100` and your token. That's it.
-
-Or skip the web UI and talk to your agent on Telegram:
+Or on Telegram:
 
 ```bash
 docker run -d --restart=unless-stopped \
-  -v my-agent:/home/kern/agent \
+  --name ops \
+  -v ops-home:/home/agent \
+  -e KERN_NAME=ops \
   -e OPENROUTER_API_KEY=sk-or-... \
   -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
   ghcr.io/oguzbilgic/kern-ai
 ```
 
-No ports, no web UI — just message your bot. First message auto-pairs you as operator.
+Message the bot. The first person to DM it is paired as its operator. Everyone else gets a `KERN-XXXX` pairing code to hand to the operator.
 
-Agent data lives in the `my-agent` volume — sessions, memory, dashboards persist across restarts. Mount `-v my-agent:/home/kern` instead to persist the entire home directory (installed packages, SSH keys, etc). Configure with env vars: `KERN_NAME`, `KERN_MODEL`, `KERN_PORT`. See [configuration docs](docs/config.md) for other providers and options.
-
-### npm
+On first run the agent saves its config and credentials into the volume. Every run after that needs no environment variables:
 
 ```bash
-npm install -g kern-ai
-kern init my-agent
-kern tui
+docker run -d --restart=unless-stopped -v ops-home:/home/agent ghcr.io/oguzbilgic/kern-ai
 ```
 
-The init wizard scaffolds your agent, asks for a provider and API key, then starts it. `kern tui` opens an interactive chat. `kern web start` serves the web UI.
+The volume holds everything: sessions, memory, notes, knowledge, and whatever the agent installs for itself (`npm install -g`, `pip install`, SSH keys, dotfiles). See [Docker docs](docs/docker.md) for every variable and provider.
 
-For automation: `kern init my-agent --api-key sk-or-...` (no prompts, defaults to openrouter + opus 4.6). For Ollama: `kern init my-agent --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
+## Running a team
 
-## Dashboards
+Each agent is a directory with a `.kern/` folder, so each agent is a container with its own volume and bot account. Name them after the job:
 
-![Agent dashboards](https://kern-ai.com/images/dashboards.png)
+```yaml
+services:
+  ops:
+    image: ghcr.io/oguzbilgic/kern-ai
+    restart: unless-stopped
+    volumes: ["ops-home:/home/agent"]
+    environment:
+      KERN_NAME: ops
+      OPENROUTER_API_KEY: sk-or-...
+      SLACK_BOT_TOKEN: xoxb-...
+      SLACK_APP_TOKEN: xapp-...
 
-Agents create and maintain their own dashboards — HTML pages with live data, served from the agent and displayed in the web UI side panel. Not chat transcripts. Real interfaces that update themselves.
+  research:
+    image: ghcr.io/oguzbilgic/kern-ai
+    restart: unless-stopped
+    volumes: ["research-home:/home/agent"]
+    environment:
+      KERN_NAME: research
+      OPENROUTER_API_KEY: sk-or-...
+      SLACK_BOT_TOKEN: xoxb-...
+      SLACK_APP_TOKEN: xapp-...
+
+volumes:
+  ops-home:
+  research-home:
+```
+
+Docker owns the process lifecycle. Restarts, logs, and resource limits are Docker's job, not kern's. Agents in the same workspace can see each other in shared channels and are told to keep quiet unless addressed, so they do not talk in loops.
+
+## Working in chat
+
+**Background jobs.** Long commands run detached and the agent keeps working. When the job ends, its exit code and output tail arrive in the conversation that started it, and the agent's reply goes back there.
 
 ```
-dashboards/homelab/
-  index.html       # visualization
-  data.json        # structured data (injected as window.__KERN_DATA__)
+[via slack, #builds, user: U04ABC, time: 2026-09-22T15:04:05-07:00]
+[job:job_a1b2c3d4 exited 0, 42s] npm test
 ```
 
-The agent writes `data.json`, creates the HTML, then calls `render({ dashboard: "homelab" })` to display it. Dashboards appear in the sidebar and can be switched from the panel header.
+Opt in to `remindEvery` and the agent gets a periodic nudge so it can tail or kill a job that has stalled. `/jobs` lists them.
 
-[Dashboards docs](docs/dashboards.md) · [Blog: Why every agent needs a dashboard](https://kern-ai.com/blog/agent-dashboards)
+**Sub-agents.** `spawn` hands a bounded, read-only task to a child that runs its own loop. Results announce back into the originating chat. Run several in parallel and synthesize as they land. A cheaper `subAgentModel` keeps fan-out affordable.
+
+**Heartbeat.** On a schedule the agent wakes up, reviews its notes, updates its knowledge files, and messages the operator if something needs attention.
+
+**Chat commands.** `/status`, `/wyd` (what are you doing right now), `/jobs`, `/subagents`, `/skills`, `/mcp`, `/plugins`, `/restart`, `/help`. Prefix with `!` on networks that reserve `/`. See [chat commands](docs/chat-commands.md).
+
+**Platform tools.** The agent can read channel history, react, pin, list rooms, and manage its own presence on Slack, Matrix, Telegram, Discord, and IRC. It can register its own IRC nick or Nostr identity using bundled skills.
+
+**Voice.** Send a voice note and the agent transcribes it. Reply comes back as a voice note.
 
 ## Memory
 
-![Memory UI — Segments](https://kern-ai.com/images/segments-2.png)
+Conversations are automatically segmented by topic, summarized, and rolled up into a hierarchy (L0 → L1 → L2). When old messages fall out of context, compressed summaries take their place, so the agent sees its full history at decreasing resolution. Semantic recall searches everything.
 
-Conversations are automatically segmented by topic, summarized, and rolled up into a hierarchy (L0 → L1 → L2). When old messages are trimmed from context, compressed summaries take their place — the agent sees its full history at decreasing resolution. Semantic recall searches everything.
+Alongside that, the agent keeps plain text in a git repo it maintains itself:
 
-The web UI includes a Memory overlay with five tabs for inspecting sessions, segments, notes, recall, and the full context pipeline with token breakdowns.
+- `knowledge/` — mutable facts about how things are right now
+- `notes/` — append-only daily logs of what happened and what was decided
+- `USERS.md` — who it has met, on which channel, and what they are allowed to see
 
-[Memory docs](docs/memory.md) · [Blog: Lossless context management](https://kern-ai.com/blog/lossless-context-management) · [Blog: See inside your agent's brain](https://kern-ai.com/blog/memory-ui)
+The latest daily note and a rolling summary of the last five are injected on every message. The agent boots already knowing what happened recently.
 
-## One session
+Offline health and repair scripts (`recall-health`, `segment-health`, `segment-prune`, `recall-repair`) keep the memory database honest on long-running agents.
 
-```
-Terminal ─────┐
-Web UI ───────┤
-Telegram ─────┤── one session
-Slack ────────┤
-Matrix ───────┤
-Nostr ────────┘
-```
-
-Every interface feeds into the same session. Message from Telegram, pick up in the terminal, continue in the browser. Each message carries metadata — who said it, which channel, when — so the agent connects context across all of them without losing track.
-
-The agent reads and writes its own memory files through tools — takes notes, updates knowledge, commits to git. The next time you talk to it, from any interface, it picks up exactly where it left off.
-
-[Blog: Why your agent needs one session](https://kern-ai.com/blog/why-your-agent-needs-one-session)
-
-## CLI
-
-```bash
-kern init <name>          # create or configure an agent
-kern start [name|path]    # start agents in background
-kern stop [name]          # stop agents
-kern restart [name]       # restart agents
-kern install [name|--web|--proxy] # install systemd services
-kern tui [name]           # interactive chat
-kern web <run|start|stop> # static web UI server
-kern proxy <start|stop|token>  # authenticated reverse proxy
-kern logs [name]          # follow agent logs
-kern list                 # show all agents and services
-kern backup <name>        # backup agent to .tar.gz
-```
-
-### Connecting
-
-Agents bind to `0.0.0.0` on sticky ports (4100-4999), accessible over Tailscale or LAN. The web UI connects directly — enter the agent's URL and `KERN_AUTH_TOKEN` in the sidebar.
-
-Optionally, `kern proxy start` launches an authenticated reverse proxy that discovers and forwards to local agents.
-
-### Slash commands
-
-```
-/status     # agent status, model, uptime, session size
-/restart    # restart the agent daemon
-/help       # list available commands
-```
+[Memory docs](docs/memory.md) · [Context & segments](docs/context.md) · [Blog: Lossless context management](https://kern-ai.com/blog/lossless-context-management)
 
 ## Interfaces
 
 | Interface | Setup |
 |-----------|-------|
-| **Terminal** | `kern tui` — interactive chat |
-| **Web UI** | `kern web start` — browser at port 8080 |
-| **Telegram** | Set `TELEGRAM_BOT_TOKEN` in `.kern/.env` |
-| **Slack** | Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.kern/.env` |
-| **Matrix** | Set `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` in `.kern/.env` |
-| **Nostr** | Set `NOSTR_NSEC` in `.kern/.env` — DM the agent's npub from any Nostr client |
-| **Desktop** | macOS app via Tauri ([releases](https://github.com/oguzbilgic/kern-ai/releases)) |
+| **Slack** | `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` |
+| **Matrix** | `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` |
+| **Telegram** | `TELEGRAM_BOT_TOKEN` |
+| **Discord** | `DISCORD_TOKEN` |
+| **IRC** | `IRC_URL` (`ircs://nick:pass@host:6697/#channel`) |
+| **Nostr** | `NOSTR_NSEC` — DM the agent's npub from any Nostr client |
+| **Terminal** | `kern tui` |
 
-First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair with `KERN-XXXX` codes.
+Set these in `.kern/.env` or pass them as environment variables to the container. All of them feed the same session: ask on Telegram, follow up in Slack, and the agent remembers both.
+
+```
+Slack ────────┐
+Matrix ───────┤
+Telegram ─────┤── one session
+Discord ──────┤
+IRC ──────────┤
+Nostr ────────┘
+```
+
+Every message carries an envelope (`[via slack, #ops, user: U04ABC, time: ...]`) so the agent knows who is talking and where. DMs are gated by pairing. Shared rooms are open, and the agent stays quiet unless addressed.
+
+[Interfaces docs](docs/interfaces.md) · [Pairing](docs/pairing.md) · [Blog: Why your agent needs one session](https://kern-ai.com/blog/why-your-agent-needs-one-session)
+
+## Sharing artifacts
+
+Agents that live in chat do not need a public port. They share files through the channel's own upload, and larger artifacts (reports, tables, live pages) through a paste or hosting service. Matrix agents can pin a hosted page as a room widget.
+
+If you do want a browser, `kern web` serves a UI with a memory inspector and agent-served dashboards. Reach the agent's port through a tunnel or LAN. See [Dashboards](docs/dashboards.md) and [Clients](docs/clients.md).
+
+## Local development
+
+```bash
+npm install -g kern-ai
+kern init my-agent/
+kern tui my-agent/
+```
+
+An agent is a directory containing `.kern/`. Every command takes an optional `[path]`, defaulting to the current directory.
+
+```bash
+kern init [path]          # create or configure an agent
+kern start [path]         # start the agent in the background
+kern stop [path]          # stop the agent
+kern restart [path]       # restart the agent
+kern status [path]        # show the agent status
+kern tui [path]           # interactive chat
+kern logs [path]          # follow agent logs
+kern backup [path]        # backup agent to .tar.gz
+kern scripts <name>       # offline memory diagnostics and repair
+```
+
+Non-interactive: `kern init my-agent/ --api-key sk-or-...`. Ollama: `kern init my-agent/ --provider ollama --api-key http://localhost:11434 --model gemma4:31b`.
+
+[CLI docs](docs/cli.md) · [Get started](docs/get-started.md)
 
 ## Configuration
 
@@ -153,9 +191,10 @@ First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair w
 
 ```json
 {
-  "model": "anthropic/claude-opus-4.6",
+  "model": "google/gemini-3.8-flash",
   "provider": "openrouter",
   "toolScope": "full",
+  "heartbeatInterval": 60,
   "maxContextTokens": 100000,
   "summaryBudget": 0.75
 }
@@ -163,9 +202,11 @@ First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair w
 
 ### Tool scopes
 
-- **full** — shell, read, write, edit, glob, grep, webfetch, websearch, kern, message, recall, pdf, image, render
+- **full** — shell and background jobs, read, write, edit, glob, grep, webfetch, websearch, pdf, image, audio, kern, message
 - **write** — everything except shell
 - **read** — read-only tools
+
+Plugins add their own tools on top: recall, spawn and subagents, render, MCP servers, and the platform tools for Slack, Matrix, Telegram, Discord, and IRC.
 
 ### Providers
 
@@ -173,11 +214,12 @@ First Telegram/Slack/Matrix/Nostr user is auto-paired as operator. Others pair w
 |----------|-------------|
 | **openrouter** | Any model via OpenRouter (default) |
 | **anthropic** | Direct Anthropic API |
-| **openai** | OpenAI / Azure |
+| **openai** | Native OpenAI; optional explicit `baseURL` / API selection |
+| **openai-compatible** | Local servers or gateways with explicit `baseURL` and optional authentication |
 | **ollama** | Local models via [Ollama](https://ollama.com) |
 | **ionet** | [IO Intelligence](https://io.net) by io.net |
 
-Set `model` for chat and optionally `mediaModel` for image vision. Embedding and summary models are chosen automatically per provider — see [docs/config.md](docs/config.md#providers).
+Set `model` for chat. `embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, and `audioModel` accept a model ID on the main connection or an object with its own provider, endpoint, and credential variable. See [docs/config.md](docs/config.md).
 
 ## Documentation
 
@@ -185,24 +227,29 @@ Set `model` for chat and optionally `mediaModel` for image vision. Embedding and
 - [Get started](docs/get-started.md)
 - [Configuration](docs/config.md)
 - [Architecture](docs/architecture.md)
+- [Interfaces](docs/interfaces.md)
+- [Pairing](docs/pairing.md)
 - [Memory](docs/memory.md)
-- [Dashboards](docs/dashboards.md)
 - [Context & segments](docs/context.md)
-- [Prompt caching](docs/caching.md)
-- [Skills](docs/skills.md)
+- [Tools](docs/tools.md)
 - [Sub-agents](docs/subagents.md)
+- [Skills](docs/skills.md)
 - [MCP](docs/mcp.md)
 - [Media](docs/media.md)
-- [Tools](docs/tools.md)
-- [Interfaces](docs/interfaces.md)
-- [CLI commands](docs/commands.md)
-- [Pairing](docs/pairing.md)
+- [Chat commands](docs/chat-commands.md)
+- [CLI commands](docs/cli.md)
+- [Offline scripts](docs/scripts.md)
+- [Prompt caching](docs/caching.md)
+- [Dashboards](docs/dashboards.md)
+- [Clients](docs/clients.md)
 
 ## Built with
 
 - [Vercel AI SDK](https://sdk.vercel.ai) — model-agnostic AI layer
-- [grammY](https://grammy.dev) — Telegram bot framework
-- [@slack/bolt](https://slack.dev/bolt-js) — Slack bot framework
+- [grammY](https://grammy.dev) — Telegram
+- [@slack/bolt](https://slack.dev/bolt-js) — Slack
+- [discord.js](https://discord.js.org) — Discord
+- [nostr-tools](https://github.com/nbd-wtf/nostr-tools) — Nostr
 - [agent-kernel](https://github.com/oguzbilgic/agent-kernel) — the memory pattern
 
 ## License

@@ -58,11 +58,18 @@ Sub-agents run concurrently with the parent and with each other. The parent's tu
 
 ### Announces
 
-When a sub-agent finishes, its final answer is enqueued as a new message turn on a `subagent:<id>` channel. On success, the body is just the child's final answer — the standard `[via subagent, subagent:<id>, user: subagent, time: ...]` envelope identifies the source, no other header is added. On `failed`, a `[subagent:<id> failed, 12s]` style header precedes the error message so the parent can see the outcome. On `cancelled`, only the `[subagent:<id> cancelled, 12s]` header is emitted — no body.
+When a sub-agent finishes, its result is delivered back to the conversation that spawned it, the same way [background job](tools.md#background-jobs) completions are. The `spawn` tool captures the origin of the turn it runs in (interface, channel, chat ID, user), and the completion is enqueued as a new turn stamped with that origin's envelope — `[via telegram, telegram:123, user: 812345, time: ...]`, not a synthetic `subagent` interface. Because the turn arrives under the requester's envelope, the body always starts with a header identifying the source:
 
-From the parent's perspective, this looks like any other incoming message — it will be picked up after the current turn (or mid-turn if the parent is still running).
+```
+[subagent:sa_a1b2c3d4 done, 42s]
+<child's final answer>
+```
 
-The web UI renders these with a distinct orange ⎘ avatar so you can tell them apart from user messages.
+On `failed`, the header reads `[subagent:<id> failed, 12s]` and the error message follows. On `cancelled`, only the `[subagent:<id> cancelled, 12s]` header is emitted — no body.
+
+From the parent's perspective, this looks like a message from that conversation. If the conversation's turn is still running, the result is folded into it mid-turn (same-channel injection), so the parent can synthesize results as they arrive; otherwise it runs as its own turn. Either way the agent's reply is delivered to the origin chat — Telegram, Slack, Matrix, Discord, Nostr, IRC — without the agent having to call `message`. Web and TUI clients receive it over SSE as usual. Completions from turns that came from the CLI or a heartbeat still arrive as messages, but the reply has no chat to go to; the `spawn` tool says so, and the agent should use `message` if a person needs the result.
+
+The origin is shown by `subagents({ action: "status" })` and by `/subagents`.
 
 ### Allowed tools
 

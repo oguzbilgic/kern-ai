@@ -3,14 +3,15 @@ import { App as SlackApp } from "@slack/bolt";
 import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, stripAnsi } from "../util.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
-function mdToSlack(text: string): string {
-  let s = text;
-  // Code blocks — leave as-is, Slack supports ```
+export function mdToSlack(text: string): string {
+  let s = stripAnsi(text);
+  // Code blocks — strip language tag so Slack mrkdwn doesn't render it as literal text
+  s = s.replace(/```[a-zA-Z0-9_-]+\n/g, "```\n");
   // Bold: **text** → *text*
   s = s.replace(/\*\*(.+?)\*\*/g, "*$1*");
   // Italic: *text* → _text_ (but not inside bold)
@@ -128,13 +129,15 @@ export class SlackInterface implements Interface {
 
       log("slack", `message from ${userId} in ${channelId}: ${(text || "[media]").slice(0, 50)}${attachments.length ? ` +${attachments.length} file(s)` : ""}`);
 
-      // Determine if DM or channel
-      let channelName = channelId;
-      let isDM = false;
+      // Determine if DM or channel. channel_type comes on every message event,
+      // so a failed conversations.info lookup can't misclassify a DM as a
+      // channel (which would skip the pairing check below).
+      let isDM = message.channel_type === "im";
+      let channelName = isDM ? `slack-dm:${userId}` : channelId;
       try {
         const info = await client.conversations.info({ channel: channelId });
         if (info.channel) {
-          isDM = info.channel.is_im || false;
+          isDM = isDM || info.channel.is_im || false;
           channelName = isDM ? `slack-dm:${userId}` : `#${info.channel.name || channelId}`;
         }
       } catch {}
@@ -160,8 +163,10 @@ export class SlackInterface implements Interface {
       // If mentioned with no text, use "hello" as default
       if (!cleanText && isMentioned && attachments.length === 0) cleanText = "(mentioned with no message)";
 
-      // Build channel label
-      const channelLabel = isDM ? `slack-dm` : channelName;
+      // Channel label must be unique per conversation — the queue uses it to
+      // decide mid-turn injection, so a shared DM label would splice one
+      // user's DM into another user's turn (#413).
+      const channelLabel = channelName;
 
       try {
         const response = await onMessage(
@@ -222,7 +227,7 @@ export class SlackInterface implements Interface {
     try {
       await this.app.client.chat.postMessage({
         channel: channelId,
-        text,
+        text: stripAnsi(text),
       });
       return true;
     } catch {

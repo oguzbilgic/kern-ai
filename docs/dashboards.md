@@ -149,4 +149,4 @@ Dashboards are served by the agent's HTTP server:
 | `GET /d/<name>/` | Serve `index.html` with `data.json` injected |
 | `GET /d/<name>/<file>` | Serve other static files from the dashboard folder |
 
-All endpoints require agent auth (`KERN_AUTH_TOKEN`). The web UI proxy handles token injection automatically.
+All endpoints require agent auth (`KERN_AUTH_TOKEN`). The web UI sends the token it was given for the agent.

@@ -1,128 +1,95 @@
-import { loadRegistry, readAgentInfo, isProcessRunning } from "./registry.js";
-import { getServiceStatus, getWebServiceStatus } from "./install.js";
-import { loadGlobalConfig } from "./global-config.js";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
-import { join, basename } from "path";
+import { join, resolve } from "path";
 import { homedir } from "os";
+import { isAgentDir, readAgentInfo, readLivePid } from "./agent-dir.js";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
+const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 
-export async function showStatus(): Promise<void> {
-  const paths = await loadRegistry();
+function formatUptime(seconds: number): string {
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+/** Ask the running agent for its uptime via the unauthenticated /health endpoint. */
+async function fetchUptime(port: number): Promise<string | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) });
+    if (!res.ok) return null;
+    const body: any = await res.json();
+    return typeof body.uptime === "number" ? formatUptime(body.uptime) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One-time courtesy for users upgrading from the registry: if the old
+ * ~/.kern/config.json still lists agents, print them as a hint.
+ */
+async function legacyRegistryHint(): Promise<string[]> {
+  const file = join(homedir(), ".kern", "config.json");
+  if (!existsSync(file)) return [];
+  try {
+    const parsed = JSON.parse(await readFile(file, "utf-8"));
+    return Array.isArray(parsed.agents) ? parsed.agents.filter((p: unknown) => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Print a single status card for the agent in `[path]` (default `.`). */
+export async function showStatus(pathArg?: string): Promise<void> {
   const w = (s: string) => process.stdout.write(s + "\n");
+  const agentDir = resolve(pathArg ?? ".");
 
-  w("");
-  w(`  ${bold("kern agents")}`);
-  w("");
-
-  if (paths.length === 0) {
-    w(`  ${dim("No agents registered. Run")} kern init <name> ${dim("to create one.")}`);
+  if (!isAgentDir(agentDir)) {
+    w("");
+    w(`  ${dim("No agent in")} ${agentDir} ${dim("(no .kern/ directory).")}`);
+    w(`  ${dim("Run")} kern init ${dim("here, or")} kern status <path> ${dim("for an agent elsewhere.")}`);
+    const legacy = await legacyRegistryHint();
+    if (legacy.length > 0) {
+      w("");
+      w(`  ${yellow("agents are now directories; previously registered:")}`);
+      for (const p of legacy) w(`    ${p}`);
+      w(`  ${dim("~/.kern/config.json is no longer read. You can delete it.")}`);
+    }
     w("");
     return;
   }
 
-  let hasUninstalled = false;
-  for (const agentPath of paths) {
-    const exists = existsSync(agentPath);
-    const info = exists ? readAgentInfo(agentPath) : null;
-    const name = info?.name || basename(agentPath);
-    const running = info?.pid ? isProcessRunning(info.pid) : false;
+  const info = readAgentInfo(agentDir)!;
+  const pid = await readLivePid(agentDir);
+  const running = pid !== null;
 
-    // Read config
-    let model = "";
-    let provider = "";
-    let toolScope = "";
-    let configPort = 0;
-    const configPath = join(agentPath, ".kern", "config.json");
-    if (exists && existsSync(configPath)) {
-      try {
-        const config = JSON.parse(await readFile(configPath, "utf-8"));
-        model = config.model || "";
-        provider = config.provider || "";
-        toolScope = config.toolScope || "";
-        configPort = config.port || 0;
-      } catch {}
-    }
+  let model = "";
+  let provider = "";
+  let toolScope = "";
+  try {
+    const config = JSON.parse(await readFile(join(agentDir, ".kern", "config.json"), "utf-8"));
+    model = config.model || "";
+    provider = config.provider || "";
+    toolScope = config.toolScope || "";
+  } catch {}
 
-    const installStatus = getServiceStatus(name);
-    const active = installStatus === "active" || running;
-    const dot = !exists ? red("●") : active ? green("●") : dim("●");
-    const nameStr = bold(name);
-    const modelStr = provider && model ? dim(`${provider}/${model}`) : dim("no config");
-    const port = info?.port || configPort;
-    const portStr = port ? `:${port}` : "";
-    const pidStr = info?.pid && (running || installStatus === "active") ? `pid ${info.pid}` : "";
-    const details = [pidStr, portStr].filter(Boolean).join(", ");
-    const statusStr = !exists
-      ? red("not found")
-      : active
-        ? green("running") + (details ? dim(` (${details})`) : "")
-        : dim("stopped");
-    const mode = installStatus ? "systemd" : running ? "daemon" : "—";
-    if (!installStatus) hasUninstalled = true;
+  const uptime = running && info.port ? await fetchUptime(info.port) : null;
 
-    w(`  ${dot} ${nameStr}  ${modelStr}  ${statusStr}`);
-    w(`    ${dim("path:")}  ${agentPath}`);
-    w(`    ${dim("tools:")} ${toolScope || "—"}  ${dim("mode:")} ${mode}`);
-    w("");
-  }
+  const dot = running ? green("●") : dim("●");
+  const modelStr = provider && model ? dim(`${provider}/${model}`) : dim("no config");
+  const statusStr = running ? green("running") : dim("stopped");
 
-  // Web status
-  const config = await loadGlobalConfig();
-  const webInstall = getWebServiceStatus();
-  const pidFile = join(homedir(), ".kern", "web.pid");
-  let webPid: number | null = null;
-  let webRunning = false;
-  if (existsSync(pidFile)) {
-    try {
-      webPid = parseInt(await readFile(pidFile, "utf-8"), 10);
-      webRunning = !!webPid && isProcessRunning(webPid);
-    } catch {}
-  }
-  if (!webRunning) webRunning = webInstall === "active";
-  const webDot = webRunning ? green("●") : dim("●");
-  const webStatus = webRunning
-    ? green("running") + dim(` (:${config.web_port})`)
-    : dim("stopped");
-  const webMode = webInstall ? "systemd" : webRunning ? "daemon" : "—";
-
-  // Proxy status
-  const { getProxyServiceStatus } = await import("./install.js");
-  const proxyInstall = getProxyServiceStatus();
-  const proxyPidFile = join(homedir(), ".kern", "proxy.pid");
-  let proxyPid: number | null = null;
-  let proxyRunning = false;
-  if (existsSync(proxyPidFile)) {
-    try {
-      proxyPid = parseInt(await readFile(proxyPidFile, "utf-8"), 10);
-      proxyRunning = !!proxyPid && isProcessRunning(proxyPid);
-    } catch {}
-  }
-  if (!proxyRunning) proxyRunning = proxyInstall === "active";
-  const proxyDot = proxyRunning ? green("●") : dim("●");
-  const proxyStatusStr = proxyRunning
-    ? green("running") + dim(` (:${config.proxy_port})`)
-    : dim("stopped");
-  const proxyMode = proxyInstall ? "systemd" : proxyRunning ? "daemon" : "—";
-
-  w(`  ${bold("kern services")}`);
   w("");
-  w(`  ${webDot} ${bold("web")}    ${webStatus}`);
-  w(`    ${dim("mode:")} ${webMode}`);
-  w(`  ${proxyDot} ${bold("proxy")}  ${proxyStatusStr}`);
-  w(`    ${dim("mode:")} ${proxyMode}`);
+  w(`  ${dot} ${bold(info.name)}  ${modelStr}  ${statusStr}`);
+  w(`    ${dim("path:")}   ${agentDir}`);
+  w(`    ${dim("port:")}   ${info.port ? `:${info.port}` : "—"}  ${dim("pid:")} ${pid ?? "—"}  ${dim("uptime:")} ${uptime ?? "—"}`);
+  w(`    ${dim("tools:")}  ${toolScope || "—"}  ${dim("mode:")} ${running ? "daemon" : "—"}`);
   w("");
-
-  if (hasUninstalled) {
-    try {
-      const { execSync } = await import("child_process");
-      execSync("which systemctl", { stdio: "ignore" });
-      w(`  ${dim("tip: 'kern install' enables auto-restart and boot persistence")}`);
-      w("");
-    } catch {}
-  }
 }

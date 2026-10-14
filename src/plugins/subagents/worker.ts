@@ -109,7 +109,7 @@ export async function runSubAgent(opts: RunOptions): Promise<string> {
   for await (const part of result.fullStream) {
     if (signal.aborted) break;
     if (part.type === "text-delta") {
-      const text = ("delta" in part ? part.delta : (part as any).text) || "";
+      const text = part.text;
       fullText += text;
     } else if (part.type === "tool-call") {
       onToolCall?.();

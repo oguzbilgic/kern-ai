@@ -1,0 +1,159 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { createServer, type Server } from "net";
+import {
+  isAgentDir,
+  resolveAgentDir,
+  AgentDirError,
+  assignPort,
+  writePidFile,
+  readPid,
+  readLivePid,
+  removePidFile,
+  restartArgv,
+  portInUseMessage,
+  waitForExit,
+} from "../src/agent-dir.js";
+import { parseWebFlags } from "../src/web-daemon.js";
+
+function tmp(): string {
+  return mkdtempSync(join(tmpdir(), "kern-agent-dir-"));
+}
+
+function listen(port: number): Promise<Server | null> {
+  return new Promise((resolve) => {
+    const srv = createServer();
+    srv.once("error", () => resolve(null));
+    srv.listen(port, "0.0.0.0", () => resolve(srv));
+  });
+}
+
+function close(srv: Server | null): Promise<void> {
+  return new Promise((resolve) => (srv ? srv.close(() => resolve()) : resolve()));
+}
+
+test("isAgentDir / resolveAgentDir accept .kern/ and reject AGENTS.md-only", () => {
+  const dir = tmp();
+  try {
+    // Empty directory
+    assert.equal(isAgentDir(dir), false);
+    assert.throws(() => resolveAgentDir(dir), AgentDirError);
+    assert.throws(() => resolveAgentDir(dir), {
+      name: "AgentDirError",
+      message: `no agent in ${dir} (no .kern/ directory). Run 'kern init' there first.`,
+    });
+
+    // AGENTS.md alone is not an agent
+    writeFileSync(join(dir, "AGENTS.md"), "# agent\n");
+    assert.equal(isAgentDir(dir), false);
+    assert.throws(() => resolveAgentDir(dir), AgentDirError);
+
+    // .kern/ makes it one
+    mkdirSync(join(dir, ".kern"));
+    assert.equal(isAgentDir(dir), true);
+    assert.equal(resolveAgentDir(dir), dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveAgentDir defaults to the current directory", () => {
+  const dir = tmp();
+  const prev = process.cwd();
+  try {
+    mkdirSync(join(dir, ".kern"));
+    process.chdir(dir);
+    // realpath may differ from the tmp path on macOS, so compare through resolve
+    assert.equal(isAgentDir(resolveAgentDir()), true);
+    assert.equal(isAgentDir(resolveAgentDir(".")), true);
+  } finally {
+    process.chdir(prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("assignPort skips a port held open and returns a later one", async () => {
+  const held = await listen(4100);
+  try {
+    const port = await assignPort();
+    assert.notEqual(port, 4100);
+    assert.ok(port > 4100 && port <= 4999, `expected a port after 4100, got ${port}`);
+  } finally {
+    await close(held);
+  }
+});
+
+test("PID helpers round-trip and clear a stale PID", async () => {
+  const dir = tmp();
+  try {
+    assert.equal(readPid(dir), null);
+
+    await writePidFile(dir, process.pid);
+    assert.equal(readPid(dir), process.pid);
+    assert.equal(await readLivePid(dir), process.pid);
+
+    await removePidFile(dir);
+    assert.equal(readPid(dir), null);
+
+    // A PID nothing owns is cleared by readLivePid
+    writeFileSync(join(dir, ".kern", "agent.pid"), "999999999");
+    assert.equal(readPid(dir), 999999999);
+    assert.equal(await readLivePid(dir), null);
+    assert.equal(existsSync(join(dir, ".kern", "agent.pid")), false);
+
+    // Garbage is null
+    writeFileSync(join(dir, ".kern", "agent.pid"), "not-a-pid");
+    assert.equal(readPid(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("removePidFile with a PID only removes a file that still names it", async () => {
+  const dir = tmp();
+  try {
+    await writePidFile(dir, 1234);
+    await removePidFile(dir, 5678);
+    assert.equal(readPid(dir), 1234, "another process's PID file is left alone");
+    await removePidFile(dir, 1234);
+    assert.equal(readPid(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("waitForExit resolves once the process is gone and times out while it lives", async () => {
+  assert.equal(await waitForExit(999999999, 200), true);
+  assert.equal(await waitForExit(process.pid, 150, 20), false);
+});
+
+test("restartArgv uses the running node binary and the package entry point", () => {
+  const argv = restartArgv("/home/me/alice");
+  assert.equal(argv.length, 4);
+  assert.equal(argv[0], process.execPath);
+  assert.match(argv[1], /[\\/]index\.js$/);
+  assert.equal(argv[2], "restart");
+  assert.equal(argv[3], "/home/me/alice");
+});
+
+test("parseWebFlags defaults, accepts --port/--host, rejects --port 0", () => {
+  assert.deepEqual(parseWebFlags([]), { port: 8080, host: "0.0.0.0" });
+  assert.deepEqual(parseWebFlags(["--port", "9090"]), { port: 9090, host: "0.0.0.0" });
+  assert.deepEqual(parseWebFlags(["--host", "127.0.0.1"]), { port: 8080, host: "127.0.0.1" });
+  assert.deepEqual(parseWebFlags(["--port=3000", "--host=::"]), { port: 3000, host: "::" });
+  assert.deepEqual(parseWebFlags(["run", "--port", "8081"]), { port: 8081, host: "0.0.0.0" });
+  assert.throws(() => parseWebFlags(["--port", "0"]), /invalid --port 0/);
+  assert.throws(() => parseWebFlags(["--port", "abc"]), /invalid --port abc/);
+  assert.throws(() => parseWebFlags(["--port"]), /invalid --port/);
+  assert.throws(() => parseWebFlags(["--host"]), /--host requires a value/);
+});
+
+test("portInUseMessage names the port and the config field", () => {
+  assert.equal(
+    portInUseMessage(4100),
+    'port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.',
+  );
+});

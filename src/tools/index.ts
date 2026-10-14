@@ -1,4 +1,3 @@
-import { bashTool } from "./bash.js";
 import { pwshTool } from "./pwsh.js";
 import { readTool } from "./read.js";
 import { writeTool } from "./write.js";
@@ -16,8 +15,9 @@ import { messageTool } from "./message.js";
 const isWindows = process.platform === "win32";
 
 export const allTools = {
-  // Platform-specific shell tool — one per platform
-  ...(isWindows ? { pwsh: pwshTool } : { bash: bashTool }),
+  // Windows shell. On Unix/Linux the shell plugin provides `bash` instead
+  // (src/plugins/shell/) so it can own background execution.
+  ...(isWindows ? { pwsh: pwshTool } : {}),
   read: readTool,
   write: writeTool,
   edit: editTool,

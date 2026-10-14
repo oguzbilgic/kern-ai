@@ -3,7 +3,143 @@
 ## next
 
 ### Features
-- **IO Intelligence (io.net) provider** — set `provider` to `ionet` and `IONET_API_KEY` in `.kern/.env` to route chat to io.net's IO Intelligence endpoint (`https://api.intelligence.io.solutions/api/v1`, OpenAI-compatible Chat Completions API). Model IDs are Hugging Face-style org/name (e.g. `meta-llama/Llama-3.3-70B-Instruct`, list at `GET /models`). IO Intelligence serves no embeddings — recall and segments stay off on `ionet` agents instead of failing per call. Set `IONET_BASE_URL` to route through a compatible gateway (default: `https://api.intelligence.io.solutions/api/v1`).
+- **IO Intelligence (io.net) provider** — `"provider": "ionet"` with `IONET_API_KEY` in `.kern/.env` routes chat to io.net's OpenAI-compatible Chat Completions endpoint (`https://api.intelligence.io.solutions/api/v1`), selectable in `kern init` with live model discovery. Model IDs are Hugging Face-style `org/name`, such as `meta-llama/Llama-3.3-70B-Instruct`. Summaries reuse the agent's chat model; IO Intelligence serves no embeddings, so recall and semantic segments need an `embeddingModel` on another connection.
+
+## v0.44.0 (2026-10-07)
+
+### Breaking
+- **Model connections are configured in `config.json`** ([#437](https://github.com/oguzbilgic/kern-ai/issues/437)) — `provider` plus optional `baseURL`, `apiKeyEnv`, `auth: "none"`, and `api` describe the main connection. `embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, and `audioModel` take a model ID on that connection or an object with its own connection fields. `embeddingModel: false` turns off embedding-based memory. New `openai-compatible` provider for local servers and gateways. See [docs/config.md](docs/config.md#connections-and-model-references).
+- **`OPENAI_BASE_URL` and `OLLAMA_BASE_URL` are no longer read at runtime** — they are converted into `baseURL` once (see upgrade notes below). Model IDs are opaque: a slash in `summaryModel` no longer routes it through OpenRouter. Use `{ "provider": "openrouter", "model": "..." }` for that.
+- **Fresh Anthropic agents** summarize with native Anthropic (`claude-haiku-5-5`) and need an explicit `embeddingModel` on another provider for recall. Existing agents keep their old OpenRouter routes through the conversion.
+- **No implicit cloud audio fallback** — an OpenRouter key alone no longer routes voice notes to Gemini for other providers. Set `audioModel` explicitly.
+- **Custom servers need an explicit `embeddingModel`** — nothing is guessed about which models a local server hosts. An agent that used `OPENAI_BASE_URL` previously sent `text-embedding-3-small` and `gpt-6-luna` to that server; after conversion it summarizes with its chat model and runs without recall until you set `embeddingModel`. Ollama agents keep `nomic-embed-text`.
+- **Invalid model configuration stops startup** instead of silently falling back to defaults: malformed JSON, unknown providers, wrong model-reference types, unknown fields inside model objects, or a route that cannot work (for example embeddings on Anthropic).
+- **`kern init --provider ollama --api-key <URL>`** is replaced by `--base-url <URL>/v1`; `--api-key` always means a secret now.
+
+### Upgrading existing agents
+- **On the first start** Kern converts `.kern/config.json` and, if needed, `.kern/.env`. If the agent is already running under another process, stop it first; the conversion refuses to touch a live agent.
+- **A backup** of the original files is written to `.kern/backups/<version>-<timestamp>-*/` (gitignored, owner-only). To roll back, stop Kern and copy the files back; see [docs/config.md](docs/config.md#migrating-from-earlier-configuration).
+- **OpenRouter and Anthropic agents without a custom endpoint** are untouched apart from the `version` stamp and key order below. Models, keys, and memory all stay as they are.
+- **What the conversion does** for agents that used `OPENAI_BASE_URL` or `OLLAMA_BASE_URL`: moves the URL into `baseURL`, keeps the API key the agent was already using via `apiKeyEnv`, and turns previously inferred OpenRouter summary routes into explicit objects. It writes only what Kern cannot infer, so a custom URL carries no `auth: "none"` or `api: "chat"` line and a converted agent looks like a freshly configured one. Unknown fields, comments, and other `.env` entries are preserved.
+- **`config.json` gets a `version`** stamp and is rewritten with `version` and `name` first, then the model and connection fields, then the rest. An older Kern refuses to open a config stamped by a newer one. Ordinary upgrades without a pending conversion change nothing.
+- **Memory is not re-embedded.** Existing vectors are kept and tagged with the current embedding model. Only changing the embedding model (or its dimensions) rebuilds vectors, and that rebuild re-embeds stored chunks across all sessions while keeping messages, summaries, segment boundaries, and indexing cursors.
+
+### Improvements
+- **Local model setup in `kern init`** — choose an OpenAI-compatible server, enter its API root, decide whether it needs a key, pick embeddings on the same or another connection, and select from models the endpoint actually reports or type an ID. Non-interactive flags: `--base-url`, `--api-key-env`, `--api`, `--embedding-model` (`off` to disable), `--summary-model`. Environment overrides: `KERN_BASE_URL`, `KERN_EMBEDDING_MODEL`, `KERN_SUMMARY_MODEL`. Startup logs the resolved endpoint and model for every role.
+- **Ollama options reach the server** — `think: false` and `num_ctx` were silently dropped by the previous OpenAI client. OpenRouter, Ollama, and custom endpoints now use the OpenAI-compatible client, which passes model IDs and options through unchanged; the official client is used for api.openai.com only.
+- **Embedding model identity** — the vector index remembers which model and dimensions produced it, so switching to a different model of the same size is detected. Moving the same model to another host or rotating keys does not rebuild anything.
+
+### Fixes
+- **Startup can no longer wipe vectors on a bad probe** — the embedding probe must return a real vector within a bounded request. If it fails (auth, missing model, offline, timeout, wrong dimensions), existing vectors are left alone and recall is disabled for that run; fix the connection and restart. The old guessed 1536-dimension fallback is gone.
+- **Reconfiguring keeps what you did not change** — `kern init` on an existing agent preserves unrelated config fields and `.env` variables, comments, and multiline values. Updating a key or model on the same connection keeps its endpoint and auth settings; switching provider or endpoint drops the old connection's settings so credentials never leak across endpoints.
+- **Embedding shrink-and-retry only on input-length rejections** — auth, missing-model, rate-limit, and connection errors are no longer retried with ever-shorter inputs.
+- **Matrix DM routing for proactive messages** ([#434](https://github.com/oguzbilgic/kern-ai/issues/434)) — `message({ interface: "matrix", userId })` targeting a user MXID (`@user:server`) now resolves to a direct 1:1 chat room via `m.direct` account data or creates a private direct room (`is_direct: true`), instead of misrouting to the group room where the user paired. If `userId` is a room ID (`!room:server`) or room alias (`#room:server`), it delivers directly to that room.
+- **Nostr WebSocket unhandled error on connection timeout** — subclass `ws` with a default error listener in `NostrInterface` to prevent Node process termination when `nostr-tools` calls `.close()` before a connection is fully established.
+
+## v0.43.0
+
+### Breaking
+- **Directory-based local mode, no registry** ([#410](https://github.com/oguzbilgic/kern-ai/issues/410), [#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — an agent is a directory containing `.kern/`. `~/.kern/config.json` and the `~/.kern/agents.json` migration are gone; the only configuration kern reads is `<agent>/.kern/config.json` and `<agent>/.kern/.env`. Every agent command takes `[path]` (default `.`): `kern init`, `start`, `stop`, `restart`, `run`, `status`, `logs`, `tui`, `pair [path] <code>`, `backup`. `kern start` with no argument starts the agent in the current directory instead of every registered agent. `kern list` / `kern ls` are aliases of `kern status`, which prints a single card. Multi-agent development is per directory: `kern start ~/alice/`, `kern start ~/bob/`.
+- **Deprecated commands** ([#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — `kern remove` (agents are directories; delete the folder), `kern install` / `kern uninstall` (systemd support returns with fleet mode), and `kern proxy` (the proxy server, `proxy.ts`, `proxy-daemon.ts`, and `KERN_PROXY_TOKEN` are deleted). Each exits 1 with `kern <cmd> has been deprecated. See CHANGELOG.md`.
+- **`kern web` flags** ([#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — `web_port` / `web_host` become `--port` (default 8080) and `--host` (default `0.0.0.0`) on `kern web run` and `kern web start`. `start` records `{ pid, port, host }` in `~/.kern/web.json` (replaces `web.pid`, which is still read once so an older daemon can be stopped).
+
+### Improvements
+- **Sub-agent completions route back to the conversation that spawned them** ([#422](https://github.com/oguzbilgic/kern-ai/issues/422), [#429](https://github.com/oguzbilgic/kern-ai/pull/429)) — `spawn` captures the origin of its turn and the child's result is delivered through `announce()`, exactly like background jobs: the turn is stamped with the requester's envelope, spliced into that conversation's active turn if it is still running, and the agent's reply is sent to the originating chat (Telegram, Slack, Matrix, Discord, Nostr, IRC) without the `message` tool. The synthetic `subagent` interface and `subagent:<id>` channel are gone. Because the turn now arrives under the requester's envelope, the body always starts with `[subagent:<id> done, 12s]` (previously only `failed` / `cancelled` carried a header). `subagents({ action: "status" })` and `/subagents` show the origin, and the `spawn` tool says when a reply will not reach a chat (CLI, heartbeat).
+- **Dependency refresh, npm audit clean** ([#431](https://github.com/oguzbilgic/kern-ai/pull/431)) — `@ai-sdk/anthropic` 2 → 3 (the provider line that matches `ai` 6; drops the stale `provider-utils` 3 / `undici` 5 chain), `ink` 6 → 7 (removes `react-devtools-core`, `shell-quote`, `ws` 7), `unpdf` 1.6 → 1.8, `dotenv` 16 → 18 (loaded with `quiet: true` so its "injected env" line stays out of the log), `@types/better-sqlite3` 7 → 9, `@types/marked` removed (stub). Lockfile refreshed within ranges: `ai` 6.0.292, `@ai-sdk/openai` 3.0.118, `@ai-sdk/mcp` 1.0.86, `@modelcontextprotocol/sdk` 1.30.1, `@slack/bolt` 4.7.3, `grammy` 1.46, `tsx` 4.23, `react` 19.3. Web UI: `next` 16.2.2 → 16.3.6 (Server Components DoS advisory), `react` 19.3, `marked` 18.0.14. `npm audit` reports zero findings in both trees (was 20 root, 11 web). Desktop and Android untouched.
+- **Runtime stream loop uses the typed AI SDK parts** ([#431](https://github.com/oguzbilgic/kern-ai/pull/431)) — dropped the `"delta" in part` / `"args" in part` version-compat guards and `as any` casts on tool results and step messages; `createModel`, `createSummaryModel`, `createAudioModel` return `LanguageModel` instead of `any`. No behaviour change.
+
+### Fixes
+- **`/restart` no longer depends on `PATH`** ([#201](https://github.com/oguzbilgic/kern-ai/issues/201), [#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — replies `Restarting.` first, then spawns `kern restart <agent dir>` detached with the running `process.execPath` and the package's own entry point, passing the directory rather than the name. `kern start` likewise spawns with `process.execPath` instead of the bare word `node`.
+- **Sticky port assigned on first start, never changed after** ([#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — `kern init` no longer pre-assigns a port, so two agents scaffolded while nothing runs don't both get 4100; the first start picks a free one and saves it. A saved port is never changed automatically: if it is busy, the agent exits with `port :4100 is in use. Stop the process using it, or change "port" in .kern/config.json.` An agent also refuses to start when its `.kern/agent.pid` names a live process, so `kern run` on a directory whose daemon is up cannot create a duplicate.
+- **`kern init` on an existing agent keeps the sticky port** ([#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — reconfiguring previously rewrote `.kern/config.json` with only name, model, provider, and tool scope.
+- **Upgrade hint** ([#427](https://github.com/oguzbilgic/kern-ai/pull/427)) — `kern status` in a directory without `.kern/` prints the paths an old `~/.kern/config.json` still lists, once, and suggests deleting the file.
+
+## v0.42.0
+
+### Features
+- **`remindEvery` for background jobs** — `bash({ command, background: true, remindEvery: 600 })` announces a one-line `[job:<id> still running, 20m] <cmd>` message to the originating conversation at that interval, routed like a completion, so the agent can tail and kill jobs that have stalled or are no longer needed. Opt-in per job with no default; reminders stop when the job ends and are never sent for jobs that finish inside the grace window. Shown in `jobs({ action: "status" })` and `/jobs`.
+
+### Improvements
+- **Updated default, fallback, and secondary models** — refreshed default models and fallback lists for current frontier generations:
+  - **Primary chat**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-opus-5-5`, OpenAI to `gpt-6-sol`. `kern init` fallback choices refreshed across all providers.
+  - **Background summary**: OpenRouter defaults to `google/gemini-3.5-flash-lite`, Anthropic to `claude-haiku-5` (via OpenRouter), OpenAI to `gpt-6-luna`.
+  - **Media vision digest**: OpenRouter defaults to `google/gemini-3.8-flash`, Anthropic to `claude-sonnet-5`, OpenAI to `gpt-6-luna`.
+  - **Audio transcription**: OpenRouter fallback defaults to `google/gemini-3.8-flash`.
+
+### Docker
+- **Mount agent home directory at `/home/agent` with workspace at `/home/agent/workspace`** — switches container user to `agent` with home `/home/agent` and default workspace at `/home/agent/workspace`. Mounting `-v <volume>:/home/agent` persists the agent's full user environment (user-space `npm install -g` in `~/.npm-global`, `pip install` in `~/.local`, SSH keys, git configuration, and shell history) alongside its workspace, bringing Docker parity with Linux multi-tenant agent host setups.
+
+  **New agent (init)** — auto-scaffolds `workspace/.kern/config.json` with the agent name and persists provider keys and all configured interface credentials (Telegram, Slack, Matrix, Discord, Nostr, IRC) to `.kern/.env`:
+  ```bash
+  docker run -d --restart=unless-stopped \
+    --name bob \
+    -v bob-home:/home/agent \
+    -e KERN_NAME=bob \
+    -e OPENROUTER_API_KEY=sk-or-... \
+    -e TELEGRAM_BOT_TOKEN=123456:ABC-... \
+    ghcr.io/oguzbilgic/kern-ai
+  ```
+
+  **Existing agent** — once initialized, credentials, configuration, memory, and user-installed tools live inside the volume. Recreating or upgrading requires zero environment variables:
+  ```bash
+  docker run -d --restart=unless-stopped \
+    --name bob \
+    -v bob-home:/home/agent \
+    ghcr.io/oguzbilgic/kern-ai
+  ```
+
+## 0.41.0 (2026-09-22)
+
+### Features
+- **Background shell jobs with initiator-aware completion routing** ([#415](https://github.com/oguzbilgic/kern-ai/issues/415)) — `bash({ command, background: true })` starts a command detached and returns at once with a job ID and log path (`.kern/jobs/<id>/output.log`). When it finishes, its exit code and output tail arrive as a new turn stamped with the envelope of the conversation that started it, so the queue splices it into that turn if it is still active, keeps it out of other users' turns, or wakes the agent when idle — and the runtime delivers the agent's reply to the originating chat (Slack channel, Telegram chat, Matrix room, DM) without the `message` tool. New `jobs` tool (list, status, tail, kill) and `/jobs` chat command. Jobs finishing within two seconds return their output directly; running jobs are killed on shutdown.
+
+### Improvements
+- **`bash` moved into a shell plugin** (`src/plugins/shell/`) so it can own background execution and, later, auto-backgrounding. Same tool name and schema; registered only when `toolScope` is `full` and the platform is not Windows (core `pwsh` is unchanged).
+- **Plugin context gains `origin()` and `announce()`** — `origin()` returns the active turn's interface, channel, platform chat ID, and user; `announce(text, origin)` enqueues a completion with that envelope and routes the reply back. Any plugin doing async work can use this; sub-agents are a candidate for a follow-up.
+- **Queue messages carry the platform `chatId`** alongside the channel label, so replies can be addressed to the exact conversation.
+
+## 0.40.2 (2026-09-22)
+
+### Fixes
+- **Slack DMs no longer leak into each other's turns** ([#413](https://github.com/oguzbilgic/kern-ai/issues/413)) — every Slack DM shared the channel label `slack-dm`, so a DM from one user arriving mid-turn was treated as a same-conversation follow-up and spliced into another user's in-flight turn, with the reply sent to the wrong DM and the sender getting no response. DMs are now labeled `slack-dm:<userId>`, isolating each user's conversation while keeping mid-turn injection for follow-ups within the same DM. DM detection also uses the event's `channel_type`, so a failed `conversations.info` lookup can no longer misclassify a DM as a channel and skip the pairing check.
+
+## 0.40.1 (2026-09-20)
+
+### Fixes
+- **Recall session indexing concurrency serialization** ([#404](https://github.com/oguzbilgic/kern-ai/issues/404)) — serializes concurrent `RecallIndex.indexSession()` calls per session so startup background backfill and `onTurnFinish` triggers do not run overlapping embedding jobs, preventing duplicate chunk embeddings and reducing peak heap pressure on active sessions.
+
+### Improvements
+- **npm: automated test and build workflows in GitHub Actions** ([#390](https://github.com/oguzbilgic/kern-ai/issues/390)) — runs `npm test` and server/web builds across all pull requests and pushes to `master`, automatically preventing test regressions and broken builds.
+- **Code organization: relocate session importers and segment tools** ([#400](https://github.com/oguzbilgic/kern-ai/pull/400)) — moves `import-opencode.ts` and `import-openclaw-lcm.ts` from root `src/` to `src/scripts/`, and moves `segment-health.ts` and `segment-prune.ts` into `src/plugins/recall/` alongside other memory health and repair modules.
+
+## 0.40.0 (2026-09-20)
+
+### Features
+- **Activity narration and `/wyd` (and `!wyd`) chat command** ([#386](https://github.com/oguzbilgic/kern-ai/issues/386), [#388](https://github.com/oguzbilgic/kern-ai/issues/388)) — real-time progress narration across runtime events and interactive commands. When an agent reaches a step limit or idle timeout, it uses the summary model to emit a concise 1–2 sentence narrative (rendered as a blockquote) of what was achieved and what was in flight, instead of generic boilerplate. The `/wyd` (or `!wyd`) chat command allows operators to check what an agent is working on in real time (or confirms it is idle).
+- **Chat commands: unified in-chat commands with bang (`!`) and slash (`/`) prefixes** ([#369](https://github.com/oguzbilgic/kern-ai/pull/369), [#376](https://github.com/oguzbilgic/kern-ai/issues/376), [#393](https://github.com/oguzbilgic/kern-ai/issues/393)) — renames "slash commands" to **Chat Commands**, supporting both `!` and `/` prefixes interchangeably (`!status` or `/status`, `!help` or `/help`). The `!` prefix avoids client-side interception in chat apps like Matrix, Slack, and Discord.
+- **`/plugins` (and `!plugins`) chat command** — inspect status, registered tools, routes, and active configuration across all loaded plugins (MCP, Skills, Dashboards, Sub-agents, Recall, Media, and interfaces) in a structured view.
+- **`recall-repair` script** ([#384](https://github.com/oguzbilgic/kern-ai/pull/384), [#385](https://github.com/oguzbilgic/kern-ai/pull/385)) — recovery script for recall vector indexes with orphaned chunks (`kern scripts recall-repair <recall.db>`). Pure SQLite (zero LLM calls, zero API credentials). Prunes orphaned chunks and rewinds the index scan cursor so the agent's native background indexer cleanly re-indexes missing messages on next start or turn. Dry-run by default; zero-op when index is already healthy (0 changes, 0 writes).
+- **`recall-health` script and chat command** ([#370](https://github.com/oguzbilgic/kern-ai/pull/370), [#371](https://github.com/oguzbilgic/kern-ai/pull/371), [#392](https://github.com/oguzbilgic/kern-ai/pull/392)) — diagnostic tool for `recall.db`. Checks message lag, chunk size distribution, batch blockers, surrogate pair integrity, vector table sync, and stalled pipeline blockers with an itemized 0–100 health score. Accessible live via chat command (`/recall-health` or `!recall-health`) or as an offline script (`kern scripts recall-health <recall.db>`).
+- **`segment-health` chat command** ([#371](https://github.com/oguzbilgic/kern-ai/pull/371)) — live chat command (`/segment-health` or `!segment-health`) to inspect the semantic summary tree directly from chat, reporting levels, overlaps, gaps, and injection token waste.
+
+### Improvements
+- **Code block syntax highlighting on Telegram and clean rendering on Slack** — Telegram HTML formatting preserves language tags (`<pre><code class="language-yaml">`) so Telegram clients highlight code syntax, while Slack markdown formatting strips language tags from code fences to prevent them from displaying as literal text lines.
+- **Clean YAML code block formatting for chat commands** ([#368](https://github.com/oguzbilgic/kern-ai/pull/368)) — chat command responses (`!status`, `!plugins`, `!help`, `!skills`, `!subagents`, `!mcp`) are formatted in clean ````yaml` code blocks for consistent alignment and syntax highlighting across chat interfaces.
+- **ANSI color and style rendering across chat interfaces** ([#372](https://github.com/oguzbilgic/kern-ai/pull/372)) — health reports and code fences render with Catppuccin ANSI colors in terminals, Discord (````ansi`), and Matrix (styled HTML), while raw escapes are automatically stripped on channels without color support.
+- **Documentation split by execution surface** ([#376](https://github.com/oguzbilgic/kern-ai/issues/376), [#393](https://github.com/oguzbilgic/kern-ai/issues/393)) — splits monolithic `commands.md` into dedicated `docs/cli.md` (terminal commands), `docs/chat-commands.md` (in-chat interactive commands), and `docs/scripts.md` (offline database tools).
+
+### Fixes
+- **Recall embedding resilience and dimension rebuild re-vectorization** ([#315](https://github.com/oguzbilgic/kern-ai/issues/315), [#333](https://github.com/oguzbilgic/kern-ai/issues/333), [#381](https://github.com/oguzbilgic/kern-ai/pull/381)) — prevents embedding stalls on oversized chunks via 8k-char capping with shrink-and-retry fallback, and re-vectorizes existing chunks into `vec_chunks` when dimension changes drop the vector index.
+
+## 0.39.0 (2026-09-17)
+
+### Fixes
+- **Conversation summaries no longer duplicate or overlap** ([#364](https://github.com/oguzbilgic/kern-ai/issues/364)). Switching providers (e.g. OpenRouter ↔ Ollama) changed the embedding dimension, which reset the segmentation cursor and re-summarized the whole session alongside the existing summaries. Agents then received both copies in their context — up to 40–85% redundant summary tokens on affected agents, enough to overflow small local context windows. Now: an embedding change only rebuilds the vector index; new segments that overlap existing coverage are rejected (logged); higher-level summaries are built only from adjacent segments, so a late straggler can no longer produce a parent spanning months of history; and anything still overlapping in an older DB is deduplicated before injection (logged). Run `kern scripts segment-health` to check an agent, `segment-prune` to clean up existing overlaps.
+
+### Improvements
+- **`kern scripts segment-health <recall.db>`** — read-only analyzer for the semantic summary tree. Per level: segment counts, orphans, stragglers, overlaps (with shadowed and 1-msg fencepost overlaps classified separately), gaps, coverage, and redundant tokens. Lists overlaps/gaps/stragglers/parent-child inconsistencies (truncated at `--limit`, default 10), then simulates the agent's actual `composeHistory()` selection with its real budget to report injected tokens and % waste from overlapping summaries. Health score with a printed breakdown. `--json` for snapshots. Motivated by finding 1,938 overlapping segments on one agent and 42% redundant summary tokens on another; the fix comes separately.
+- **`kern scripts segment-prune <recall.db>`** ([#365](https://github.com/oguzbilgic/kern-ai/issues/365)) — deterministic recovery for summary trees with overlapping segments. Per level, bottom-up: validate parents against their surviving children (delete on a hole or range mismatch, detach the children), then pick the min-cost chain of segments covering the level (L0: gaps outrank overlaps; L1+: overlaps outrank gaps; ties → summarized, has parent, oldest) and delete everything off the chain. Pure selection, zero LLM calls; upper levels regrow via the normal rollup. Dry-run by default, `--apply` writes in one transaction after copying `recall.db` aside. Prints the plan grouped by reason plus before/after health. On six fleet DBs: 3→90, 21→100, 45→90, 77→90, 98→100, 100→100, zero overlaps left.
+- **`selectHistorySegments()`** — the selection step of `composeHistory()` extracted as a pure exported function so offline tools reproduce injection exactly. No behavior change.
 
 ## 0.38.0 (2026-09-16)
 

@@ -3,7 +3,7 @@ import { connect as tlsConnect } from "tls";
 import type { Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
-import { isNoReply } from "../util.js";
+import { isNoReply, stripAnsi } from "../util.js";
 
 /**
  * IRC interface — plain TCP or TLS, IRCv3 message tags, DMs and channels.
@@ -232,10 +232,11 @@ const ITALIC = "\x1d";
  * horizontal rules are dropped).
  */
 function markdownToIrc(text: string): string {
+  const clean = stripAnsi(text);
   const out: string[] = [];
   let inFence = false;
 
-  for (const raw of text.split("\n")) {
+  for (const raw of clean.split("\n")) {
     let line = raw.replace(/\r/g, "");
 
     // Code fences: drop the delimiter, keep the body verbatim.

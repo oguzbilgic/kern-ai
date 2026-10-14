@@ -3,52 +3,56 @@ import { Runtime, type StreamEvent } from "./runtime.js";
 import { updateKernel } from "./kernel.js";
 import { TelegramInterface } from "./interfaces/telegram.js";
 import { SlackInterface } from "./interfaces/slack.js";
-import { MatrixInterface } from "./interfaces/matrix.js";
+import { MatrixInterface, isMatrixUserId } from "./interfaces/matrix.js";
 import { NostrInterface, parseRelayList } from "./interfaces/nostr.js";
 import { IrcInterface, parseIrcUrls } from "./interfaces/irc.js";
 import { CliInterface } from "./interfaces/cli.js";
-import { loadConfig, saveConfigField } from "./config.js";
+import { loadConfig, saveConfigField, type KernConfig } from "./config.js";
+import { migrateAgentFiles } from "./migrations/index.js";
+import { PACKAGE_VERSION } from "./package-version.js";
 import { readFile, appendFile } from "fs/promises";
 import { join, basename } from "path";
 import { randomBytes } from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 import type { Interface, MessageHandler } from "./interfaces/types.js";
-import { registerAgent, writePidFile, removePidFile, assignPort } from "./registry.js";
+import type { TurnOrigin } from "./plugins/types.js";
+import { writePidFile, removePidFile, assignPort, readLivePid, portInUseMessage } from "./agent-dir.js";
 import { AgentServer } from "./server.js";
 import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
 import { setIrcInterface } from "./plugins/irc/tools.js";
 import { SegmentIndex } from "./segments.js";
+import { logModelRoutes } from "./model.js";
 import { MemoryDB } from "./memory.js";
-import { MessageQueue } from "./queue.js";
+import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { getStatusData as getStatusDataFn, setQueueStatusFn, setInterfaceStatusFn, setSegmentStatsFn, setPluginStatusFn, type InterfaceStatus } from "./tools/kern.js";
 import { plugins, type PluginContext } from "./plugins/index.js";
-import { setSubAgentAnnouncer, formatAnnounce } from "./plugins/subagents/plugin.js";
 import { formatLocalISO, resolveHostTimezone } from "./util.js";
 import { log } from "./log.js";
 
 let _pluginCtx: PluginContext | null = null;
+let _runtime: Runtime | null = null;
+let _config: KernConfig | null = null;
 
 async function handleSlashCommand(cmd: string, userId: string, iface: string, agentName: string, agentDir: string): Promise<string | null> {
   switch (cmd) {
     case "/restart": {
       log("kern", `restart requested by ${userId} via ${iface}`);
+      // Reply first so the caller sees it, then hand off to a detached
+      // `kern restart <dir>` run with this process's own node binary.
+      // The directory is passed, never the name, and PATH is never consulted.
       const { spawn } = await import("child_process");
-      const child = spawn("kern", ["restart", agentName], { stdio: "pipe" });
-
-      const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
-        let stderr = "";
-        child.stderr.on("data", (chunk) => {
-          stderr += chunk.toString();
-        });
-        child.on("close", (code) => resolve({ code, stderr: stderr.trim() }));
-        child.on("error", (err) => resolve({ code: 1, stderr: err.message }));
-      });
-
-      if (result.code === 0) {
-        return "Restart initiated.";
-      }
-
-      return `Restart failed: ${result.stderr || `exit code ${result.code}`}`;
+      const { restartArgv } = await import("./agent-dir.js");
+      const [execPath, ...argv] = restartArgv(agentDir);
+      setTimeout(() => {
+        try {
+          const child = spawn(execPath, argv, { detached: true, stdio: "ignore" });
+          child.unref();
+        } catch (err: any) {
+          log.error("kern", `restart spawn failed: ${err?.message ?? err}`);
+        }
+      }, 1000);
+      return "Restarting.";
     }
 
     case "/status": {
@@ -56,17 +60,59 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
       return formatStatus(getStatusDataFn());
     }
 
+    case "/wyd": {
+      const snapshot = _runtime?.getCurrentTurnSnapshot();
+      if (!snapshot) {
+        return "> Idle — waiting for input.";
+      }
+      if (_config) {
+        const { narrateTurnStatus } = await import("./narration.js");
+        return await narrateTurnStatus("wyd", snapshot, _config);
+      }
+      const { buildFallbackNarration } = await import("./narration.js");
+      return buildFallbackNarration("wyd", snapshot);
+    }
+
+    case "/plugins": {
+      if (!_pluginCtx) return "```yaml\nplugins: {}\n```";
+      const status = plugins.collectStatus(_pluginCtx);
+      const lines = ["```yaml", "plugins:"];
+      for (const [name, val] of Object.entries(status)) {
+        if (typeof val === "object" && val !== null) {
+          lines.push(`  ${name}:`);
+          for (const [subKey, subVal] of Object.entries(val)) {
+            const formatted = typeof subVal === "string" ? subVal : JSON.stringify(subVal);
+            lines.push(`    ${subKey}: ${formatted}`);
+          }
+        } else {
+          const formatted = typeof val === "string" ? val : JSON.stringify(val);
+          lines.push(`  ${name}: ${formatted}`);
+        }
+      }
+      lines.push("```");
+      return lines.join("\n");
+    }
+
     case "/help": {
-      const builtins = [
-        "/status   — show agent status, uptime, token usage",
-        "/restart  — restart the agent process",
-      ];
+      const cmds: Record<string, string> = {
+        status: "show agent status, uptime, token usage",
+        wyd: "show what the agent is currently working on",
+        plugins: "show detailed plugin status and metrics",
+        restart: "restart the agent process",
+      };
       const pluginCmds = plugins.collectCommandDescriptions();
       for (const [cmd, desc] of Object.entries(pluginCmds)) {
-        builtins.push(`${cmd.padEnd(10)} — ${desc}`);
+        const cleanCmd = cmd.replace(/^\//, "");
+        cmds[cleanCmd] = desc;
       }
-      builtins.push("/help     — show this help");
-      return builtins.join("\n");
+      cmds["help"] = "show this help";
+
+      const lines = ["```yaml", "commands:"];
+      for (const [name, desc] of Object.entries(cmds)) {
+        lines.push(`  ${name}: ${desc}`);
+      }
+      lines.push("```");
+      return lines.join("\n");
     }
 
     default: {
@@ -79,9 +125,14 @@ async function handleSlashCommand(cmd: string, userId: string, iface: string, ag
 }
 
 export async function startApp(agentDir: string, forceCli = false): Promise<void> {
-  // Update kernel if newer version available
+  // Reuse the existing PID guard before modifying any agent files.
+  const livePid = await readLivePid(agentDir);
+  if (livePid && livePid !== process.pid) {
+    log.error("kern", `${basename(agentDir)} is already running (pid ${livePid}). Use 'kern stop' first.`);
+    process.exit(1);
+  }
+  await migrateAgentFiles(agentDir);
   await updateKernel(agentDir);
-
   const config = await loadConfig(agentDir);
 
   // Auto-generate auth token if missing
@@ -105,12 +156,15 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   }
 
   const runtime = new Runtime(agentDir);
+  _runtime = runtime;
+  _config = config;
 
   // Probe embedding model dimensions before creating DB
-  const embeddingDims = await MemoryDB.detectEmbeddingDimensions(config);
+  logModelRoutes(config);
+  const embeddingProfile = await MemoryDB.probeEmbeddingModel(config);
 
   // Initialize memory DB before runtime.init() so media sidecar can backfill
-  const memoryDB = new MemoryDB(agentDir, embeddingDims);
+  const memoryDB = new MemoryDB(agentDir, embeddingProfile);
   runtime.setMemoryDB(memoryDB);
 
   await runtime.init();
@@ -118,7 +172,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   // Initialize semantic segments (uses embeddings for context summarization)
   let segmentIndex: SegmentIndex | null = null;
   let segmentRunning = false;
-  if (embeddingDims > 0) {
+  if (memoryDB.embeddingsReady) {
     try {
       segmentIndex = new SegmentIndex(memoryDB, config);
       runtime.setSegmentIndex(segmentIndex);
@@ -152,17 +206,23 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   runtime.setPairingManager(pairing);
 
   // Log + start
-  let version = "unknown";
-  try {
-    const pkg = JSON.parse(await readFile(join(import.meta.dirname, "..", "package.json"), "utf-8"));
-    version = pkg.version;
-  } catch {}
   const hb = config.heartbeatInterval > 0 ? `, heartbeat:${config.heartbeatInterval}min` : "";
-  log("kern", `starting ${agentName} — v${version}, ${config.model}, tools:${config.toolScope}${hb}`);
+  log("kern", `starting ${agentName} — v${PACKAGE_VERSION}, ${config.model}, tools:${config.toolScope}${hb}`);
 
   // Start HTTP server
   const server = new AgentServer();
   server.setAgentDir(agentDir);
+
+  // Origin of the turn currently being processed, scoped to the turn's async
+  // context. Read by plugins (via ctx.origin()) when they spawn async work so
+  // its completion can be routed back to the same conversation. Async-local
+  // rather than a module variable so a turn abandoned by the idle timeout
+  // (which keeps running) can neither read nor clobber the next turn's origin.
+  const turnOrigin = new AsyncLocalStorage<TurnOrigin>();
+  // Real implementation installed once the queue and interfaces exist.
+  let announceImpl: (text: string, origin: TurnOrigin) => Promise<string> = async () => {
+    throw new Error("announce not available before startup completes");
+  };
 
   // Load plugins
   const pluginCtx: PluginContext = {
@@ -170,6 +230,8 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     config,
     db: memoryDB,
     sessionId: () => runtime.getSessionId(),
+    origin: () => turnOrigin.getStore() ?? null,
+    announce: (text, origin) => announceImpl(text, origin),
   };
   _pluginCtx = pluginCtx;
   const loadedPlugins = await plugins.load(pluginCtx);
@@ -208,20 +270,23 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   const queue = new MessageQueue();
   setQueueStatusFn(() => queue.getStatus());
 
-  // Sub-agent announces: when a child finishes, enqueue its result as a new
-  // turn so the parent can react to it. Channel is "subagent" so it doesn't
-  // collide with same-channel injection for human interfaces.
-  setSubAgentAnnouncer((id, record) => {
-    const text = formatAnnounce(record);
-    queue.enqueue({
-      text,
-      userId: "subagent",
-      interface: "subagent",
-      channel: `subagent:${id}`,
-    }).catch((e) => log.error("subagent", `announce enqueue failed for ${id}: ${e.message}`));
+  // Idle-timeout notices get the same narration treatment as step-limit notices
+  // The snapshot is captured before the abort fires — the runtime nulls it on abort.
+  queue.setTimeoutNarrator({
+    capture: () => runtime.getCurrentTurnSnapshot(),
+    narrate: async (snapshot) => {
+      const { narrateTurnStatus, buildFallbackNarration } = await import("./narration.js");
+      if (!snapshot) return `⏱️ Idle timeout reached. Reply "continue" to resume.`;
+      return narrateTurnStatus("timeout", snapshot, config).catch(() => buildFallbackNarration("timeout", snapshot));
+    },
   });
 
   queue.setHandler(async (msg, getPendingMessages, signal) => {
+    const origin: TurnOrigin = { interface: msg.interface, channel: msg.channel, chatId: msg.chatId, userId: msg.userId };
+    return turnOrigin.run(origin, () => handleTurn(msg, getPendingMessages, signal));
+  });
+
+  const handleTurn = async (msg: QueuedMessage, getPendingMessages: () => QueuedMessage[], signal: AbortSignal): Promise<string> => {
 
     const time = formatLocalISO(new Date(), envelopeTimezone);
     const context = `[via ${msg.interface}${msg.channel ? `, ${msg.channel}` : ""}, user: ${msg.userId}, time: ${time}]\n${msg.text}`;
@@ -230,8 +295,10 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // Messages from /message POST (web, tui) are already broadcast by the server
     // with sender exclusion. Only broadcast here for adapter interfaces
     // (Telegram, Slack) which don't go through the HTTP endpoint.
+    // Announce turns never went through the HTTP endpoint, so broadcast
+    // them regardless of interface or web/TUI users see a reply to nothing.
     const httpInterfaces = ["web", "tui"];
-    if (!msg.isHeartbeat && !httpInterfaces.includes(msg.interface)) {
+    if (!msg.isHeartbeat && (msg.isAnnounce || !httpInterfaces.includes(msg.interface))) {
       server.broadcast({
         type: "incoming" as any,
         text: msg.text,
@@ -271,24 +338,25 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
 
     return result;
-  });
+  };
 
   // Helper to enqueue from any interface
-  const enqueueMessage = async (text: string, userId: string, iface: string, channel: string, onEvent?: (e: StreamEvent) => void, attachments?: import("./interfaces/types.js").Attachment[]) => {
-    // Slash commands bypass the queue — instant response even if queue is busy
-    const cmd = text.trim();
-    if (cmd.startsWith("/")) {
-      const result = await handleSlashCommand(cmd, userId, iface, agentName, agentDir);
+  const enqueueMessage = async (text: string, userId: string, iface: string, channel: string, onEvent?: (e: StreamEvent) => void, attachments?: import("./interfaces/types.js").Attachment[], chatId?: string) => {
+    // Commands (/ or !) bypass the queue — instant response even if queue is busy
+    const trimmed = text.trim();
+    if (trimmed.startsWith("/") || trimmed.startsWith("!")) {
+      const canonicalCmd = trimmed.startsWith("!") ? "/" + trimmed.slice(1) : trimmed;
+      const result = await handleSlashCommand(canonicalCmd, userId, iface, agentName, agentDir);
       if (result !== null) {
         server.broadcast({
           type: "command-result" as any,
           text: result,
-          command: cmd,
+          command: trimmed,
         });
         return result;
       }
     }
-    return queue.enqueue({ text, userId, interface: iface, channel, attachments }, onEvent);
+    return queue.enqueue({ text, userId, interface: iface, channel, chatId, attachments }, onEvent);
   };
 
   server.setStatusFn(() => {
@@ -298,6 +366,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   server.setCommandsFn(() => {
     const cmds: Record<string, string> = {
       "/status": "show agent status, uptime, token usage",
+      "/wyd": "show what the agent is currently working on",
       "/restart": "restart the agent process",
     };
     const pluginCmds = plugins.collectCommandDescriptions();
@@ -418,8 +487,18 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     }
   }
 
-  const port = await server.start("0.0.0.0", config.port);
-  await registerAgent(agentDir);
+  // A saved port is never changed automatically: if it is busy after the
+  // server's own retries, say so and exit.
+  let port: number;
+  try {
+    port = await server.start("0.0.0.0", config.port);
+  } catch (err: any) {
+    if (err?.code === "EADDRINUSE") {
+      log.error("kern", portInUseMessage(config.port));
+      process.exit(1);
+    }
+    throw err;
+  }
   await writePidFile(agentDir, process.pid);
 
   // Start Telegram if configured
@@ -429,7 +508,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     telegramBot = new TelegramInterface(telegramToken, pairing, config.telegramTools);
     await telegramBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments, msg.chatId);
       },
     });
   }
@@ -442,7 +521,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     slackBot = new SlackInterface(slackBotToken, slackAppToken, pairing);
     await slackBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, msg.attachments);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, msg.attachments, msg.chatId);
       },
     });
   }
@@ -458,7 +537,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // auth failures internally and reports via status/statusDetail.
     await matrixBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments, msg.chatId);
       },
     });
   }
@@ -474,7 +553,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // and report via status/statusDetail.
     await nostrBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, undefined, msg.chatId);
       },
     });
   }
@@ -490,7 +569,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // start() is non-blocking — retries login with backoff on failure
     await discordBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, msg.attachments, msg.chatId);
       },
     }).catch(() => {});
   }
@@ -505,7 +584,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // reports via status/statusDetail.
     await ircBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", onEvent, undefined, msg.chatId);
       },
     });
   }
@@ -534,89 +613,91 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     return statuses;
   });
 
+  // Send text to a platform conversation by its chatId. Shared by the
+  // message tool (which resolves chatId from pairing) and by announce()
+  // (which uses the chatId captured at the origin of the turn).
+  const sendToChat = async (iface: string, chatId: string, text: string): Promise<boolean> => {
+    switch (iface) {
+      case "telegram": return telegramBot ? telegramBot.sendToUser(chatId, text) : false;
+      case "slack": return slackBot ? slackBot.sendToUser(chatId, text) : false;
+      case "matrix": return matrixBot ? matrixBot.sendToUser(chatId, text) : false;
+      case "nostr": return nostrBot ? nostrBot.sendToUser(chatId, text) : false;
+      case "discord": return discordBot ? discordBot.sendToUser(chatId, text) : false;
+      case "irc": return ircBot ? ircBot.sendToUser(chatId, text) : false;
+      default: return false;
+    }
+  };
+
   // Wire message tool — agent can send messages to users
   setMessageSender(async (userId: string, iface: string, text: string) => {
-    if (iface === "telegram" && telegramBot) {
-      const chatId = pairing.getChatId(userId) || userId;
-      const sent = await telegramBot.sendToUser(chatId, text);
-      if (sent) {
-        server.broadcast({
-          type: "outgoing" as any,
-          text,
-          fromInterface: iface,
-          fromUserId: userId,
-        });
-      }
-      return sent;
-    }
-    if (iface === "slack" && slackBot) {
-      const chatId = pairing.getChatId(userId) || userId;
-      const sent = await slackBot.sendToUser(chatId, text);
-      if (sent) {
-        server.broadcast({
-          type: "outgoing" as any,
-          text,
-          fromInterface: iface,
-          fromUserId: userId,
-        });
-      }
-      return sent;
-    }
-    if (iface === "matrix" && matrixBot) {
-      const chatId = pairing.getChatId(userId) || userId;
-      const sent = await matrixBot.sendToUser(chatId, text);
-      if (sent) {
-        server.broadcast({
-          type: "outgoing" as any,
-          text,
-          fromInterface: iface,
-          fromUserId: userId,
-        });
-      }
-      return sent;
-    }
-    if (iface === "nostr" && nostrBot) {
-      const sent = await nostrBot.sendToUser(userId, text);
-      if (sent) {
-        server.broadcast({
-          type: "outgoing" as any,
-          text,
-          fromInterface: iface,
-          fromUserId: userId,
-        });
-      }
-      return sent;
-    }
-    if (iface === "discord" && discordBot) {
-      const chatId = pairing.getChatId(userId) || userId;
-      const sent = await discordBot.sendToUser(chatId, text);
-      if (sent) {
-        server.broadcast({
-          type: "outgoing" as any,
-          text,
-          fromInterface: iface,
-          fromUserId: userId,
-        });
-      }
-      return sent;
-    }
-    if (iface === "irc" && ircBot) {
+    let chatId: string;
+    if (iface === "nostr") {
+      chatId = userId;
+    } else if (iface === "matrix") {
+      // For Matrix, prefer the direct user MXID (@user:server) so sendToUser resolves
+      // to a direct chat room (via m.direct or createRoom), rather than routing to a group
+      // room where the user happened to pair. If it's not a user MXID (e.g. !room:server
+      // or #alias:server), fall back to pairing or the raw target.
+      chatId = isMatrixUserId(userId) ? userId : (pairing.getChatId(userId) || userId);
+    } else if (iface === "irc") {
       // chatId is "<host>/<nick-or-channel>" — fall back to a bare userId of
       // the same shape so the agent can address a channel it hasn't paired.
-      const chatId = pairing.getChatId(userId) || userId.replace(/^irc:/, "");
-      const sent = await ircBot.sendToUser(chatId, text);
-      if (sent) {
-        server.broadcast({
-          type: "outgoing" as any,
-          text,
-          fromInterface: iface,
-          fromUserId: userId,
-        });
-      }
-      return sent;
+      chatId = pairing.getChatId(userId) || userId.replace(/^irc:/, "");
+    } else {
+      chatId = pairing.getChatId(userId) || userId;
     }
-    return false;
+    const sent = await sendToChat(iface, chatId, text);
+    if (sent) {
+      server.broadcast({
+        type: "outgoing" as any,
+        text,
+        fromInterface: iface,
+        fromUserId: userId,
+      });
+    }
+    return sent;
   });
+
+  // Async completions (background jobs, sub-agents) — enqueue as a turn stamped with
+  // the origin envelope so the queue routes it like a message from that
+  // conversation, then deliver the agent's reply to the origin chat. Web/TUI
+  // clients already receive the reply over SSE; adapter interfaces need an
+  // explicit send because nobody is awaiting this turn.
+  const isSilentReply = (reply: string) => {
+    const t = reply.trim();
+    return !t || t === "(no text response)" || t.endsWith("NO_REPLY");
+  };
+  announceImpl = async (text: string, origin: TurnOrigin) => {
+    const target = origin.chatId || origin.userId;
+    let reply: string;
+    try {
+      reply = await queue.enqueue({
+        text,
+        userId: origin.userId,
+        interface: origin.interface,
+        channel: origin.channel,
+        chatId: origin.chatId,
+        isAnnounce: true,
+      });
+    } catch (err: any) {
+      // Same as adapters do for a failed user turn: the chat hears about it.
+      await sendToChat(origin.interface, target, `⚠️ ${String(err?.message || err).slice(0, 300)}`).catch(() => false);
+      throw err;
+    }
+    if (isSilentReply(reply)) return reply;
+    const sent = await sendToChat(origin.interface, target, reply);
+    if (sent) {
+      server.broadcast({
+        type: "outgoing" as any,
+        text: reply,
+        fromInterface: origin.interface,
+        fromUserId: origin.userId,
+      });
+    } else if (!["web", "tui", "cli", "system"].includes(origin.interface)) {
+      log.warn("kern", `announce reply not delivered to ${origin.interface}:${origin.channel}`);
+    }
+    return reply;
+  };
 
   log("kern", `started ${agentName}`);
 
@@ -625,7 +706,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     const cli = new CliInterface();
     await cli.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "");
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, undefined, msg.chatId);
       },
       history: runtime.getMessages(),
     });
@@ -669,7 +750,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     await plugins.shutdown(pluginCtx);
     server.stop();
     memoryDB.close();
-    await removePidFile(agentDir);
+    await removePidFile(agentDir, process.pid);
     log("kern", `stopped ${agentName}`);
     process.exit(0);
   };

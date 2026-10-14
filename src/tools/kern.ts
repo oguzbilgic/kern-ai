@@ -140,6 +140,8 @@ export interface StatusData {
   slack: string | null;
   matrix: string | null;
   nostr: string | null;
+  discord: string | null;
+  irc: string | null;
   segments: string | null;
   plugins: Record<string, any> | null;
 }
@@ -224,6 +226,8 @@ export function getStatusData(): StatusData {
     slack: ifaceStr("slack"),
     matrix: ifaceStr("matrix"),
     nostr: ifaceStr("nostr"),
+    discord: ifaceStr("discord"),
+    irc: ifaceStr("irc"),
     segments: _getSegmentStats ? (() => {
       const ss = _getSegmentStats!();
       if (!ss) return "disabled";
@@ -238,38 +242,91 @@ export function getStatusData(): StatusData {
 }
 
 export function formatStatus(data: StatusData): string {
-  return [
-    `kern: ${data.version}`,
-    `agent: ${data.agent}`,
-    `model: ${data.provider}/${data.model}`,
-    `toolScope: ${data.toolScope}`,
-    data.telegram ? `telegram: ${data.telegram}` : "",
-    data.slack ? `slack: ${data.slack}` : "",
-    data.matrix ? `matrix: ${data.matrix}` : "",
-    data.nostr ? `nostr: ${data.nostr}` : "",
-    `session: ${data.session}`,
-    data.contextBreakdown ? (() => {
-      const cb = data.contextBreakdown!;
-      const total = cb.systemPromptTokens + cb.messageTokens + cb.summaryTokens;
-      return `context: ~${Math.round(total / 1000)}k tokens`;
-    })() : (data.context ? `context: ${data.context}` : ""),
-    data.contextBreakdown ? `  system: ~${Math.round(data.contextBreakdown.systemPromptTokens / 1000)}k tokens` : "",
-    data.contextBreakdown ? `  messages: ~${Math.round(data.contextBreakdown.messageTokens / 1000)}k tokens (${data.contextBreakdown.messageCount} messages, ${data.contextBreakdown.trimmedCount} trimmed)` : "",
-    data.contextBreakdown && data.contextBreakdown.summaryTokens > 0 ? (() => {
-      const lvlStr = Object.entries(data.contextBreakdown!.summaryLevelCounts)
+  const lines: string[] = ["```yaml"];
+
+  lines.push(`kern: ${data.version}`);
+  lines.push(`agent: ${data.name || data.agent}`);
+  lines.push(`model: ${data.provider}/${data.model}`);
+  lines.push(`toolScope: ${data.toolScope}`);
+  lines.push(`uptime: ${data.uptime}`);
+  lines.push(`session: ${data.session}`);
+
+  if (data.contextBreakdown) {
+    const cb = data.contextBreakdown;
+    const total = cb.systemPromptTokens + cb.messageTokens + cb.summaryTokens;
+    lines.push("context:");
+    lines.push(`  total: ~${Math.round(total / 1000)}k tokens`);
+    lines.push(`  system: ~${Math.round(cb.systemPromptTokens / 1000)}k tokens`);
+    lines.push(`  messages: ~${Math.round(cb.messageTokens / 1000)}k tokens (${cb.messageCount} msgs${cb.trimmedCount > 0 ? `, ${cb.trimmedCount} trimmed` : ""})`);
+    if (cb.summaryTokens > 0) {
+      const lvlStr = Object.entries(cb.summaryLevelCounts)
         .sort(([a], [b]) => Number(a) - Number(b))
         .map(([l, n]) => `${n}×L${l}`)
         .join(", ");
-      return `  summary: ~${Math.round(data.contextBreakdown!.summaryTokens / 1000)}k tokens (${lvlStr})`;
-    })() : (data.summary ? `  summary: ${data.summary}` : ""),
+      lines.push(`  summary: ~${Math.round(cb.summaryTokens / 1000)}k tokens (${lvlStr})`);
+    }
+  } else if (data.context) {
+    lines.push(`context: ${data.context}`);
+    if (data.summary) lines.push(`summary: ${data.summary}`);
+  }
 
-    data.segments ? `segments: ${data.segments}` : "",
-    ...(data.plugins ? Object.entries(data.plugins).map(([k, v]) => `${k}: ${v}`) : []),
-    `api usage: ${data.apiUsage}`,
-    data.cacheUsage ? `cache: ${data.cacheUsage}` : "",
-    `queue: ${data.queue}`,
-    `uptime: ${data.uptime}`,
-  ].filter(Boolean).join("\n");
+  if (data.segments) {
+    lines.push(`segments: ${data.segments}`);
+  }
+
+  const ifaces: string[] = [];
+  if (data.matrix) ifaces.push(`  matrix: ${data.matrix}`);
+  if (data.telegram) ifaces.push(`  telegram: ${data.telegram}`);
+  if (data.discord) ifaces.push(`  discord: ${data.discord}`);
+  if (data.slack) ifaces.push(`  slack: ${data.slack}`);
+  if (data.nostr) ifaces.push(`  nostr: ${data.nostr}`);
+  if (data.irc) ifaces.push(`  irc: ${data.irc}`);
+  if (ifaces.length > 0) {
+    lines.push("channels:");
+    lines.push(...ifaces);
+  }
+
+  if (data.plugins && Object.keys(data.plugins).length > 0) {
+    lines.push("plugins:");
+    for (const [k, v] of Object.entries(data.plugins)) {
+      if (typeof v === "string") {
+        lines.push(`  ${k}: ${v}`);
+      } else if (v && typeof v === "object") {
+        // Format specific known plugin stats cleanly as one-liners
+        if (k === "skills") {
+          const sk = v as any;
+          lines.push(`  skills: ${sk.active ?? 0} active / ${sk.total ?? 0} total`);
+        } else if (k === "mcp") {
+          const m = v as any;
+          lines.push(`  mcp: ${m.connected ?? 0}/${m.configured ?? 0} server(s), ${m.tools ?? 0} tool(s)`);
+        } else if (k === "recall") {
+          const r = v as any;
+          const buildingStr = r.building ? " (building)" : "";
+          lines.push(`  recall: ${r.chunks ?? 0} chunks${buildingStr}`);
+        } else if (k === "media") {
+          const m = v as any;
+          lines.push(`  media: ${m.total ?? 0} files (${m.images ?? 0} images)`);
+        } else if (k === "subagents") {
+          const s = v as any;
+          lines.push(`  subagents: ${s.running ?? 0} running / ${s.total ?? 0} total`);
+        } else {
+          // generic fallback
+          const summary = Object.entries(v)
+            .map(([subKey, subVal]) => `${subKey}: ${subVal}`)
+            .join(", ");
+          lines.push(`  ${k}: ${summary}`);
+        }
+      }
+    }
+  }
+
+  lines.push("usage:");
+  lines.push(`  api: ${data.apiUsage}`);
+  if (data.cacheUsage) lines.push(`  cache: ${data.cacheUsage}`);
+  lines.push(`  queue: ${data.queue}`);
+
+  lines.push("```");
+  return lines.join("\n");
 }
 
 export function getStatus(): string {

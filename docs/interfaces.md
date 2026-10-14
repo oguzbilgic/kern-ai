@@ -22,11 +22,10 @@ Examples from human interfaces:
 [via tui, tui, user: tui, time: 2026-04-06T14:30:00-07:00]
 ```
 
-Examples from system-generated messages (heartbeats, sub-agent announces):
+Example from a system-generated message (heartbeat):
 
 ```
 [via system, heartbeat, user: system, time: 2026-04-20T14:30:00-07:00]
-[via subagent, subagent:sa_a1b2c3d4e5f6, user: subagent, time: 2026-04-20T22:20:38-07:00]
 ```
 
 The `time:` field is ISO 8601 in the host's local timezone with UTC offset. Override with the `timezone` config field (see [config](config.md)). Storage (logs, recall, session metadata) stays UTC regardless.
@@ -38,7 +37,7 @@ The agent sees who's talking, from which channel, and when — and adapts behavi
 | `interface` | Typical `channel` | Source | Origin |
 |-------------|-------------------|--------|--------|
 | `telegram` | `telegram:<chatId>` | `src/interfaces/telegram.ts` | Telegram user |
-| `slack` | `#channel-name` or `slack:<Dxxx>` | `src/interfaces/slack.ts` | Slack user |
+| `slack` | `#channel-name` or `slack-dm:<userId>` | `src/interfaces/slack.ts` | Slack user |
 | `matrix` | `matrix:<roomId>` | `src/interfaces/matrix.ts` | Matrix user |
 | `nostr` | `nostr:<npub>` | `src/interfaces/nostr.ts` | Nostr DM sender |
 | `irc` | `irc:<host>/<target>` | `src/interfaces/irc.ts` | IRC user (DM or channel) |
@@ -46,7 +45,8 @@ The agent sees who's talking, from which channel, and when — and adapts behavi
 | `web` | `web` | HTTP POST to `/message` | Web UI user |
 | `tui` | `tui` | HTTP POST to `/message` | TUI client |
 | `system` | `heartbeat` | `src/app.ts` runtime timer | Heartbeat injection |
-| `subagent` | `subagent:<id>` | Sub-agent completion | Sub-agent announce |
+
+Asynchronous completions that belong to a conversation — background job results from `bash({ background: true })` and sub-agent results from `spawn` — reuse the **origin's** envelope rather than a synthetic one, so the queue treats them as messages from that conversation and the reply goes back to the same chat. The body carries the source, e.g. `[job:job_a1b2c3d4 exited 0, 42s] npm test` or `[subagent:sa_a1b2c3d4 done, 42s]`. See [tools](tools.md#background-jobs) and [sub-agents](subagents.md#announces).
 
 The set is extensible — plugins and future interfaces can introduce new values. The envelope format is the stable contract; specific `interface`/`channel` values depend on what's loaded at runtime.
 
@@ -84,7 +84,7 @@ Messages enter the runtime via two paths:
 | `attachments` | `Attachment[]` | no | Base64-encoded attachments |
 | `connectionId` | `string` | no | SSE connection ID to exclude from the echo broadcast |
 
-The runtime itself also synthesizes messages for internal injections: `interface: "system"` for heartbeats and `interface: "subagent"` for sub-agent announces (both in `src/app.ts`).
+The runtime itself also synthesizes messages for internal injections: `interface: "system"` for heartbeats (in `src/app.ts`). Background job and sub-agent completions are not synthetic — they reuse the envelope of the turn that started them (see the interface reference above).
 
 ### Surface 3 — SSE broadcast events
 
@@ -119,7 +119,7 @@ How each interface populates the internal message fields and SSE events:
 | Interface | `userId` | `chatId` | `channel` | `fromInterface` (SSE) |
 |-----------|----------|----------|-----------|----------------------|
 | telegram | `msg.from.id` (stringified) | `msg.chat.id` (stringified) | `telegram:<chatId>` | `telegram` |
-| slack | `message.user` | `message.channel` | `#<name>` (channel) or `slack-dm` (DM) | `slack` |
+| slack | `message.user` | `message.channel` | `#<name>` (channel) or `slack-dm:<userId>` (DM) | `slack` |
 | matrix | `event.sender` (mxid) | `roomId` | `matrix:<roomId>` | `matrix` |
 | nostr | sender `npub` | sender `npub` | `nostr:<npub>` | `nostr` |
 | irc | `irc:<host>/<account>` or `irc:<host>/~<nick>` | `<host>/<nick-or-channel>` | `irc:<host>/<nick-or-channel>` | `irc` |
@@ -128,7 +128,7 @@ How each interface populates the internal message fields and SSE events:
 | web | `"tui"` | — | `"web"` | `web` |
 
 Notes:
-- Slack channel names are resolved via `conversations.info` — DMs use `slack-dm`, channels use `#<channel-name>`.
+- Slack channel names are resolved via `conversations.info` — DMs use `slack-dm:<userId>` (unique per user, so one user's DM is never injected mid-turn into another's), channels use `#<channel-name>`.
 - Matrix room IDs are opaque (`!abc:example.com`); the channel label prefixes them with `matrix:`.
 - Nostr DMs have no room concept — a conversation *is* the counterparty, so `userId` and `chatId` are both the sender's `npub`.
 - IRC nicks are not identities — anyone can claim one. The `userId` is keyed on the server-verified account from the IRCv3 `account-tag`; an unauthenticated sender gets `~<nick>` instead and is never auto-paired. Both are namespaced by server host so multiple IRC networks can't collide.
@@ -139,7 +139,7 @@ Notes:
 Interactive terminal chat. Connects to a running agent via HTTP/SSE.
 
 ```bash
-kern tui [name]
+kern tui [path]
 ```
 
 - Interface: `tui`, channel: `tui`, user: `tui`
@@ -184,21 +184,13 @@ Access control happens at the agent:
 
 2. **Direct browser connection** — when connecting from the Web UI, users enter the agent URL and token in the sidebar. The browser connects to the agent directly.
 
-### Agent discovery
+### Adding agents
 
-- **Local agents** are auto-discovered from `~/.kern/config.json`
-- **Remote servers** can be added in the sidebar ("Add server" with URL + token)
+Agents are added in the sidebar ("Add server" with URL + token). There is no automatic discovery.
 
-### Global config
+### Port and host
 
-```json
-{
-  "web_port": 9000,
-  "web_host": "0.0.0.0"
-}
-```
-
-Stored in `~/.kern/config.json`. Optional — defaults apply if missing.
+`kern web start --port 8080 --host 0.0.0.0` (both optional; these are the defaults). The same flags apply to `kern web run`.
 
 ## Telegram
 
@@ -227,7 +219,7 @@ Long polling bot. Works behind NAT, no public URL needed.
 
 Socket Mode connection. No public URL needed.
 
-- Interface: `slack`, channel: `#channel-name` or `slack-dm`, user: `<slackUserId>`
+- Interface: `slack`, channel: `#channel-name` or `slack-dm:<userId>`, user: `<slackUserId>`
 
 ### Setup
 
@@ -289,6 +281,7 @@ Long-polled `/sync` against a Matrix homeserver (Synapse, Dendrite, Conduit, etc
 - **Group room behavior.** Once paired, responses follow the `KERN.md` group-room rules (mirrors Slack channel behavior). `NO_REPLY` to stay quiet.
 - **Agents in shared rooms**: first-class — two kern agents can DM each other or coexist in a group room. Pairing codes auto-issue; operator approves via CLI.
 - **Matrix Tool**: Agents with Matrix active have access to the `matrix` tool to inspect room history (`history`), send reactions (`react`), list joined rooms (`rooms`), create rooms/channels (`createRoom`), invite users (`invite`), pin/unpin dashboard widgets (`widget`), manage room state (`state`), or execute arbitrary REST requests (`raw`).
+- **Outbound Messaging**: Send to Matrix users or rooms via the `message` tool with `interface: "matrix"`. Targeting an `@user:server` MXID resolves to an existing direct room via `m.direct` or creates a private 1:1 room; targeting a room ID (`!room:server`) or room alias (`#room:server`) delivers directly to that room.
 
 ### Limitations (MVP)
 
