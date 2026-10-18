@@ -14,3 +14,6 @@ android/local.properties
 # Next.js frontend build output (web/out/ kept for npm package)
 web/.next/
 web/node_modules/
+
+# Test coverage output
+coverage/
