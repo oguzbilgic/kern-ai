@@ -10,7 +10,7 @@ import { createModel, resolveModel } from "../src/model.js";
 import { generateText } from "ai";
 import { modelServer } from "./helpers/model-server.js";
 import { PACKAGE_VERSION } from "../src/package-version.js";
-import { migrateAgentFiles } from "../src/migrations/index.js";
+import { MIGRATIONS, migrateAgentFiles } from "../src/migrations/index.js";
 
 test("discovers arbitrary local IDs from the configured endpoint without authentication", async t => {
   const server = await modelServer(t);
@@ -41,7 +41,7 @@ test("scaffolding an existing agent preserves other config and credentials", asy
   assert.equal(config.port, 4123);
   assert.equal(config.autoRecall, true);
   assert.equal(config.embeddingModel, "local-embed");
-  assert.equal(config.version, PACKAGE_VERSION);
+  assert.equal(config.version, MIGRATIONS.at(-1)!.targetVersion);
   const env = await readFile(join(dir, ".kern", ".env"), "utf8");
   assert.ok(env.startsWith("# keep\n"));
   assert.equal(parse(env).KERN_AUTH_TOKEN, "token");
