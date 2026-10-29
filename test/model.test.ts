@@ -150,6 +150,37 @@ test("embedding defaults only apply to preset endpoints and honor disable", () =
   assert.throws(() => resolveEmbeddingModel(cfg({ provider: "anthropic", embeddingModel: "embed" })), /no embeddings API/);
 });
 
+test("the ionet preset calls IO Intelligence's Chat Completions API with its own credential", async t => {
+  const config = cfg({ provider: "ionet", model: "meta-llama/Llama-3.3-70B-Instruct" });
+  const resolved = resolveModel(config);
+  assert.equal(resolved.baseURL, "https://api.intelligence.io.solutions/api/v1");
+  assert.equal(resolved.apiKeyEnv, "IONET_API_KEY");
+  assert.equal(resolved.api, "chat");
+  assert.equal(resolved.auth, undefined);
+  const server = await modelServer(t, undefined, resolved.baseURL);
+  const saved = process.env.IONET_API_KEY;
+  process.env.IONET_API_KEY = "test-ionet-key";
+  t.after(() => { if (saved === undefined) delete process.env.IONET_API_KEY; else process.env.IONET_API_KEY = saved; });
+  const result = await generateText({ model: createModel(config), prompt: "hi" });
+  assert.equal(result.text, "local response");
+  assert.equal(server.requests[0].path, "/api/v1/chat/completions");
+  assert.equal(server.requests[0].authorization, "Bearer test-ionet-key");
+});
+
+test("ionet summarizes with its chat model and keeps embeddings off its own connection", () => {
+  const config = cfg({ provider: "ionet", model: "meta-llama/Llama-3.3-70B-Instruct" });
+  assert.equal(resolveSummaryModel(config).model, "meta-llama/Llama-3.3-70B-Instruct");
+  assert.equal(resolveEmbeddingModel(config), null);
+  assert.throws(() => resolveEmbeddingModel({ ...config, embeddingModel: "embed" }), /IO Intelligence has no embeddings API/);
+});
+
+test("an ionet agent without its API key names the missing variable", t => {
+  const saved = process.env.IONET_API_KEY;
+  delete process.env.IONET_API_KEY;
+  t.after(() => { if (saved !== undefined) process.env.IONET_API_KEY = saved; });
+  assert.throws(() => createModel(cfg({ provider: "ionet", model: "meta-llama/Llama-3.3-70B-Instruct" })), /IONET_API_KEY/);
+});
+
 test("dimensions are passed to the embedding endpoint", async t => {
   const server = await modelServer(t);
   const config = cfg({ embeddingModel: { provider: "openai-compatible", baseURL: server.baseURL, model: "embed", dimensions: 4 } });

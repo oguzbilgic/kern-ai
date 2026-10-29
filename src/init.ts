@@ -17,6 +17,7 @@ export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
   anthropic: "claude-opus-5-5",
   openai: "gpt-6-sol",
   ollama: "gemma4:31b",
+  ionet: "meta-llama/Llama-3.3-70B-Instruct",
 };
 
 // Fallback models used when live fetch fails (e.g. no network, bad key)
@@ -47,6 +48,13 @@ const FALLBACK_MODELS: Record<string, { name: string; value: string }[]> = {
     { name: "GPT-OSS 20B", value: "gpt-oss:20b" },
     { name: "Mistral Small 3.2 24B", value: "mistral-small3.2:24b" },
   ],
+  ionet: [
+    { name: "Llama 3.3 70B", value: "meta-llama/Llama-3.3-70B-Instruct" },
+    { name: "DeepSeek R1 0528", value: "deepseek-ai/DeepSeek-R1-0528" },
+    { name: "GLM 4.7 Flash", value: "zai-org/GLM-4.7-Flash" },
+    { name: "Kimi K2.5", value: "moonshotai/Kimi-K2.5" },
+    { name: "GPT-OSS 120B", value: "openai/gpt-oss-120b" },
+  ],
 };
 
 // Models to exclude from OpenRouter (embeddings, moderation, old versions, etc.)
@@ -61,6 +69,8 @@ function shapeHostedCatalog(provider: string, models: HostedModel[]): HostedMode
     case "anthropic": return models.sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
     case "openai": return models.filter(m => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !/instruct|audio|realtime|search|embed/i.test(m.id)).sort((a, b) => (b.created ?? 0) - (a.created ?? 0)).slice(0, 15);
     case "openrouter": return models.filter(m => OPENROUTER_PREFERRED.test(m.id) && !OPENROUTER_EXCLUDE.test(m.id)).sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0)).slice(0, 20);
+    // IO Intelligence reports neither dates nor context lengths; order its org/name IDs alphabetically.
+    case "ionet": return models.sort((a, b) => a.id.localeCompare(b.id));
     default: return models;
   }
 }
@@ -68,6 +78,8 @@ function shapeHostedCatalog(provider: string, models: HostedModel[]): HostedMode
 /** Model discovery uses the same connection as inference. */
 export async function fetchModels(connection: ModelConnection, key?: string, embedding = false): Promise<{ name: string; value: string }[] | null> {
   const resolved = resolveModel({ ...configDefaults, ...connection, model: "discovery" });
+  // IO Intelligence serves chat models only; never offer them as embedding models.
+  if (embedding && resolved.provider === "ionet") return [];
   const headers: Record<string, string> = {};
   if (key && resolved.auth !== "none") {
     if (resolved.provider === "anthropic") headers["x-api-key"] = key;
@@ -179,6 +191,7 @@ const PROVIDERS = [
   { name: "Anthropic", value: "anthropic", keyLabel: "Anthropic API key" },
   { name: "OpenAI", value: "openai", keyLabel: "OpenAI API key" },
   { name: "Ollama (local)", value: "ollama", keyLabel: "Ollama API key" },
+  { name: "IO Intelligence (io.net)", value: "ionet", keyLabel: "IO Intelligence API key" },
   { name: "OpenAI-compatible server (local / gateway)", value: "openai-compatible", keyLabel: "Server API key" },
 ];
 
@@ -187,6 +200,7 @@ export const API_KEY_ENV: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   ollama: "OLLAMA_API_KEY",
+  ionet: "IONET_API_KEY",
   "openai-compatible": "LOCAL_MODEL_API_KEY",
 };
 

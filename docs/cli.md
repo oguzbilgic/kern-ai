@@ -31,6 +31,7 @@ kern init my-agent/ --api-key sk-or-...
 kern init my-agent/ --api-key sk-ant-... --provider anthropic --model claude-opus-5-5
 kern init my-agent/ --api-key sk-or-... --telegram-token 123:ABC --slack-bot-token xoxb-... --slack-app-token xapp-...
 kern init my-agent/ --provider ollama --base-url http://localhost:11434/v1 --model gemma4:31b --embedding-model nomic-embed-text
+kern init my-agent/ --provider ionet --api-key io-... --model meta-llama/Llama-3.3-70B-Instruct
 kern init local/ --provider openai-compatible --base-url http://localhost:1234/v1 --model org/chat --embedding-model org/embed
 kern init . --api-key sk-or-...          # adopt the current directory
 ```
@@ -99,7 +100,7 @@ Environment variables used during scaffold:
 - `KERN_NAME` — agent name (default: directory basename)
 - `KERN_MODEL` — model identifier (default: `google/gemini-3.8-flash`)
 - `KERN_PROVIDER` — provider name (default: `openrouter`)
-- `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_API_KEY` / `LOCAL_MODEL_API_KEY` — written to `.kern/.env`
+- `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_API_KEY` / `IONET_API_KEY` / `LOCAL_MODEL_API_KEY` — written to `.kern/.env`
 - `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` — written to `.kern/.env` if set
 
 ### Ports

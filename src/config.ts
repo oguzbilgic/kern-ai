@@ -7,7 +7,7 @@ import { validateModelRoutes } from "./model.js";
 
 export type ToolScope = "full" | "write" | "read";
 
-export const PROVIDER_IDS = ["openrouter", "anthropic", "openai", "ollama", "openai-compatible"] as const;
+export const PROVIDER_IDS = ["openrouter", "anthropic", "openai", "ollama", "ionet", "openai-compatible"] as const;
 export type ProviderId = typeof PROVIDER_IDS[number];
 
 /** API root (including /v1 when required); credentials stay in .env. */

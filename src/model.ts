@@ -19,8 +19,12 @@ const CONNECTION_DEFAULTS: Record<string, ModelConnection> = {
   anthropic: { provider: "anthropic", baseURL: "https://api.anthropic.com/v1", apiKeyEnv: "ANTHROPIC_API_KEY" },
   openai: { provider: "openai", baseURL: "https://api.openai.com/v1", apiKeyEnv: "OPENAI_API_KEY", api: "responses" },
   ollama: { provider: "ollama", baseURL: "http://localhost:11434/v1", auth: "none", api: "chat" },
+  ionet: { provider: "ionet", baseURL: "https://api.intelligence.io.solutions/api/v1", apiKeyEnv: "IONET_API_KEY", api: "chat" },
   "openai-compatible": { provider: "openai-compatible", auth: "none", api: "chat" },
 };
+
+/** Chat-only providers; an embedding route must point at another connection. */
+const NO_EMBEDDINGS: Record<string, string> = { anthropic: "Anthropic", ionet: "IO Intelligence" };
 
 export interface ResolvedModel extends ModelConnection {
   model: string;
@@ -124,7 +128,7 @@ export function resolveEmbeddingModel(config: KernConfig): ResolvedModel | null 
   if (!config.recall || config.embeddingModel === false) return null;
   if (config.embeddingModel) {
     const ref = resolveModel(config, config.embeddingModel);
-    if (ref.provider === "anthropic") throw new Error("Anthropic has no embeddings API; configure embeddingModel with another provider");
+    if (NO_EMBEDDINGS[ref.provider]) throw new Error(`${NO_EMBEDDINGS[ref.provider]} has no embeddings API; configure embeddingModel with another provider`);
     return ref;
   }
   const main = resolveModel(config);

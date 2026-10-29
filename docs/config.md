@@ -19,7 +19,7 @@ The main config file. Committed to git. Unknown top-level fields are warned on s
 | `version` | package version at creation | Package version of the last successful file migration. Updated only when a migration runs; ordinary package upgrades leave it unchanged. Managed by Kern. |
 | `name` | directory name | Agent name. Auto-set to directory basename on first startup if missing. Exposed in `/status` response. |
 | `model` | `google/gemini-3.8-flash` | Model ID. Format depends on provider. |
-| `provider` | `openrouter` | Main connection: `openrouter`, `anthropic`, `openai`, `ollama`, `openai-compatible`. |
+| `provider` | `openrouter` | Main connection: `openrouter`, `anthropic`, `openai`, `ollama`, `ionet`, `openai-compatible`. |
 | `baseURL` | provider preset | Full API root, including `/v1` where required. Required for `openai-compatible`. |
 | `apiKeyEnv` | provider preset | Name of the credential variable in `.kern/.env`; never put the secret in JSON. |
 | `auth` | provider preset | `"none"` disables authentication. Mutually exclusive with `apiKeyEnv`. Custom URLs default to no authentication unless `apiKeyEnv` is supplied. |
@@ -73,6 +73,7 @@ Provider presets:
 | `anthropic` | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` | Native Anthropic |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | Responses |
 | `ollama` | `http://localhost:11434/v1` | none | Chat Completions |
+| `ionet` | `https://api.intelligence.io.solutions/api/v1` | `IONET_API_KEY` | Chat Completions |
 | `openai-compatible` | explicitly configured | none by default | Chat Completions |
 
 Writing the main connection's exact hosted preset URL explicitly retains that provider's default authentication and API selection. Custom URLs default to no authentication. For authenticated local servers or gateways, use `apiKeyEnv` pointing at a distinct secret variable. Do not combine it with `auth: "none"`.
@@ -131,6 +132,7 @@ Put `OPENROUTER_API_KEY` in `.kern/.env`. Its presence alone never enables cloud
 | Hosted `anthropic` | `claude-haiku-5-5`, native Anthropic | none — explicitly configure another embedding provider |
 | Hosted `openrouter` | `google/gemini-3.5-flash-lite` | `openai/text-embedding-3-small` |
 | Default `ollama` endpoint | main model | `nomic-embed-text` |
+| Hosted `ionet` | main model | none — IO Intelligence has no embeddings API; configure `embeddingModel` on another provider |
 | Custom endpoint | main model | none — explicitly configure `embeddingModel` |
 
 For embeddings, an object may also include `dimensions`, a positive integer requested from models that support it. Kern validates the actual output size. Models that do not support this option should omit it.

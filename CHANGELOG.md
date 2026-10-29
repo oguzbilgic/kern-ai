@@ -1,5 +1,10 @@
 # Changelog
 
+## next
+
+### Features
+- **IO Intelligence (io.net) provider** — `"provider": "ionet"` with `IONET_API_KEY` in `.kern/.env` routes chat to io.net's OpenAI-compatible Chat Completions endpoint (`https://api.intelligence.io.solutions/api/v1`), selectable in `kern init` with live model discovery. Model IDs are Hugging Face-style `org/name`, such as `meta-llama/Llama-3.3-70B-Instruct`. Summaries reuse the agent's chat model; IO Intelligence serves no embeddings, so recall and semantic segments need an `embeddingModel` on another connection.
+
 ## v0.44.0 (2026-10-07)
 
 ### Breaking
