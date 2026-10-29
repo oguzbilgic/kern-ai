@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { MockLanguageModelV3 } from "ai/test";
 import { streamText, stepCountIs, tool } from "ai";
 import { z } from "zod";
+import { continuationHint, formatStopNotice } from "../src/narration.js";
 
 test("step limit notice: appends notice when steps hit maxSteps with partial text", async () => {
   let callCount = 0;
@@ -62,14 +63,12 @@ test("step limit notice: appends notice when steps hit maxSteps with partial tex
   const steps = await res.steps;
   assert.equal(steps.length, maxSteps);
 
-  const unit = maxSteps === 1 ? "step" : "steps";
   const hasEmittedText = fullText.trim().length > 0;
-  const stepNotice = hasEmittedText
-    ? `\n\n⏳ Reached step limit (${maxSteps} ${unit}). Reply "continue" to proceed.`
-    : `⏳ Reached step limit (${maxSteps} ${unit}). Work is partially completed. Reply "continue" to proceed.`;
-  fullText += stepNotice;
+  const notice = formatStopNotice("step_limit", maxSteps, "Work is partially completed.");
+  fullText += hasEmittedText ? `\n\n${notice}` : notice;
 
-  assert.ok(fullText.includes("⏳ Reached step limit (2 steps). Reply \"continue\" to proceed."));
+  assert.ok(fullText.includes("\n\n⏳ Reached step limit (2 steps).\n> Work is partially completed."));
+  assert.ok(fullText.endsWith(continuationHint("step_limit")));
 });
 
 test("step limit notice: pluralizes correctly when maxSteps is 1 and handles empty text", async () => {
@@ -107,12 +106,9 @@ test("step limit notice: pluralizes correctly when maxSteps is 1 and handles emp
   const steps = await res.steps;
   assert.equal(steps.length, maxSteps);
 
-  const unit = maxSteps === 1 ? "step" : "steps";
   const hasEmittedText = fullText.trim().length > 0;
-  const stepNotice = hasEmittedText
-    ? `\n\n⏳ Reached step limit (${maxSteps} ${unit}). Reply "continue" to proceed.`
-    : `⏳ Reached step limit (${maxSteps} ${unit}). Work is partially completed. Reply "continue" to proceed.`;
-  fullText += stepNotice;
+  const notice = formatStopNotice("step_limit", maxSteps, "Work is partially completed.");
+  fullText += hasEmittedText ? `\n\n${notice}` : notice;
 
-  assert.equal(fullText, '⏳ Reached step limit (1 step). Work is partially completed. Reply "continue" to proceed.');
+  assert.equal(fullText, `⏳ Reached step limit (1 step).\n> Work is partially completed.\n\n${continuationHint("step_limit")}`);
 });

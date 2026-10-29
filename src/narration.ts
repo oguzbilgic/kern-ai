@@ -34,6 +34,26 @@ export function quote(text: string): string {
   return text.trim().split("\n").map((l) => `> ${l}`).join("\n");
 }
 
+export type StopReason = Exclude<NarrationReason, "wyd">;
+
+/**
+ * Reply hint shown when a turn stops early. Any reply resumes with full history,
+ * so lead with context and redirection; "continue" alone undersells it.
+ */
+export function continuationHint(reason: StopReason): string {
+  const resume = reason === "timeout" ? "resume" : "keep going";
+  return `Reply with more context, a different direction, or "continue" to ${resume}.`;
+}
+
+/** Full step-limit / timeout notice: header, optional quoted status, reply hint. */
+export function formatStopNotice(reason: StopReason, maxSteps: number, status?: string): string {
+  const header = reason === "timeout"
+    ? "⏱️ Idle timeout reached."
+    : `⏳ Reached step limit (${plural(maxSteps, "step")}).`;
+  const body = status ? `\n${quote(status)}` : "";
+  return `${header}${body}\n\n${continuationHint(reason)}`;
+}
+
 /**
  * Clean, safe fallback status lines if fast model narration is disabled or fails.
  */
@@ -42,12 +62,33 @@ export function buildFallbackNarration(reason: NarrationReason, snapshot: TurnSn
   const toolDesc = lastTool ? ` while running \`${lastTool.tool}${lastTool.detail ? ` ${lastTool.detail}` : ""}\`` : "";
   switch (reason) {
     case "step_limit":
-      return `⏳ Reached step limit (${plural(snapshot.maxSteps, "step")}).\n${quote(`Work is partially completed${toolDesc}.`)}\n\nReply "continue" to proceed.`;
+      return formatStopNotice("step_limit", snapshot.maxSteps, `Work is partially completed${toolDesc}.`);
     case "timeout":
-      return `⏱️ Idle timeout reached.\n${quote(`Partial progress was preserved${toolDesc}.`)}\n\nReply "continue" to resume.`;
+      return formatStopNotice("timeout", snapshot.maxSteps, `Partial progress was preserved${toolDesc}.`);
     case "wyd":
       return quote(`Working on step ${snapshot.stepCount}/${snapshot.maxSteps}${toolDesc}.`);
   }
+}
+
+/** Prompt for the summary model. Stop notices also ask what the operator could reply with to unblock the work. */
+export function buildNarrationPrompt(reason: NarrationReason, snapshot: TurnSnapshot): string {
+  const recentTools = snapshot.toolCalls.slice(-5).map((t, idx) => {
+    const out = t.output ? ` -> output: ${t.output.slice(0, 150)}` : "";
+    return `  ${idx + 1}. ${t.tool}(${t.detail || ""})${out}`;
+  }).join("\n");
+
+  const prompt = `You are a homelab AI assistant summarizing active progress.
+Trigger: ${reason}
+Original user request: "${stripEnvelope(snapshot.originalGoal)}"
+Steps completed: ${snapshot.stepCount} of ${snapshot.maxSteps}
+Recent tool activity:
+${recentTools || "  (none)"}
+Last response fragment: "${(snapshot.lastEmittedText || "").slice(-200)}"
+
+Explain in 1-2 concise, conversational sentences what was accomplished so far, what is currently in flight or stalled, and what the operator should know.${reason === "wyd" ? "" : `
+If the work is stuck, uncertain, or waiting on a choice, add one final sentence naming the specific detail or decision the operator could reply with to unblock it (for example where something lives, which option they want, or a constraint to relax). Omit it if nothing they could say would help.`}
+Tone: Terse, direct, factual. No preamble, no filler.`;
+  return prompt;
 }
 
 /**
@@ -64,26 +105,12 @@ export async function narrateTurnStatus(
     const model = createSummaryModel(config);
     if (!model) return fallback;
 
-    const recentTools = snapshot.toolCalls.slice(-5).map((t, idx) => {
-      const out = t.output ? ` -> output: ${t.output.slice(0, 150)}` : "";
-      return `  ${idx + 1}. ${t.tool}(${t.detail || ""})${out}`;
-    }).join("\n");
-
-    const prompt = `You are a homelab AI assistant summarizing active progress.
-Trigger: ${reason}
-Original user request: "${stripEnvelope(snapshot.originalGoal)}"
-Steps completed: ${snapshot.stepCount} of ${snapshot.maxSteps}
-Recent tool activity:
-${recentTools || "  (none)"}
-Last response fragment: "${(snapshot.lastEmittedText || "").slice(-200)}"
-
-Explain in 1-2 concise, conversational sentences what was accomplished so far, what is currently in flight or stalled, and what the operator should know.
-Tone: Terse, direct, factual. No preamble, no filler.`;
+    const prompt = buildNarrationPrompt(reason, snapshot);
 
     const result = await generateText({
       model,
       prompt,
-      maxOutputTokens: 150,
+      maxOutputTokens: 200,
       temperature: 0.2,
     });
 
@@ -93,13 +120,8 @@ Tone: Terse, direct, factual. No preamble, no filler.`;
       return fallback;
     }
 
-    if (reason === "step_limit") {
-      return `⏳ Reached step limit (${plural(snapshot.maxSteps, "step")}).\n${quote(narrative)}\n\nReply "continue" to proceed.`;
-    }
-    if (reason === "timeout") {
-      return `⏱️ Idle timeout reached.\n${quote(narrative)}\n\nReply "continue" to resume.`;
-    }
-    return quote(narrative);
+    if (reason === "wyd") return quote(narrative);
+    return formatStopNotice(reason, snapshot.maxSteps, narrative);
   } catch (err: any) {
     log.error("narration", `failed to generate AI narration: ${err.message}`);
     return fallback;

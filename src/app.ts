@@ -275,8 +275,8 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   queue.setTimeoutNarrator({
     capture: () => runtime.getCurrentTurnSnapshot(),
     narrate: async (snapshot) => {
-      const { narrateTurnStatus, buildFallbackNarration } = await import("./narration.js");
-      if (!snapshot) return `⏱️ Idle timeout reached. Reply "continue" to resume.`;
+      const { narrateTurnStatus, buildFallbackNarration, formatStopNotice } = await import("./narration.js");
+      if (!snapshot) return formatStopNotice("timeout", config.maxSteps);
       return narrateTurnStatus("timeout", snapshot, config).catch(() => buildFallbackNarration("timeout", snapshot));
     },
   });
