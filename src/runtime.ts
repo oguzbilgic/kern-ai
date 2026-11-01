@@ -1,5 +1,5 @@
 import { streamText, type ModelMessage, stepCountIs } from "ai";
-import { narrateTurnStatus, type TurnSnapshot } from "./narration.js";
+import { formatStopNotice, narrateTurnStatus, type TurnSnapshot } from "./narration.js";
 import { log } from "./log.js";
 import { createModel } from "./model.js";
 import { allTools, type ToolName } from "./tools/index.js";
@@ -478,8 +478,7 @@ export class Runtime {
         if (this.currentTurnSnapshot) {
           stepNotice = await narrateTurnStatus("step_limit", this.currentTurnSnapshot, this.config);
         } else {
-          const unit = this.config.maxSteps === 1 ? "step" : "steps";
-          stepNotice = `⏳ Reached step limit (${this.config.maxSteps} ${unit}). Work is partially completed. Reply "continue" to proceed.`;
+          stepNotice = formatStopNotice("step_limit", this.config.maxSteps, "Work is partially completed.");
         }
         if (hasEmittedText) {
           stepNotice = `\n\n${stepNotice}`;

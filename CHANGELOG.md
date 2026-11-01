@@ -1,9 +1,12 @@
 # Changelog
 
-## next
+## Unreleased
 
 ### Features
 - **IO Intelligence (io.net) provider** — `"provider": "ionet"` with `IONET_API_KEY` in `.kern/.env` routes chat to io.net's OpenAI-compatible Chat Completions endpoint (`https://api.intelligence.io.solutions/api/v1`), selectable in `kern init` with live model discovery. Model IDs are Hugging Face-style `org/name`, such as `meta-llama/Llama-3.3-70B-Instruct`. Summaries reuse the agent's chat model; IO Intelligence serves no embeddings, so recall and semantic segments need an `embeddingModel` on another connection.
+
+### Improvements
+- **Clearer step-limit and timeout notices** ([#445](https://github.com/oguzbilgic/kern-ai/pull/445)) — when a turn pauses at the step limit or idle timeout, the summary highlights what detail or decision would unblock the work and reminds you that you can reply with more context, a new direction, or `"continue"`.
 
 ## v0.44.0 (2026-10-07)
 
