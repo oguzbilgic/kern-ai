@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.44.1 (2026-11-09)
 
 ### Improvements
 - **Skill activation guidance** ([#447](https://github.com/oguzbilgic/kern-ai/pull/447)) — the `<skills>` catalog and `skill` tool description now explicitly instruct the agent to check the catalog before starting a task and activate any matching skill first.
