@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Improvements
+- **Skill activation guidance** ([#447](https://github.com/oguzbilgic/kern-ai/pull/447)) — the `<skills>` catalog and `skill` tool description now explicitly instruct the agent to check the catalog before starting a task and activate any matching skill first.
 - **Clearer step-limit and timeout notices** ([#445](https://github.com/oguzbilgic/kern-ai/pull/445)) — when a turn pauses at the step limit or idle timeout, the summary highlights what detail or decision would unblock the work and reminds you that you can reply with more context, a new direction, or `"continue"`.
 
 ## v0.44.0 (2026-10-07)
