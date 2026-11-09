@@ -7,6 +7,21 @@ import { log } from "../../log.js";
 /** Cached skill catalog */
 let catalog: SkillInfo[] = [];
 
+/** Shown above the catalog. Without it the model sees the list but nothing says when to activate. */
+export const CATALOG_GUIDANCE =
+  "Each skill holds tested instructions for one kind of task. Before you start a task, check this list. " +
+  "If a skill's description covers the task, activate it with the `skill` tool first and follow its " +
+  "instructions rather than working the task out on your own. Deactivate it when the task is done.";
+
+/** Compact catalog with logical paths and active state, under CATALOG_GUIDANCE */
+export function formatCatalog(skills: SkillInfo[]): string {
+  const lines = skills.map((s) => {
+    const state = isActive(s.name) ? "active" : "available";
+    return `${state === "active" ? "✦" : "○"} ${s.name} (${state}): ${s.description || "(no description)"}\n  ${s.displayPath}`;
+  });
+  return [CATALOG_GUIDANCE, "", ...lines].join("\n");
+}
+
 /**
  * Skills plugin — progressive disclosure skill system.
  *
@@ -89,14 +104,9 @@ export const skillsPlugin: KernPlugin = {
 
     const injections: ContextInjection[] = [];
 
-    // Compact catalog with logical paths and active state
-    const catalogLines = catalog.map((s) => {
-      const state = isActive(s.name) ? "active" : "available";
-      return `${state === "active" ? "✦" : "○"} ${s.name} (${state}): ${s.description || "(no description)"}\n  ${s.displayPath}`;
-    });
     injections.push({
       label: "skills",
-      content: catalogLines.join("\n"),
+      content: formatCatalog(catalog),
       placement: "system",
     });
 

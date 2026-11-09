@@ -13,7 +13,8 @@ export function setCatalog(skills: SkillInfo[]) {
 
 export const skillTool = tool({
   description:
-    "Manage agent skills. Use 'list' to see available skills. " +
+    "Manage agent skills. When a task matches a skill in the catalog, activate that skill before starting the work. " +
+    "Use 'list' to see available skills. " +
     "Use 'activate' to load a skill's full instructions into your system prompt (persistent until deactivated). " +
     "The instructions are also returned in the tool result so you can act on them in the current turn. " +
     "Use 'deactivate' to unload a skill and free token budget.",
