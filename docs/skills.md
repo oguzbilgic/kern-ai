@@ -33,12 +33,17 @@ The frontmatter `name` and `description` are optional — if omitted, the folder
 
 ### Catalog injection
 
-A compact catalog of all available skills is always present in the agent's system prompt:
+A compact catalog of all available skills is always present in the agent's system prompt, under a short instruction to activate a matching skill before starting a task:
 
 ```
-# Available Skills
-- deploy-lxc: Create and configure Debian 12 LXC containers on Proxmox
-- backup-db: Backup PostgreSQL databases to S3
+<skills>
+Each skill holds tested instructions for one kind of task. Before you start a task, check this list. ...
+
+○ deploy-lxc (available): Create and configure Debian 12 LXC containers on Proxmox
+  skills/deploy-lxc/SKILL.md
+○ backup-db (available): Backup PostgreSQL databases to S3
+  .agents/skills/backup-db/SKILL.md
+</skills>
 ```
 
 This costs ~50-100 tokens per skill and lets the agent know what's available without loading full instructions.
