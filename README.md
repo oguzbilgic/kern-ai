@@ -217,6 +217,7 @@ Plugins add their own tools on top: recall, spawn and subagents, render, MCP ser
 | **openai** | Native OpenAI; optional explicit `baseURL` / API selection |
 | **openai-compatible** | Local servers or gateways with explicit `baseURL` and optional authentication |
 | **ollama** | Local models via [Ollama](https://ollama.com) |
+| **ionet** | [IO Intelligence](https://io.net) by io.net |
 
 Set `model` for chat. `embeddingModel`, `summaryModel`, `subAgentModel`, `mediaModel`, and `audioModel` accept a model ID on the main connection or an object with its own provider, endpoint, and credential variable. See [docs/config.md](docs/config.md).
 
